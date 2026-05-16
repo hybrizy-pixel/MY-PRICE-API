@@ -1,14 +1,17 @@
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
+const cors = require("cors");
 
 const app = express();
+
+app.use(cors());
 
 const cache = new NodeCache({
     stdTTL: 5
 });
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 const PAIRS = {
     BTC: "XBTMYR",
@@ -18,6 +21,15 @@ const PAIRS = {
     GRT: "GRTMYR",
     AAVE: "AAVEMYR"
 };
+
+// HOMEPAGE
+app.get("/", (req, res) => {
+
+    res.json({
+        message: "Safwan Luno API Running"
+    });
+
+});
 
 // SINGLE COIN
 app.get("/price/:coin", async (req, res) => {
@@ -36,7 +48,6 @@ app.get("/price/:coin", async (req, res) => {
 
         const pair = PAIRS[coin];
 
-        // CHECK CACHE
         const cachedData = cache.get(pair);
 
         if (cachedData) {
@@ -48,7 +59,6 @@ app.get("/price/:coin", async (req, res) => {
 
         }
 
-        // FETCH LUNO
         const response = await axios.get(
             `https://api.luno.com/api/1/ticker?pair=${pair}`
         );
@@ -65,7 +75,6 @@ app.get("/price/:coin", async (req, res) => {
             timestamp: data.timestamp
         };
 
-        // SAVE CACHE
         cache.set(pair, result);
 
         res.json(result);
@@ -80,7 +89,7 @@ app.get("/price/:coin", async (req, res) => {
 
 });
 
-// ALL MARKET
+// MARKET
 app.get("/market", async (req, res) => {
 
     try {
@@ -93,7 +102,6 @@ app.get("/market", async (req, res) => {
 
             let data;
 
-            // CHECK CACHE
             const cachedData = cache.get(pair);
 
             if (cachedData) {
@@ -146,3 +154,4 @@ app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 
 });
+
