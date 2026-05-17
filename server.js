@@ -1,4 +1,4 @@
-```javascript id="srvfull1"
+```javascript
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
@@ -137,9 +137,9 @@ app.get("/market", async (req, res) => {
 // START SERVER
 app.listen(PORT, () => {
 
- console.log(
-    "Server running on port " + PORT
-);
+    console.log(
+        "Server running on port " + PORT
+    );
 
 });
 
@@ -250,8 +250,9 @@ async function scanCoins(){
 
             // PRICE UPDATE MESSAGE
             priceMessage +=
-`${coin} RM${price.toFixed(4)}
-`;
+            coin + " RM" +
+            price.toFixed(4) +
+            "\n";
 
             // FIRST SAVE
             if(!LAST_PRICES[coin]){
@@ -288,9 +289,11 @@ async function scanCoins(){
             ){
 
                 await sendTelegram(
-`🚀 ${coin} BREAKOUT
-
-PECAH NAIK RM${resistance.toFixed(4)} 🔥`
+                    "🚀 " + coin +
+                    " BREAKOUT\n\n" +
+                    "PECAH NAIK RM" +
+                    resistance.toFixed(4) +
+                    " 🔥"
                 );
 
                 LAST_ALERT[coin] = now;
@@ -304,9 +307,11 @@ PECAH NAIK RM${resistance.toFixed(4)} 🔥`
             ){
 
                 await sendTelegram(
-`⚠️ ${coin} BREAKDOWN
-
-PECAH TURUN RM${support.toFixed(4)} 🔥`
+                    "⚠️ " + coin +
+                    " BREAKDOWN\n\n" +
+                    "PECAH TURUN RM" +
+                    support.toFixed(4) +
+                    " 🔥"
                 );
 
                 LAST_ALERT[coin] = now;
@@ -320,9 +325,10 @@ PECAH TURUN RM${support.toFixed(4)} 🔥`
             ){
 
                 await sendTelegram(
-`⚠️ ${coin} TAK LEPAS RM${resistance.toFixed(4)}
-
-KENA REJECT 🔥`
+                    "⚠️ " + coin +
+                    " TAK LEPAS RM" +
+                    resistance.toFixed(4) +
+                    "\n\nKENA REJECT 🔥"
                 );
 
                 LAST_ALERT[coin] = now;
@@ -335,9 +341,9 @@ KENA REJECT 🔥`
             ){
 
                 await sendTelegram(
-`🐋 ${coin} VOLUME BESAR
-
-SMART MONEY MASUK 🔥`
+                    "🐋 " + coin +
+                    " VOLUME BESAR\n\n" +
+                    "SMART MONEY MASUK 🔥"
                 );
 
                 LAST_ALERT[coin] = now;
@@ -350,9 +356,11 @@ SMART MONEY MASUK 🔥`
             ){
 
                 await sendTelegram(
-`🟢 ${coin} SUPPORT BERUBAH
-
-Buyer besar muncul RM${support.toFixed(4)} 🔥`
+                    "🟢 " + coin +
+                    " SUPPORT BERUBAH\n\n" +
+                    "Buyer besar muncul RM" +
+                    support.toFixed(4) +
+                    " 🔥"
                 );
 
                 LAST_ALERT[coin] = now;
@@ -387,3 +395,4 @@ setInterval(
     scanCoins,
     300000
 );
+```
