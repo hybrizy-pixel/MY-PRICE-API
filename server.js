@@ -1,3 +1,4 @@
+```javascript
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
@@ -59,7 +60,7 @@ app.get("/price/:coin", async (req, res) => {
 
         }
 
-        // LUNO API
+        // FETCH LIVE PRICE
         const response =
         await axios.get(
             "https://api.luno.com/api/1/ticker?pair=" + pair
@@ -142,14 +143,15 @@ app.listen(PORT, () => {
 
 });
 
-// ===============================
-// TELEGRAM SCANNER
-// ===============================
+// =====================================
+// TELEGRAM INSTITUTIONAL SCANNER
+// =====================================
 
 // TELEGRAM TOKEN
 const TELEGRAM_TOKEN =
 "8979342744:AAFbamnzNXbeJCAIxuUf78NAxKspoWvymGs";
 
+// CHAT ID
 const CHAT_ID =
 "7161546";
 
@@ -247,7 +249,14 @@ async function scanCoins(){
             const resistance =
             parseFloat(biggestAsk.price);
 
-            // PRICE UPDATE MESSAGE
+            // BUY & SELL PRESSURE
+            const buyVolume =
+            parseFloat(biggestBid.volume);
+
+            const sellVolume =
+            parseFloat(biggestAsk.volume);
+
+            // PRICE UPDATE
             priceMessage +=
             coin + " RM" +
             price.toFixed(4) +
@@ -281,43 +290,92 @@ async function scanCoins(){
 
             }
 
-            // BREAKOUT
+            // =====================================
+            // ACCUMULATION
+            // =====================================
+
+            if(
+                buyVolume > sellVolume * 1.5 &&
+                change > 0.3 &&
+                price > support
+            ){
+
+                await sendTelegram(
+                    "🟢 " + coin +
+                    " ACCUMULATION DETECTED\n\n" +
+                    "Buyer besar sedang accumulate.\n" +
+                    "Price masih hold support 🔥"
+                );
+
+                LAST_ALERT[coin] = now;
+
+            }
+
+            // =====================================
+            // DISTRIBUTION
+            // =====================================
+
+            if(
+                sellVolume > buyVolume * 1.5 &&
+                change < -0.3
+            ){
+
+                await sendTelegram(
+                    "🔴 " + coin +
+                    " DISTRIBUTION DETECTED\n\n" +
+                    "Sell pressure besar detected.\n" +
+                    "Whale mungkin sedang dump ⚠️"
+                );
+
+                LAST_ALERT[coin] = now;
+
+            }
+
+            // =====================================
+            // CONFIRMED BREAKOUT
+            // =====================================
+
             if(
                 price > resistance &&
-                change > 2
+                change > 2 &&
+                buyVolume > sellVolume
             ){
 
                 await sendTelegram(
                     "🚀 " + coin +
-                    " BREAKOUT\n\n" +
-                    "PECAH NAIK RM" +
-                    resistance.toFixed(4) +
-                    " 🔥"
+                    " CONFIRMED BREAKOUT\n\n" +
+                    "Resistance berjaya dipecahkan.\n" +
+                    "Volume buyer masih kuat 🔥"
                 );
 
                 LAST_ALERT[coin] = now;
 
             }
 
-            // BREAKDOWN
+            // =====================================
+            // FAKE BREAKOUT
+            // =====================================
+
             if(
-                price < support &&
-                change < -2
+                price > resistance &&
+                change < 0.5
             ){
 
                 await sendTelegram(
                     "⚠️ " + coin +
-                    " BREAKDOWN\n\n" +
-                    "PECAH TURUN RM" +
-                    support.toFixed(4) +
-                    " 🔥"
+                    " FAKE BREAKOUT\n\n" +
+                    "Price gagal hold breakout.\n" +
+                    "Bull trap risk detected 🔥"
                 );
 
                 LAST_ALERT[coin] = now;
 
             }
 
+            // =====================================
             // REJECTION
+            // =====================================
+
             if(
                 price < resistance &&
                 change > 1
@@ -325,41 +383,31 @@ async function scanCoins(){
 
                 await sendTelegram(
                     "⚠️ " + coin +
-                    " TAK LEPAS RM" +
+                    " BUYER REJECTED\n\n" +
+                    "gagal naik melepasi RM" +
                     resistance.toFixed(4) +
-                    "\n\nKENA REJECT 🔥"
+                    " 🔥"
                 );
 
                 LAST_ALERT[coin] = now;
 
             }
 
-            // VOLUME SPIKE
-            if(
-                parseFloat(biggestBid.volume) > 5
-            ){
-
-                await sendTelegram(
-                    "🐋 " + coin +
-                    " VOLUME BESAR\n\n" +
-                    "SMART MONEY MASUK 🔥"
-                );
-
-                LAST_ALERT[coin] = now;
-
-            }
-
+            // =====================================
             // SUPPORT UPDATE
+            // =====================================
+
             if(
                 Math.abs(change) > 3
             ){
 
                 await sendTelegram(
                     "🟢 " + coin +
-                    " SUPPORT BERUBAH\n\n" +
-                    "Buyer besar muncul RM" +
+                    " SUPPORT / RESISTANCE BERUBAH\n\n" +
+                    "Support: RM" +
                     support.toFixed(4) +
-                    " 🔥"
+                    "\nResistance: RM" +
+                    resistance.toFixed(4)
                 );
 
                 LAST_ALERT[coin] = now;
@@ -371,7 +419,7 @@ async function scanCoins(){
 
         }
 
-        // SEND PRICE UPDATE
+        // SEND PRICE EVERY 5 MINUTES
         await sendTelegram(
             priceMessage
         );
@@ -389,7 +437,7 @@ async function scanCoins(){
 // FIRST RUN
 scanCoins();
 
-// EVERY 5 MINUTES
+// RUN EVERY 5 MINUTES
 setInterval(
     scanCoins,
     300000
