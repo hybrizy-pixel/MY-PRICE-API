@@ -273,19 +273,15 @@ async function scanCoins(){
 
             }
 
-            // FIRST SUPPORT
             if(!LAST_SUPPORT[coin]){
 
-                LAST_SUPPORT[coin] =
-                support;
+                LAST_SUPPORT[coin] = support;
 
             }
 
-            // FIRST RESISTANCE
             if(!LAST_RESISTANCE[coin]){
 
-                LAST_RESISTANCE[coin] =
-                resistance;
+                LAST_RESISTANCE[coin] = resistance;
 
             }
 
@@ -514,10 +510,7 @@ async function scanCoins(){
 
         }
 
-        // =====================================
         // LIVE PRICE UPDATE
-        // =====================================
-
         await sendTelegram(
             "📊 LIVE PRICE UPDATE\n\n" +
             priceMessage
@@ -579,6 +572,19 @@ async function marketStructure(){
 
             const resistance =
             parseFloat(biggestAsk.price);
+
+            // FIRST SAVE
+            if(!LAST_SUPPORT[coin]){
+
+                LAST_SUPPORT[coin] = support;
+
+            }
+
+            if(!LAST_RESISTANCE[coin]){
+
+                LAST_RESISTANCE[coin] = resistance;
+
+            }
 
             // SUPPORT
             if(
