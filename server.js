@@ -27,10 +27,10 @@ const PAIRS = {
 // =====================================
 
 const TELEGRAM_TOKEN =
-"YOUR_TELEGRAM_BOT_TOKEN";
+"8979342744:AAFbamnzNXbeJCAIxuUf78NAxKspoWvymGs";
 
 const CHAT_ID =
-"YOUR_CHAT_ID";
+"7161546";
 
 // =====================================
 // ACTIVE COINS
@@ -49,7 +49,6 @@ const LAST_PRICES = {};
 const LAST_SUPPORT = {};
 const LAST_RESISTANCE = {};
 const CANDLE_CONFIRMATION = {};
-const LAST_ALERT = {};
 
 // =====================================
 // HOMEPAGE
@@ -60,68 +59,6 @@ app.get("/", (req, res) => {
     res.json({
         status: "RUNNING 🔥"
     });
-
-});
-
-// =====================================
-// SINGLE PRICE
-// =====================================
-
-app.get("/price/:coin", async (req, res) => {
-
-    try{
-
-        const coin =
-        req.params.coin.toUpperCase();
-
-        if(!PAIRS[coin]){
-
-            return res.json({
-                error: "Coin not supported"
-            });
-
-        }
-
-        const pair =
-        PAIRS[coin];
-
-        const cached =
-        cache.get(pair);
-
-        if(cached){
-
-            return res.json(cached);
-
-        }
-
-        const response =
-        await axios.get(
-            "https://api.luno.com/api/1/ticker?pair=" + pair
-        );
-
-        const data =
-        response.data;
-
-        const result = {
-            coin,
-            pair,
-            price: data.last_trade,
-            bid: data.bid,
-            ask: data.ask,
-            timestamp: data.timestamp
-        };
-
-        cache.set(pair, result);
-
-        res.json(result);
-
-    }catch(err){
-
-        res.json({
-            error: "Failed to fetch"
-        });
-
-    }
 
 });
 
@@ -150,14 +87,16 @@ async function sendTelegram(message){
 
     }catch(err){
 
-        console.log("Telegram failed");
+        console.log(
+            "Telegram failed"
+        );
 
     }
 
 }
 
 // =====================================
-// GET VALID SUPPORT RESISTANCE
+// VALID SUPPORT RESISTANCE
 // =====================================
 
 function getValidWalls(
@@ -166,7 +105,6 @@ function getValidWalls(
     currentPrice
 ){
 
-    // ONLY NEARBY WALLS
     const filteredBids =
     bids.filter(b =>
         parseFloat(b.price) >
@@ -179,7 +117,6 @@ function getValidWalls(
         currentPrice * 1.02
     );
 
-    // TOP 5 BUY WALLS
     const topBids =
     filteredBids
     .sort((a,b)=>
@@ -188,7 +125,6 @@ function getValidWalls(
     )
     .slice(0,5);
 
-    // TOP 5 SELL WALLS
     const topAsks =
     filteredAsks
     .sort((a,b)=>
@@ -197,7 +133,6 @@ function getValidWalls(
     )
     .slice(0,5);
 
-    // SUPPORT
     const support =
     topBids.reduce(
         (sum,b)=>
@@ -205,7 +140,6 @@ function getValidWalls(
         0
     ) / topBids.length;
 
-    // RESISTANCE
     const resistance =
     topAsks.reduce(
         (sum,a)=>
@@ -213,7 +147,6 @@ function getValidWalls(
         0
     ) / topAsks.length;
 
-    // BUY VOLUME
     const buyVolume =
     topBids.reduce(
         (sum,b)=>
@@ -221,7 +154,6 @@ function getValidWalls(
         0
     );
 
-    // SELL VOLUME
     const sellVolume =
     topAsks.reduce(
         (sum,a)=>
@@ -251,10 +183,7 @@ async function scanCoins(){
             const pair =
             PAIRS[coin];
 
-            // =====================================
             // GET PRICE
-            // =====================================
-
             const ticker =
             await axios.get(
                 "https://api.luno.com/api/1/ticker?pair=" + pair
@@ -265,10 +194,7 @@ async function scanCoins(){
                 ticker.data.last_trade
             );
 
-            // =====================================
             // GET ORDERBOOK
-            // =====================================
-
             const orderbook =
             await axios.get(
                 "https://api.luno.com/api/1/orderbook?pair=" + pair
@@ -280,10 +206,7 @@ async function scanCoins(){
             const asks =
             orderbook.data.asks;
 
-            // =====================================
             // VALID WALLS
-            // =====================================
-
             const {
                 support,
                 resistance,
@@ -296,10 +219,7 @@ async function scanCoins(){
                 price
             );
 
-            // =====================================
             // FIRST SAVE
-            // =====================================
-
             if(!LAST_PRICES[coin]){
 
                 LAST_PRICES[coin] =
@@ -330,9 +250,6 @@ async function scanCoins(){
                 / oldPrice
             ) * 100;
 
-            const now =
-            Date.now();
-
             let reasons = [];
 
             // =====================================
@@ -341,20 +258,19 @@ async function scanCoins(){
 
             if(
 
-                change > 0.5 &&
+                change > 0.1 &&
 
                 price >
-                oldPrice * 1.005 &&
+                oldPrice * 1.001 &&
 
                 buyVolume >
-                sellVolume * 1.5 &&
+                sellVolume * 1.3 &&
 
                 support >
-                LAST_SUPPORT[coin] * 1.002
+                LAST_SUPPORT[coin] * 1.001
 
             ){
 
-                // BUYER DOMINATION
                 if(
                     buyVolume >
                     sellVolume * 2
@@ -366,7 +282,6 @@ async function scanCoins(){
 
                 }
 
-                // SUPPORT INCREASE
                 if(
                     support >
                     LAST_SUPPORT[coin]
@@ -378,7 +293,6 @@ async function scanCoins(){
 
                 }
 
-                // NEAR BREAKOUT
                 if(
                     price >
                     resistance * 0.995
@@ -390,9 +304,8 @@ async function scanCoins(){
 
                 }
 
-                // STRONG MOMENTUM
                 if(
-                    change > 1
+                    change > 0.5
                 ){
 
                     reasons.push(
@@ -401,7 +314,6 @@ async function scanCoins(){
 
                 }
 
-                // CONFIRMATION
                 if(
                     !CANDLE_CONFIRMATION[coin]
                 ){
@@ -447,8 +359,6 @@ async function scanCoins(){
 
                     CANDLE_CONFIRMATION[coin] = 0;
 
-                    LAST_ALERT[coin] = now;
-
                 }
 
             }
@@ -459,22 +369,21 @@ async function scanCoins(){
 
             else if(
 
-                change < -0.5 &&
+                change < -0.1 &&
 
                 price <
-                oldPrice * 0.995 &&
+                oldPrice * 0.999 &&
 
                 sellVolume >
-                buyVolume * 1.5 &&
+                buyVolume * 1.3 &&
 
                 resistance <
-                LAST_RESISTANCE[coin] * 0.998
+                LAST_RESISTANCE[coin] * 0.999
 
             ){
 
                 reasons = [];
 
-                // SELLER DOMINATION
                 if(
                     sellVolume >
                     buyVolume * 2
@@ -486,7 +395,6 @@ async function scanCoins(){
 
                 }
 
-                // RESISTANCE DROP
                 if(
                     resistance <
                     LAST_RESISTANCE[coin]
@@ -498,7 +406,6 @@ async function scanCoins(){
 
                 }
 
-                // SUPPORT BREAKDOWN
                 if(
                     price < support
                 ){
@@ -509,9 +416,8 @@ async function scanCoins(){
 
                 }
 
-                // STRONG BEARISH
                 if(
-                    change < -1
+                    change < -0.5
                 ){
 
                     reasons.push(
@@ -520,7 +426,6 @@ async function scanCoins(){
 
                 }
 
-                // CONFIRMATION
                 if(
                     !CANDLE_CONFIRMATION[coin]
                 ){
@@ -565,8 +470,6 @@ async function scanCoins(){
                     );
 
                     CANDLE_CONFIRMATION[coin] = 0;
-
-                    LAST_ALERT[coin] = now;
 
                 }
 
@@ -617,7 +520,6 @@ async function marketStructure(){
             const pair =
             PAIRS[coin];
 
-            // PRICE
             const ticker =
             await axios.get(
                 "https://api.luno.com/api/1/ticker?pair=" + pair
@@ -628,7 +530,6 @@ async function marketStructure(){
                 ticker.data.last_trade
             );
 
-            // ORDERBOOK
             const orderbook =
             await axios.get(
                 "https://api.luno.com/api/1/orderbook?pair=" + pair
