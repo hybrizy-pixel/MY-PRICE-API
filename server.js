@@ -28,10 +28,10 @@ const MAIN_COINS = {
 };
 
 // =====================================
-// BREAKOUT COINS
+// EVENT COINS
 // =====================================
 
-const BREAKOUT_COINS = {
+const EVENT_COINS = {
     XRP: "XRPMYR",
     XLM: "XLMMYR",
     CRV: "CRVMYR",
@@ -43,6 +43,9 @@ const BREAKOUT_COINS = {
 // =====================================
 
 const LAST_PRICES = {};
+const LAST_SUPPORT = {};
+const LAST_RESISTANCE = {};
+const WALL_MEMORY = {};
 
 // =====================================
 // PRICE FORMAT
@@ -106,7 +109,7 @@ app.get("/", (req, res) => {
 });
 
 // =====================================
-// TELEGRAM FUNCTION
+// TELEGRAM
 // =====================================
 
 async function sendTelegram(message){
@@ -141,7 +144,7 @@ async function sendTelegram(message){
 }
 
 // =====================================
-// GET SUPPORT RESISTANCE
+// GET WALLS
 // =====================================
 
 function getWalls(
@@ -271,6 +274,7 @@ async function scanPrices(){
 
         }
 
+        // FORCE ALERT
         await sendTelegram(
             message
         );
@@ -302,6 +306,7 @@ async function marketStructure(){
             const pair =
             MAIN_COINS[coin];
 
+            // PRICE
             const ticker =
             await axios.get(
                 "https://api.luno.com/api/1/ticker?pair=" + pair
@@ -312,6 +317,7 @@ async function marketStructure(){
                 ticker.data.last_trade
             );
 
+            // ORDERBOOK
             const orderbook =
             await axios.get(
                 "https://api.luno.com/api/1/orderbook?pair=" + pair
@@ -361,6 +367,13 @@ async function marketStructure(){
 
             }
 
+            else{
+
+                strength =
+                "➖ Market masih seimbang";
+
+            }
+
             message +=
 
             "📊 " + coin +
@@ -388,8 +401,15 @@ async function marketStructure(){
 
             "\n\n";
 
+            LAST_SUPPORT[coin] =
+            support;
+
+            LAST_RESISTANCE[coin] =
+            resistance;
+
         }
 
+        // FORCE ALERT
         await sendTelegram(
             message
         );
@@ -405,18 +425,20 @@ async function marketStructure(){
 }
 
 // =====================================
-// BREAKOUT SCANNER
+// EVENT SCANNER
+// ONLY ALERT IF EVENT HAPPEN
 // =====================================
 
-async function breakoutScanner(){
+async function eventScanner(){
 
     try{
 
-        for(const coin in BREAKOUT_COINS){
+        for(const coin in EVENT_COINS){
 
             const pair =
-            BREAKOUT_COINS[coin];
+            EVENT_COINS[coin];
 
+            // PRICE
             const ticker =
             await axios.get(
                 "https://api.luno.com/api/1/ticker?pair=" + pair
@@ -427,6 +449,7 @@ async function breakoutScanner(){
                 ticker.data.last_trade
             );
 
+            // ORDERBOOK
             const orderbook =
             await axios.get(
                 "https://api.luno.com/api/1/orderbook?pair=" + pair
@@ -493,6 +516,7 @@ async function breakoutScanner(){
                     " BREAKOUT\n\n" +
 
                     "RM" +
+
                     formatPrice(
                         coin,
                         oldPrice
@@ -559,6 +583,48 @@ async function breakoutScanner(){
             }
 
             // =====================================
+            // BUYER SPIKE
+            // =====================================
+
+            else if(
+
+                supportVolume >
+                resistanceVolume * 3 &&
+
+                change > 1
+
+            ){
+
+                await sendTelegram(
+
+                    "🟢 " + coin +
+                    " BUYER SPIKE\n\n" +
+
+                    "RM" +
+
+                    formatPrice(
+                        coin,
+                        oldPrice
+                    ) +
+
+                    " → RM" +
+
+                    formatPrice(
+                        coin,
+                        price
+                    ) +
+
+                    "\n\n✅ Buyer dominate" +
+
+                    "\n✅ Buy volume spike" +
+
+                    "\n🔥 Bullish pressure"
+
+                );
+
+            }
+
+            // =====================================
             // SELLER SPIKE
             // =====================================
 
@@ -601,22 +667,22 @@ async function breakoutScanner(){
             }
 
             // =====================================
-            // BUYER SPIKE
+            // REVERSAL
             // =====================================
 
             else if(
 
-                supportVolume >
-                resistanceVolume * 3 &&
+                change > 1 &&
 
-                change > 1
+                supportVolume >
+                resistanceVolume * 2
 
             ){
 
                 await sendTelegram(
 
-                    "🟢 " + coin +
-                    " BUYER SPIKE\n\n" +
+                    "🔄 " + coin +
+                    " REVERSAL\n\n" +
 
                     "RM" +
 
@@ -632,13 +698,123 @@ async function breakoutScanner(){
                         price
                     ) +
 
-                    "\n\n✅ Buyer dominate" +
+                    "\n\n✅ Buyer mula ambil alih" +
 
-                    "\n✅ Buy volume spike" +
-
-                    "\n🔥 Bullish pressure"
+                    "\n🔥 Possible bullish reversal"
 
                 );
+
+            }
+
+            // =====================================
+            // LIQUIDITY SWEEP
+            // =====================================
+
+            else if(
+
+                price < support &&
+
+                supportVolume >
+                resistanceVolume * 2
+
+            ){
+
+                await sendTelegram(
+
+                    "⚠️ " + coin +
+                    " LIQUIDITY SWEEP\n\n" +
+
+                    "Harga sweep support lalu reverse." +
+
+                    "\n\n🔥 Buyer absorb seller" +
+
+                    "\n🔥 Possible trap movement"
+
+                );
+
+            }
+
+            // =====================================
+            // VOLUME SURGE
+            // =====================================
+
+            else if(
+
+                supportVolume >
+                resistanceVolume * 4
+
+            ){
+
+                await sendTelegram(
+
+                    "🚀 " + coin +
+                    " VOLUME SURGE\n\n" +
+
+                    "Volume buyer meningkat kuat." +
+
+                    "\n\n🔥 Momentum sedang masuk"
+
+                );
+
+            }
+
+            // =====================================
+            // WHALE DETECTION
+            // =====================================
+
+            if(
+                !WALL_MEMORY[coin]
+            ){
+
+                WALL_MEMORY[coin] = 0;
+
+            }
+
+            if(
+
+                supportVolume >
+                100000
+
+            ){
+
+                WALL_MEMORY[coin]++;
+
+            }
+
+            else{
+
+                WALL_MEMORY[coin] = 0;
+
+            }
+
+            if(
+
+                WALL_MEMORY[coin] >= 3
+
+            ){
+
+                await sendTelegram(
+
+                    "🐋 " + coin +
+                    " WHALE BUY WALL\n\n" +
+
+                    "RM" +
+
+                    formatPrice(
+                        coin,
+                        support
+                    ) +
+
+                    "\n\nVolume: " +
+                    supportVolume.toFixed(2) +
+
+                    "\n\n🔥 Wall sustain lama" +
+
+                    "\n🔥 Buyer besar defend support"
+
+                );
+
+                WALL_MEMORY[coin] = 0;
 
             }
 
@@ -650,7 +826,7 @@ async function breakoutScanner(){
     }catch(err){
 
         console.log(
-            "Breakout scanner failed"
+            "Event scanner failed"
         );
 
     }
@@ -676,7 +852,7 @@ app.listen(PORT, () => {
 
 scanPrices();
 marketStructure();
-breakoutScanner();
+eventScanner();
 
 // =====================================
 // AUTO RUN
@@ -694,8 +870,8 @@ setInterval(
     900000
 );
 
-// EVERY 5 MINUTES
+// EVENT SCANNER
 setInterval(
-    breakoutScanner,
+    eventScanner,
     300000
 );
