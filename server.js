@@ -137,9 +137,9 @@ app.get("/market", async (req, res) => {
 // START SERVER
 app.listen(PORT, () => {
 
-    console.log(
-        `Server running on port ${PORT}`
-    );
+ console.log(
+    "Server running on port " + PORT
+);
 
 });
 
@@ -387,4 +387,3 @@ setInterval(
     scanCoins,
     300000
 );
-```
