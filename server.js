@@ -1,3 +1,4 @@
+```javascript
 const express = require("express");
 const axios = require("axios");
 const NodeCache = require("node-cache");
@@ -15,11 +16,7 @@ const PORT = process.env.PORT || 3000;
 
 const PAIRS = {
     BTC: "XBTMYR",
-    XRP: "XRPMYR",
-    XLM: "XLMMYR",
-    CRV: "CRVMYR",
-    GRT: "GRTMYR",
-    AAVE: "AAVEMYR"
+    GRT: "GRTMYR"
 };
 
 // HOMEPAGE
@@ -100,37 +97,16 @@ app.get("/market", async (req, res) => {
 
             const pair = PAIRS[coin];
 
-            let data;
+            const response = await axios.get(
+                `https://api.luno.com/api/1/ticker?pair=${pair}`
+            );
 
-            const cachedData = cache.get(pair);
+            const ticker = response.data;
 
-            if (cachedData) {
-
-                data = cachedData;
-
-            } else {
-
-                const response = await axios.get(
-                    `https://api.luno.com/api/1/ticker?pair=${pair}`
-                );
-
-                const ticker = response.data;
-
-                data = {
-                    source: "luno",
-                    coin,
-                    pair: ticker.pair,
-                    price: ticker.last_trade,
-                    bid: ticker.bid,
-                    ask: ticker.ask,
-                    timestamp: ticker.timestamp
-                };
-
-                cache.set(pair, data);
-
-            }
-
-            marketData.push(data);
+            marketData.push({
+                coin,
+                price: ticker.last_trade
+            });
 
         }
 
@@ -154,34 +130,30 @@ app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 
 });
+
 // TELEGRAM BOT
-const TELEGRAM_TOKEN = "8979342744:AAFbamnzNXbeJCAIxuUf78NAxKspoWvymGs";
+const TELEGRAM_TOKEN =
+"8979342744:AAFbamnzNXbeJCAIxuUf78NAxKspoWvymGs";
 
 const CHAT_ID = "7161546";
 
-// AUTO GRT ALERT
-async function sendGRTUpdate(){
+// COINS
+const COINS = [
+    "BTC",
+    "GRT"
+];
+
+// SAVE LAST PRICE
+const LAST_PRICES = {};
+
+// SAVE LAST ALERT
+const LAST_ALERT = {};
+
+// TELEGRAM SEND
+async function sendTelegram(message){
 
     try{
 
-        // GET LIVE PRICE
-        const response = await axios.get(
-            "https://api.luno.com/api/1/ticker?pair=GRTMYR"
-        );
-
-        const price = parseFloat(
-            response.data.last_trade
-        );
-
-        // CREATE ALERT MESSAGE
-        const message =
-`🚨 GRT RM ${price.toFixed(4)}
-
-LIVE PRICE UPDATE 🔥
-
-Powered by SAFWAN LUNO PRICE API`;
-
-        // SEND TELEGRAM
         await axios.post(
             `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
             {
@@ -190,7 +162,7 @@ Powered by SAFWAN LUNO PRICE API`;
             }
         );
 
-        console.log("Telegram alert sent");
+        console.log("Alert sent");
 
     }catch(err){
 
@@ -200,5 +172,188 @@ Powered by SAFWAN LUNO PRICE API`;
 
 }
 
-// SEND EVERY 5 MINUTES
-setInterval(sendGRTUpdate, 300000);
+// SCANNER
+async function scanCoins(){
+
+    try{
+
+        let priceMessage = "";
+
+        for(const coin of COINS){
+
+            const pair = PAIRS[coin];
+
+            // LIVE PRICE
+            const response =
+            await axios.get(
+`https://api.luno.com/api/1/ticker?pair=${pair}`
+            );
+
+            const price =
+            parseFloat(
+                response.data.last_trade
+            );
+
+            // ORDER BOOK
+            const orderbook =
+            await axios.get(
+`https://api.luno.com/api/1/orderbook?pair=${pair}`
+            );
+
+            const bids =
+            orderbook.data.bids;
+
+            const asks =
+            orderbook.data.asks;
+
+            // BIGGEST BUY WALL
+            let biggestBid =
+            bids.reduce((a,b)=>
+parseFloat(a.volume) >
+parseFloat(b.volume) ? a : b
+            );
+
+            // BIGGEST SELL WALL
+            let biggestAsk =
+            asks.reduce((a,b)=>
+parseFloat(a.volume) >
+parseFloat(b.volume) ? a : b
+            );
+
+            const support =
+            parseFloat(biggestBid.price);
+
+            const resistance =
+            parseFloat(biggestAsk.price);
+
+            // PRICE UPDATE MESSAGE
+            priceMessage +=
+`${coin} RM${price.toFixed(4)}
+`;
+
+            // FIRST SAVE
+            if(!LAST_PRICES[coin]){
+
+                LAST_PRICES[coin] = price;
+                continue;
+
+            }
+
+            const oldPrice =
+            LAST_PRICES[coin];
+
+            const change =
+            ((price-oldPrice)/oldPrice)*100;
+
+            const now = Date.now();
+
+            // COOLDOWN
+            if(
+LAST_ALERT[coin] &&
+now - LAST_ALERT[coin] < 1800000
+            ){
+
+                LAST_PRICES[coin] = price;
+                continue;
+
+            }
+
+            // BREAKOUT
+            if(
+price > resistance &&
+change > 2
+            ){
+
+                await sendTelegram(
+`🚀 ${coin} BREAKOUT
+
+PECAH NAIK RM${resistance.toFixed(4)} 🔥`
+                );
+
+                LAST_ALERT[coin] = now;
+
+            }
+
+            // BREAKDOWN
+            if(
+price < support &&
+change < -2
+            ){
+
+                await sendTelegram(
+`⚠️ ${coin} BREAKDOWN
+
+PECAH TURUN RM${support.toFixed(4)} 🔥`
+                );
+
+                LAST_ALERT[coin] = now;
+
+            }
+
+            // REJECTION
+            if(
+price < resistance &&
+change > 1
+            ){
+
+                await sendTelegram(
+`⚠️ ${coin} TAK LEPAS RM${resistance.toFixed(4)}
+
+KENA REJECT 🔥`
+                );
+
+                LAST_ALERT[coin] = now;
+
+            }
+
+            // VOLUME SPIKE
+            if(
+parseFloat(biggestBid.volume) > 5
+            ){
+
+                await sendTelegram(
+`🐋 ${coin} VOLUME BESAR
+
+SMART MONEY MASUK 🔥`
+                );
+
+                LAST_ALERT[coin] = now;
+
+            }
+
+            // SUPPORT UPDATE
+            if(
+Math.abs(change) > 3
+            ){
+
+                await sendTelegram(
+`🟢 ${coin} SUPPORT BERUBAH
+
+Buyer besar muncul RM${support.toFixed(4)} 🔥`
+                );
+
+                LAST_ALERT[coin] = now;
+
+            }
+
+            LAST_PRICES[coin] = price;
+
+        }
+
+        // SEND PRICE UPDATE
+        await sendTelegram(priceMessage);
+
+    }catch(err){
+
+        console.log("Scanner failed");
+
+    }
+
+}
+
+// FIRST RUN
+scanCoins();
+
+// RUN EVERY 5 MINUTES
+setInterval(scanCoins, 300000);
+```
