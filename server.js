@@ -254,7 +254,7 @@ now - LAST_ALERT[coin] < 1800000
             ){
 
                 LAST_PRICES[coin] = price;
-                continue;
+                
 
             }
 
