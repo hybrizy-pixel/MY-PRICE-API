@@ -274,7 +274,6 @@ async function scanPrices(){
 
         }
 
-        // FORCE ALERT
         await sendTelegram(
             message
         );
@@ -306,7 +305,6 @@ async function marketStructure(){
             const pair =
             MAIN_COINS[coin];
 
-            // PRICE
             const ticker =
             await axios.get(
                 "https://api.luno.com/api/1/ticker?pair=" + pair
@@ -317,7 +315,6 @@ async function marketStructure(){
                 ticker.data.last_trade
             );
 
-            // ORDERBOOK
             const orderbook =
             await axios.get(
                 "https://api.luno.com/api/1/orderbook?pair=" + pair
@@ -409,7 +406,6 @@ async function marketStructure(){
 
         }
 
-        // FORCE ALERT
         await sendTelegram(
             message
         );
@@ -426,7 +422,6 @@ async function marketStructure(){
 
 // =====================================
 // EVENT SCANNER
-// ONLY ALERT IF EVENT HAPPEN
 // =====================================
 
 async function eventScanner(){
@@ -438,7 +433,6 @@ async function eventScanner(){
             const pair =
             EVENT_COINS[coin];
 
-            // PRICE
             const ticker =
             await axios.get(
                 "https://api.luno.com/api/1/ticker?pair=" + pair
@@ -449,7 +443,6 @@ async function eventScanner(){
                 ticker.data.last_trade
             );
 
-            // ORDERBOOK
             const orderbook =
             await axios.get(
                 "https://api.luno.com/api/1/orderbook?pair=" + pair
@@ -583,22 +576,28 @@ async function eventScanner(){
             }
 
             // =====================================
-            // BUYER SPIKE
+            // VALIDATED BUYER SURGE
             // =====================================
 
             else if(
 
                 supportVolume >
-                resistanceVolume * 3 &&
+                resistanceVolume * 4 &&
 
-                change > 1
+                change > 1 &&
+
+                price >
+                oldPrice * 1.005 &&
+
+                price >
+                resistance * 0.995
 
             ){
 
                 await sendTelegram(
 
-                    "🟢 " + coin +
-                    " BUYER SPIKE\n\n" +
+                    "🚀 " + coin +
+                    " VOLUME SURGE\n\n" +
 
                     "RM" +
 
@@ -614,33 +613,39 @@ async function eventScanner(){
                         price
                     ) +
 
-                    "\n\n✅ Buyer dominate" +
+                    "\n\n✅ Buyer volume spike" +
 
-                    "\n✅ Buy volume spike" +
+                    "\n✅ Momentum kuat" +
 
-                    "\n🔥 Bullish pressure"
+                    "\n🔥 Hampir breakout"
 
                 );
 
             }
 
             // =====================================
-            // SELLER SPIKE
+            // VALIDATED SELLER SURGE
             // =====================================
 
             else if(
 
                 resistanceVolume >
-                supportVolume * 3 &&
+                supportVolume * 4 &&
 
-                change < -1
+                change < -1 &&
+
+                price <
+                oldPrice * 0.995 &&
+
+                price <
+                support * 1.005
 
             ){
 
                 await sendTelegram(
 
                     "🔴 " + coin +
-                    " SELLER SPIKE\n\n" +
+                    " SELLER SURGE\n\n" +
 
                     "RM" +
 
@@ -656,11 +661,11 @@ async function eventScanner(){
                         price
                     ) +
 
-                    "\n\n⚠️ Seller dominate" +
+                    "\n\n⚠️ Seller volume spike" +
 
-                    "\n⚠️ Volume spike besar" +
+                    "\n⚠️ Momentum lemah" +
 
-                    "\n📉 Bearish pressure"
+                    "\n📉 Hampir breakdown"
 
                 );
 
@@ -715,7 +720,9 @@ async function eventScanner(){
                 price < support &&
 
                 supportVolume >
-                resistanceVolume * 2
+                resistanceVolume * 2 &&
+
+                change < -0.5
 
             ){
 
@@ -729,30 +736,6 @@ async function eventScanner(){
                     "\n\n🔥 Buyer absorb seller" +
 
                     "\n🔥 Possible trap movement"
-
-                );
-
-            }
-
-            // =====================================
-            // VOLUME SURGE
-            // =====================================
-
-            else if(
-
-                supportVolume >
-                resistanceVolume * 4
-
-            ){
-
-                await sendTelegram(
-
-                    "🚀 " + coin +
-                    " VOLUME SURGE\n\n" +
-
-                    "Volume buyer meningkat kuat." +
-
-                    "\n\n🔥 Momentum sedang masuk"
 
                 );
 
