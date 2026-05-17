@@ -166,8 +166,8 @@ const LAST_PRICES = {};
 // SAVE LAST ALERT
 const LAST_ALERT = {};
 
-// CONFIRMATION COUNTER
-const SIGNAL_COUNT = {};
+// MULTI CANDLE MEMORY
+const CANDLE_CONFIRMATION = {};
 
 // LAST SUPPORT & RESISTANCE
 const LAST_SUPPORT = {};
@@ -297,7 +297,7 @@ async function scanCoins(){
             }
 
             // =====================================
-            // ACCUMULATION WITH CONFIRMATION
+            // MULTI CANDLE ACCUMULATION
             // =====================================
 
             if(
@@ -306,15 +306,19 @@ async function scanCoins(){
                 price > support
             ){
 
-                if(!SIGNAL_COUNT[coin]){
-                    SIGNAL_COUNT[coin] = 0;
+                if(!CANDLE_CONFIRMATION[coin]){
+
+                    CANDLE_CONFIRMATION[coin] = 0;
+
                 }
 
-                SIGNAL_COUNT[coin]++;
+                CANDLE_CONFIRMATION[coin]++;
 
-                if(SIGNAL_COUNT[coin] >= 2){
+                if(
+                    CANDLE_CONFIRMATION[coin] >= 3
+                ){
 
-                    let confidence = 70;
+                    let confidence = 75;
 
                     if(
                         buyVolume >
@@ -333,15 +337,15 @@ async function scanCoins(){
 
                     await sendTelegram(
                         "🟢 " + coin +
-                        " ACCUMULATION DETECTED\n\n" +
+                        " CONFIRMED ACCUMULATION\n\n" +
                         "Confidence: " +
                         confidence +
                         "%\n\n" +
-                        "Buyer besar sedang accumulate.\n" +
-                        "Support masih hold 🔥"
+                        "3 bullish confirmations detected.\n" +
+                        "Buyer masih control market 🔥"
                     );
 
-                    SIGNAL_COUNT[coin] = 0;
+                    CANDLE_CONFIRMATION[coin] = 0;
 
                     LAST_ALERT[coin] = now;
 
@@ -349,7 +353,7 @@ async function scanCoins(){
 
             }else{
 
-                SIGNAL_COUNT[coin] = 0;
+                CANDLE_CONFIRMATION[coin] = 0;
 
             }
 
@@ -468,10 +472,15 @@ async function scanCoins(){
                 price * 0.003
             ){
 
+                const oldSupport =
+                LAST_SUPPORT[coin];
+
                 await sendTelegram(
                     "🟢 " + coin +
                     " SUPPORT SHIFTED\n\n" +
-                    "Support baru detected:\nRM" +
+                    "Previous Support:\nRM" +
+                    oldSupport.toFixed(4) +
+                    "\n\nNew Support:\nRM" +
                     support.toFixed(4) +
                     "\n\nWhale mungkin reposition 🔥"
                 );
@@ -490,10 +499,15 @@ async function scanCoins(){
                 price * 0.003
             ){
 
+                const oldResistance =
+                LAST_RESISTANCE[coin];
+
                 await sendTelegram(
                     "🔴 " + coin +
                     " RESISTANCE SHIFTED\n\n" +
-                    "Resistance baru detected:\nRM" +
+                    "Previous Resistance:\nRM" +
+                    oldResistance.toFixed(4) +
+                    "\n\nNew Resistance:\nRM" +
                     resistance.toFixed(4) +
                     "\n\nSell wall berubah ⚠️"
                 );
@@ -535,4 +549,3 @@ setInterval(
     scanCoins,
     300000
 );
-
