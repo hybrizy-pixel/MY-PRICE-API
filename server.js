@@ -418,10 +418,12 @@ async function scanCoins(){
 
         }
 
-        // SEND PRICE EVERY 5 MINUTES
-        await sendTelegram(
-            priceMessage
-        );
+  // FORCE PRICE UPDATE EVERY 5 MINUTES
+await sendTelegram(
+    "📊 LIVE PRICE UPDATE\n\n" +
+    priceMessage
+);
+
 
     }catch(err){
 
