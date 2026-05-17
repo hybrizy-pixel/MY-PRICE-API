@@ -154,4 +154,51 @@ app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 
 });
+// TELEGRAM BOT
+const TELEGRAM_TOKEN = "8979342744:AAFbamnzNXbeJCAIxuUf78NAxKspoWvymGs";
 
+const CHAT_ID = "7161546";
+
+// AUTO GRT ALERT
+async function sendGRTUpdate(){
+
+    try{
+
+        // GET LIVE PRICE
+        const response = await axios.get(
+            "https://api.luno.com/api/1/ticker?pair=GRTMYR"
+        );
+
+        const price = parseFloat(
+            response.data.last_trade
+        );
+
+        // CREATE ALERT MESSAGE
+        const message =
+`🚨 GRT RM ${price.toFixed(4)}
+
+LIVE PRICE UPDATE 🔥
+
+Powered by SAFWAN LUNO PRICE API`;
+
+        // SEND TELEGRAM
+        await axios.post(
+            `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+            {
+                chat_id: CHAT_ID,
+                text: message
+            }
+        );
+
+        console.log("Telegram alert sent");
+
+    }catch(err){
+
+        console.log("Telegram failed");
+
+    }
+
+}
+
+// SEND EVERY 5 MINUTES
+setInterval(sendGRTUpdate, 300000);
