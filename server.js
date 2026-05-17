@@ -394,4 +394,3 @@ setInterval(
     scanCoins,
     300000
 );
-```
