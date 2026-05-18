@@ -32,6 +32,7 @@ const MAIN_COINS = {
 // =====================================
 
 const EVENT_COINS = {
+    BTC: "XBTMYR",
     XRP: "XRPMYR",
     XLM: "XLMMYR",
     CRV: "CRVMYR",
@@ -46,53 +47,70 @@ const LAST_PRICES = {};
 const LAST_SUPPORT = {};
 const LAST_RESISTANCE = {};
 const WALL_MEMORY = {};
+const LAST_ALERT_TIME = {};
 
 // =====================================
 // PRICE FORMAT
 // =====================================
 
-function formatPrice(
-    coin,
-    price
-){
+function formatPrice(coin, price){
 
     if(coin === "BTC"){
-
         return price.toFixed(2);
-
     }
 
     if(coin === "GRT"){
-
         return price.toFixed(4);
-
     }
 
     if(coin === "XRP"){
-
         return price.toFixed(2);
-
     }
 
     if(coin === "AAVE"){
-
         return price.toFixed(2);
-
     }
 
     if(coin === "CRV"){
-
         return price.toFixed(3);
-
     }
 
     if(coin === "XLM"){
-
         return price.toFixed(3);
-
     }
 
     return price.toFixed(2);
+
+}
+
+// =====================================
+// SEND TELEGRAM
+// =====================================
+
+async function sendTelegram(message){
+
+    try{
+
+        await axios.post(
+
+            "https://api.telegram.org/bot" +
+            TELEGRAM_TOKEN +
+            "/sendMessage",
+
+            {
+                chat_id: CHAT_ID,
+                text: message
+            }
+
+        );
+
+        console.log("Telegram sent");
+
+    }catch(err){
+
+        console.log("Telegram failed");
+
+    }
 
 }
 
@@ -125,9 +143,7 @@ app.get("/price/:symbol", async (req, res) => {
 
             pair = "XBTMYR";
 
-        }
-
-        else{
+        }else{
 
             pair = symbol + "MYR";
 
@@ -141,13 +157,9 @@ app.get("/price/:symbol", async (req, res) => {
         res.json({
 
             success: true,
-
             symbol: symbol,
-
             pair: pair,
-
-            price:
-            response.data.last_trade
+            price: response.data.last_trade
 
         });
 
@@ -156,50 +168,13 @@ app.get("/price/:symbol", async (req, res) => {
         res.status(500).json({
 
             success: false,
-
-            error:
-            "Failed to fetch live price"
+            error: "Failed to fetch price"
 
         });
 
     }
 
 });
-
-// =====================================
-// TELEGRAM
-// =====================================
-
-async function sendTelegram(message){
-
-    try{
-
-        await axios.post(
-
-            "https://api.telegram.org/bot" +
-            TELEGRAM_TOKEN +
-            "/sendMessage",
-
-            {
-                chat_id: CHAT_ID,
-                text: message
-            }
-
-        );
-
-        console.log(
-            "Telegram sent"
-        );
-
-    }catch(err){
-
-        console.log(
-            "Telegram failed"
-        );
-
-    }
-
-}
 
 // =====================================
 // GET WALLS
@@ -306,7 +281,9 @@ async function scanPrices(){
 
                 direction = "🟢";
 
-            }else if(change < 0){
+            }
+
+            else if(change < 0){
 
                 direction = "🔴";
 
@@ -332,9 +309,7 @@ async function scanPrices(){
 
         }
 
-        await sendTelegram(
-            message
-        );
+        await sendTelegram(message);
 
     }catch(err){
 
@@ -388,7 +363,6 @@ async function marketStructure(){
 
                 support,
                 supportVolume,
-
                 resistance,
                 resistanceVolume
 
@@ -464,9 +438,7 @@ async function marketStructure(){
 
         }
 
-        await sendTelegram(
-            message
-        );
+        await sendTelegram(message);
 
     }catch(err){
 
@@ -516,7 +488,6 @@ async function eventScanner(){
 
                 support,
                 supportVolume,
-
                 resistance,
                 resistanceVolume
 
@@ -531,8 +502,8 @@ async function eventScanner(){
                 !LAST_PRICES[coin]
             ){
 
-                LAST_PRICES[coin] =
-                price;
+                LAST_PRICES[coin]
+                = price;
 
             }
 
@@ -545,431 +516,360 @@ async function eventScanner(){
                 / oldPrice
             ) * 100;
 
+            const ratio =
+            supportVolume /
+            resistanceVolume;
+
             // =====================================
-            // BUYER MOMENTUM
+            // ALERT COOLDOWN
             // =====================================
+
+            const now = Date.now();
 
             if(
-
-                change > 1 &&
-
-                price >
-                oldPrice * 1.005 &&
-
-                supportVolume >
-                resistanceVolume * 2
-
+                !LAST_ALERT_TIME[coin]
             ){
 
-                await sendTelegram(
-
-                    "🚀 " + coin +
-                    " BUYER MOMENTUM\n\n" +
-
-                    "RM" +
-
-                    formatPrice(
-                        coin,
-                        oldPrice
-                    ) +
-
-                    " → RM" +
-
-                    formatPrice(
-                        coin,
-                        price
-                    ) +
-
-                    "\n\n✅ Buyer pressure kuat" +
-
-                    "\n🔥 Momentum ke atas"
-
-                );
-
-            }
-
-            // =====================================
-            // SELLER MOMENTUM
-            // =====================================
-
-            else if(
-
-                change < -1 &&
-
-                price <
-                oldPrice * 0.995 &&
-
-                resistanceVolume >
-                supportVolume * 2
-
-            ){
-
-                await sendTelegram(
-
-                    "🔴 " + coin +
-                    " SELLER MOMENTUM\n\n" +
-
-                    "RM" +
-
-                    formatPrice(
-                        coin,
-                        oldPrice
-                    ) +
-
-                    " → RM" +
-
-                    formatPrice(
-                        coin,
-                        price
-                    ) +
-
-                    "\n\n⚠️ Seller pressure tinggi" +
-
-                    "\n📉 Momentum ke bawah"
-
-                );
-
-            }
-
-            // =====================================
-            // BREAKOUT
-            // =====================================
-
-            else if(
-
-                price >
-                resistance * 1.002 &&
-
-                supportVolume >
-                resistanceVolume * 2 &&
-
-                change > 1
-
-            ){
-
-                await sendTelegram(
-
-                    "🚀 " + coin +
-                    " BREAKOUT\n\n" +
-
-                    "RM" +
-
-                    formatPrice(
-                        coin,
-                        oldPrice
-                    ) +
-
-                    " → RM" +
-
-                    formatPrice(
-                        coin,
-                        price
-                    ) +
-
-                    "\n\n✅ Resistance pecah" +
-
-                    "\n🔥 Bullish momentum"
-
-                );
-
-            }
-
-            // =====================================
-            // REJECTION
-            // =====================================
-
-            else if(
-
-                price < resistance &&
-
-                resistanceVolume >
-                supportVolume * 2 &&
-
-                Math.abs(change) < 0.5
-
-            ){
-
-                await sendTelegram(
-
-                    "⚠️ " + coin +
-                    " REJECTION\n\n" +
-
-                    "RM" +
-
-                    formatPrice(
-                        coin,
-                        price
-                    ) +
-
-                    " gagal lepas RM" +
-
-                    formatPrice(
-                        coin,
-                        resistance
-                    ) +
-
-                    "\n\n🔴 Resistance wall tebal" +
-
-                    "\n🔴 Sell volume tinggi"
-
-                );
-
-            }
-
-            // =====================================
-            // REVERSAL
-            // =====================================
-
-            else if(
-
-                change > 1 &&
-
-                supportVolume >
-                resistanceVolume * 2 &&
-
-                support >
-                (LAST_SUPPORT[coin] || support)
-
-            ){
-
-                await sendTelegram(
-
-                    "🔄 " + coin +
-                    " REVERSAL\n\n" +
-
-                    "RM" +
-
-                    formatPrice(
-                        coin,
-                        oldPrice
-                    ) +
-
-                    " → RM" +
-
-                    formatPrice(
-                        coin,
-                        price
-                    ) +
-
-                    "\n\n✅ Buyer mula ambil alih" +
-
-                    "\n🔥 Possible bullish reversal"
-
-                );
-
-            }
-
-            // =====================================
-            // LIQUIDITY SWEEP
-            // =====================================
-
-            else if(
-
-                price < support &&
-
-                supportVolume >
-                resistanceVolume * 2 &&
-
-                change < -0.5
-
-            ){
-
-                await sendTelegram(
-
-                    "⚠️ " + coin +
-                    " LIQUIDITY SWEEP\n\n" +
-
-                    "Harga sweep support lalu reverse." +
-
-                    "\n\n🔥 Buyer absorb seller" +
-
-                    "\n🔥 Possible trap movement"
-
-                );
-
-            }
-
-            // =====================================
-            // VOLUME SURGE
-            // =====================================
-
-            else if(
-
-                supportVolume >
-                resistanceVolume * 4 &&
-
-                change > 1 &&
-
-                price >
-                oldPrice * 1.005 &&
-
-                price >
-                resistance * 0.995
-
-            ){
-
-                await sendTelegram(
-
-                    "🚀 " + coin +
-                    " VOLUME SURGE\n\n" +
-
-                    "RM" +
-
-                    formatPrice(
-                        coin,
-                        oldPrice
-                    ) +
-
-                    " → RM" +
-
-                    formatPrice(
-                        coin,
-                        price
-                    ) +
-
-                    "\n\n✅ Buyer volume spike" +
-
-                    "\n🔥 Hampir breakout"
-
-                );
-
-            }
-
-            // =====================================
-            // WHALE BUY WALL
-            // =====================================
-
-            if(
-                !WALL_MEMORY[coin]
-            ){
-
-                WALL_MEMORY[coin] = 0;
+                LAST_ALERT_TIME[coin] = 0;
 
             }
 
             if(
-
-                supportVolume >
-                100000
-
+                now -
+                LAST_ALERT_TIME[coin]
+                < 300000
             ){
 
-                WALL_MEMORY[coin]++;
+                continue;
 
             }
+
+            // =====================================
+            // BTC SPECIAL LOGIC
+            // =====================================
+
+            if(coin === "BTC"){
+
+                // VALID BUYER MOMENTUM
+
+                if(
+
+                    ratio > 3 &&
+
+                    change > 1 &&
+
+                    price >
+                    oldPrice * 1.005 &&
+
+                    support >
+                    (LAST_SUPPORT[coin] || support)
+
+                ){
+
+                    await sendTelegram(
+
+                        "🚀 BTC BUYER MOMENTUM\n\n" +
+
+                        "RM" +
+
+                        formatPrice(
+                            coin,
+                            oldPrice
+                        ) +
+
+                        " → RM" +
+
+                        formatPrice(
+                            coin,
+                            price
+                        ) +
+
+                        "\n\n✅ Orderbook ratio: " +
+                        ratio.toFixed(2) + "x" +
+
+                        "\n🔥 Real upward momentum"
+
+                    );
+
+                    LAST_ALERT_TIME[coin] =
+                    now;
+
+                }
+
+                // VALID SELLER MOMENTUM
+
+                else if(
+
+                    resistanceVolume >
+                    supportVolume * 3 &&
+
+                    change < -1 &&
+
+                    price <
+                    oldPrice * 0.995
+
+                ){
+
+                    await sendTelegram(
+
+                        "🔴 BTC SELLER MOMENTUM\n\n" +
+
+                        "RM" +
+
+                        formatPrice(
+                            coin,
+                            oldPrice
+                        ) +
+
+                        " → RM" +
+
+                        formatPrice(
+                            coin,
+                            price
+                        ) +
+
+                        "\n\n⚠️ Seller ratio dominate" +
+
+                        "\n📉 Real downward momentum"
+
+                    );
+
+                    LAST_ALERT_TIME[coin] =
+                    now;
+
+                }
+
+                // BREAKOUT
+
+                else if(
+
+                    price >
+                    resistance * 1.002 &&
+
+                    ratio > 2.5 &&
+
+                    change > 1
+
+                ){
+
+                    await sendTelegram(
+
+                        "🚀 BTC BREAKOUT\n\n" +
+
+                        "RM" +
+
+                        formatPrice(
+                            coin,
+                            oldPrice
+                        ) +
+
+                        " → RM" +
+
+                        formatPrice(
+                            coin,
+                            price
+                        ) +
+
+                        "\n\n✅ Resistance pecah" +
+
+                        "\n🔥 Bullish continuation"
+
+                    );
+
+                    LAST_ALERT_TIME[coin] =
+                    now;
+
+                }
+
+            }
+
+            // =====================================
+            // ALTCOIN LOGIC
+            // =====================================
 
             else{
 
-                WALL_MEMORY[coin] = 0;
+                // BUYER MOMENTUM
+
+                if(
+
+                    change > 1 &&
+
+                    price >
+                    oldPrice * 1.005 &&
+
+                    ratio > 2
+
+                ){
+
+                    await sendTelegram(
+
+                        "🚀 " + coin +
+                        " BUYER MOMENTUM\n\n" +
+
+                        "RM" +
+
+                        formatPrice(
+                            coin,
+                            oldPrice
+                        ) +
+
+                        " → RM" +
+
+                        formatPrice(
+                            coin,
+                            price
+                        ) +
+
+                        "\n\n✅ Buyer pressure kuat" +
+
+                        "\n🔥 Momentum ke atas"
+
+                    );
+
+                    LAST_ALERT_TIME[coin] =
+                    now;
+
+                }
+
+                // SELLER MOMENTUM
+
+                else if(
+
+                    resistanceVolume >
+                    supportVolume * 2 &&
+
+                    change < -1 &&
+
+                    price <
+                    oldPrice * 0.995
+
+                ){
+
+                    await sendTelegram(
+
+                        "🔴 " + coin +
+                        " SELLER MOMENTUM\n\n" +
+
+                        "RM" +
+
+                        formatPrice(
+                            coin,
+                            oldPrice
+                        ) +
+
+                        " → RM" +
+
+                        formatPrice(
+                            coin,
+                            price
+                        ) +
+
+                        "\n\n⚠️ Seller pressure tinggi" +
+
+                        "\n📉 Momentum ke bawah"
+
+                    );
+
+                    LAST_ALERT_TIME[coin] =
+                    now;
+
+                }
+
+                // BREAKOUT
+
+                else if(
+
+                    price >
+                    resistance * 1.002 &&
+
+                    ratio > 2 &&
+
+                    change > 1
+
+                ){
+
+                    await sendTelegram(
+
+                        "🚀 " + coin +
+                        " BREAKOUT\n\n" +
+
+                        "RM" +
+
+                        formatPrice(
+                            coin,
+                            oldPrice
+                        ) +
+
+                        " → RM" +
+
+                        formatPrice(
+                            coin,
+                            price
+                        ) +
+
+                        "\n\n✅ Resistance pecah" +
+
+                        "\n🔥 Bullish momentum"
+
+                    );
+
+                    LAST_ALERT_TIME[coin] =
+                    now;
+
+                }
+
+                // REJECTION
+
+                else if(
+
+                    price < resistance &&
+
+                    resistanceVolume >
+                    supportVolume * 2 &&
+
+                    Math.abs(change) < 0.5
+
+                ){
+
+                    await sendTelegram(
+
+                        "⚠️ " + coin +
+                        " REJECTION\n\n" +
+
+                        "RM" +
+
+                        formatPrice(
+                            coin,
+                            price
+                        ) +
+
+                        " gagal lepas RM" +
+
+                        formatPrice(
+                            coin,
+                            resistance
+                        ) +
+
+                        "\n\n🔴 Resistance wall tebal"
+
+                    );
+
+                    LAST_ALERT_TIME[coin] =
+                    now;
+
+                }
 
             }
 
-            if(
+            LAST_SUPPORT[coin]
+            = support;
 
-                WALL_MEMORY[coin] >= 3
+            LAST_RESISTANCE[coin]
+            = resistance;
 
-            ){
-
-                await sendTelegram(
-
-                    "🐋 " + coin +
-                    " WHALE BUY WALL\n\n" +
-
-                    "RM" +
-
-                    formatPrice(
-                        coin,
-                        support
-                    ) +
-
-                    "\n\nVolume: " +
-                    supportVolume.toFixed(2) +
-
-                    "\n\n🔥 Buyer besar defend support"
-
-                );
-
-                WALL_MEMORY[coin] = 0;
-
-            }
-
-            // =====================================
-            // TREND STATUS
-            // =====================================
-
-            if(
-
-                support >
-                (LAST_SUPPORT[coin] || support) &&
-
-                supportVolume >
-                resistanceVolume
-
-            ){
-
-                await sendTelegram(
-
-                    "📈 " + coin +
-                    " TREND: BULLISH\n\n" +
-
-                    "✅ Support semakin naik" +
-
-                    "\n🔥 Momentum masih sihat"
-
-                );
-
-            }
-
-            else if(
-
-                resistance <
-                (LAST_RESISTANCE[coin] || resistance) &&
-
-                resistanceVolume >
-                supportVolume
-
-            ){
-
-                await sendTelegram(
-
-                    "📉 " + coin +
-                    " TREND: BEARISH\n\n" +
-
-                    "⚠️ Seller masih dominate" +
-
-                    "\n📉 Momentum masih lemah"
-
-                );
-
-            }
-
-            else if(
-
-                Math.abs(change) < 0.5
-
-            ){
-
-                await sendTelegram(
-
-                    "➖ " + coin +
-                    " TREND: SIDEWAYS\n\n" +
-
-                    "Buyer dan seller masih seimbang." +
-
-                    "\n\n⚠️ Belum ada breakout direction"
-
-                );
-
-            }
-
-            LAST_SUPPORT[coin] =
-            support;
-
-            LAST_RESISTANCE[coin] =
-            resistance;
-
-            LAST_PRICES[coin] =
-            price;
+            LAST_PRICES[coin]
+            = price;
 
         }
 
