@@ -545,9 +545,97 @@ async function eventScanner(){
                 / oldPrice
             ) * 100;
 
-            // BREAKOUT
+            // =====================================
+            // BUYER MOMENTUM
+            // =====================================
 
             if(
+
+                change > 1 &&
+
+                price >
+                oldPrice * 1.005 &&
+
+                supportVolume >
+                resistanceVolume * 2
+
+            ){
+
+                await sendTelegram(
+
+                    "🚀 " + coin +
+                    " BUYER MOMENTUM\n\n" +
+
+                    "RM" +
+
+                    formatPrice(
+                        coin,
+                        oldPrice
+                    ) +
+
+                    " → RM" +
+
+                    formatPrice(
+                        coin,
+                        price
+                    ) +
+
+                    "\n\n✅ Buyer pressure kuat" +
+
+                    "\n🔥 Momentum ke atas"
+
+                );
+
+            }
+
+            // =====================================
+            // SELLER MOMENTUM
+            // =====================================
+
+            else if(
+
+                change < -1 &&
+
+                price <
+                oldPrice * 0.995 &&
+
+                resistanceVolume >
+                supportVolume * 2
+
+            ){
+
+                await sendTelegram(
+
+                    "🔴 " + coin +
+                    " SELLER MOMENTUM\n\n" +
+
+                    "RM" +
+
+                    formatPrice(
+                        coin,
+                        oldPrice
+                    ) +
+
+                    " → RM" +
+
+                    formatPrice(
+                        coin,
+                        price
+                    ) +
+
+                    "\n\n⚠️ Seller pressure tinggi" +
+
+                    "\n📉 Momentum ke bawah"
+
+                );
+
+            }
+
+            // =====================================
+            // BREAKOUT
+            // =====================================
+
+            else if(
 
                 price >
                 resistance * 1.002 &&
@@ -580,15 +668,15 @@ async function eventScanner(){
 
                     "\n\n✅ Resistance pecah" +
 
-                    "\n✅ Buyer volume kuat" +
-
                     "\n🔥 Bullish momentum"
 
                 );
 
             }
 
+            // =====================================
             // REJECTION
+            // =====================================
 
             else if(
 
@@ -597,7 +685,7 @@ async function eventScanner(){
                 resistanceVolume >
                 supportVolume * 2 &&
 
-                change < 0.3
+                Math.abs(change) < 0.5
 
             ){
 
@@ -622,14 +710,88 @@ async function eventScanner(){
 
                     "\n\n🔴 Resistance wall tebal" +
 
-                    "\n🔴 Sell volume " +
-                    resistanceVolume.toFixed(2)
+                    "\n🔴 Sell volume tinggi"
 
                 );
 
             }
 
-            // VALIDATED BUYER SURGE
+            // =====================================
+            // REVERSAL
+            // =====================================
+
+            else if(
+
+                change > 1 &&
+
+                supportVolume >
+                resistanceVolume * 2 &&
+
+                support >
+                (LAST_SUPPORT[coin] || support)
+
+            ){
+
+                await sendTelegram(
+
+                    "🔄 " + coin +
+                    " REVERSAL\n\n" +
+
+                    "RM" +
+
+                    formatPrice(
+                        coin,
+                        oldPrice
+                    ) +
+
+                    " → RM" +
+
+                    formatPrice(
+                        coin,
+                        price
+                    ) +
+
+                    "\n\n✅ Buyer mula ambil alih" +
+
+                    "\n🔥 Possible bullish reversal"
+
+                );
+
+            }
+
+            // =====================================
+            // LIQUIDITY SWEEP
+            // =====================================
+
+            else if(
+
+                price < support &&
+
+                supportVolume >
+                resistanceVolume * 2 &&
+
+                change < -0.5
+
+            ){
+
+                await sendTelegram(
+
+                    "⚠️ " + coin +
+                    " LIQUIDITY SWEEP\n\n" +
+
+                    "Harga sweep support lalu reverse." +
+
+                    "\n\n🔥 Buyer absorb seller" +
+
+                    "\n🔥 Possible trap movement"
+
+                );
+
+            }
+
+            // =====================================
+            // VOLUME SURGE
+            // =====================================
 
             else if(
 
@@ -667,127 +829,15 @@ async function eventScanner(){
 
                     "\n\n✅ Buyer volume spike" +
 
-                    "\n✅ Momentum kuat" +
-
                     "\n🔥 Hampir breakout"
 
                 );
 
             }
 
-            // VALIDATED SELLER SURGE
-
-            else if(
-
-                resistanceVolume >
-                supportVolume * 4 &&
-
-                change < -1 &&
-
-                price <
-                oldPrice * 0.995 &&
-
-                price <
-                support * 1.005
-
-            ){
-
-                await sendTelegram(
-
-                    "🔴 " + coin +
-                    " SELLER SURGE\n\n" +
-
-                    "RM" +
-
-                    formatPrice(
-                        coin,
-                        oldPrice
-                    ) +
-
-                    " → RM" +
-
-                    formatPrice(
-                        coin,
-                        price
-                    ) +
-
-                    "\n\n⚠️ Seller volume spike" +
-
-                    "\n⚠️ Momentum lemah" +
-
-                    "\n📉 Hampir breakdown"
-
-                );
-
-            }
-
-            // REVERSAL
-
-            else if(
-
-                change > 1 &&
-
-                supportVolume >
-                resistanceVolume * 2
-
-            ){
-
-                await sendTelegram(
-
-                    "🔄 " + coin +
-                    " REVERSAL\n\n" +
-
-                    "RM" +
-
-                    formatPrice(
-                        coin,
-                        oldPrice
-                    ) +
-
-                    " → RM" +
-
-                    formatPrice(
-                        coin,
-                        price
-                    ) +
-
-                    "\n\n✅ Buyer mula ambil alih" +
-
-                    "\n🔥 Possible bullish reversal"
-
-                );
-
-            }
-
-            // LIQUIDITY SWEEP
-
-            else if(
-
-                price < support &&
-
-                supportVolume >
-                resistanceVolume * 2 &&
-
-                change < -0.5
-
-            ){
-
-                await sendTelegram(
-
-                    "⚠️ " + coin +
-                    " LIQUIDITY SWEEP\n\n" +
-
-                    "Harga sweep support lalu reverse." +
-
-                    "\n\n🔥 Buyer absorb seller" +
-
-                    "\n🔥 Possible trap movement"
-
-                );
-
-            }
-
-            // WHALE DETECTION
+            // =====================================
+            // WHALE BUY WALL
+            // =====================================
 
             if(
                 !WALL_MEMORY[coin]
@@ -835,15 +885,88 @@ async function eventScanner(){
                     "\n\nVolume: " +
                     supportVolume.toFixed(2) +
 
-                    "\n\n🔥 Wall sustain lama" +
-
-                    "\n🔥 Buyer besar defend support"
+                    "\n\n🔥 Buyer besar defend support"
 
                 );
 
                 WALL_MEMORY[coin] = 0;
 
             }
+
+            // =====================================
+            // TREND STATUS
+            // =====================================
+
+            if(
+
+                support >
+                (LAST_SUPPORT[coin] || support) &&
+
+                supportVolume >
+                resistanceVolume
+
+            ){
+
+                await sendTelegram(
+
+                    "📈 " + coin +
+                    " TREND: BULLISH\n\n" +
+
+                    "✅ Support semakin naik" +
+
+                    "\n🔥 Momentum masih sihat"
+
+                );
+
+            }
+
+            else if(
+
+                resistance <
+                (LAST_RESISTANCE[coin] || resistance) &&
+
+                resistanceVolume >
+                supportVolume
+
+            ){
+
+                await sendTelegram(
+
+                    "📉 " + coin +
+                    " TREND: BEARISH\n\n" +
+
+                    "⚠️ Seller masih dominate" +
+
+                    "\n📉 Momentum masih lemah"
+
+                );
+
+            }
+
+            else if(
+
+                Math.abs(change) < 0.5
+
+            ){
+
+                await sendTelegram(
+
+                    "➖ " + coin +
+                    " TREND: SIDEWAYS\n\n" +
+
+                    "Buyer dan seller masih seimbang." +
+
+                    "\n\n⚠️ Belum ada breakout direction"
+
+                );
+
+            }
+
+            LAST_SUPPORT[coin] =
+            support;
+
+            LAST_RESISTANCE[coin] =
+            resistance;
 
             LAST_PRICES[coin] =
             price;
