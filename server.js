@@ -56,6 +56,7 @@ const LAST_PRICES = {};
 const LAST_SUPPORT = {};
 const LAST_RESISTANCE = {};
 const LAST_ALERT_TIME = {};
+const LAST_NEWS = [];
 
 // =====================================
 // FORMAT PRICE
@@ -72,11 +73,13 @@ function formatPrice(coin, price){
     }
 
     // GRT 4 DECIMAL
+
     if(coin === "GRT"){
         return price.toFixed(4);
     }
 
-    // ALTCOIN SMALL DECIMAL
+    // ALT SMALL DECIMAL
+
     if(
         coin === "CRV" ||
         coin === "XLM"
@@ -544,9 +547,7 @@ async function eventScanner(){
 
             }
 
-            // =====================================
             // 5 MINUTE COOLDOWN
-            // =====================================
 
             if(
                 now -
@@ -558,28 +559,16 @@ async function eventScanner(){
 
             }
 
-            // =====================================
-            // BTC SPECIAL LOGIC
-            // =====================================
+            // BTC LOGIC
 
             if(coin === "BTC"){
-
-                // BUYER MOMENTUM
 
                 if(
 
                     ratio > 3 &&
-
                     change > 1 &&
-
                     price >
-                    oldPrice * 1.005 &&
-
-                    support >
-                    (
-                        LAST_SUPPORT[coin]
-                        || support
-                    )
+                    oldPrice * 1.005
 
                 ){
 
@@ -595,8 +584,6 @@ coin,
 price
 )}
 
-✅ Orderbook ratio: ${ratio.toFixed(2)}x
-
 🔥 Real upward momentum`
 
                     );
@@ -606,17 +593,12 @@ price
 
                 }
 
-                // SELLER MOMENTUM
-
                 else if(
 
                     resistanceVolume >
                     supportVolume * 3 &&
 
-                    change < -1 &&
-
-                    price <
-                    oldPrice * 0.995
+                    change < -1
 
                 ){
 
@@ -632,8 +614,6 @@ coin,
 price
 )}
 
-⚠️ Seller ratio dominate
-
 📉 Real downward momentum`
 
                     );
@@ -643,16 +623,12 @@ price
 
                 }
 
-                // BREAKOUT
-
                 else if(
 
                     price >
                     resistance * 1.002 &&
 
-                    ratio > 2.5 &&
-
-                    change > 1
+                    ratio > 2.5
 
                 ){
 
@@ -662,13 +638,8 @@ price
 
 RM${formatPrice(
 coin,
-oldPrice
-)} → RM${formatPrice(
-coin,
 price
 )}
-
-✅ Resistance pecah
 
 🔥 Bullish continuation`
 
@@ -681,21 +652,13 @@ price
 
             }
 
-            // =====================================
             // ALTCOIN LOGIC
-            // =====================================
 
             else{
-
-                // BUYER MOMENTUM
 
                 if(
 
                     change > 1 &&
-
-                    price >
-                    oldPrice * 1.005 &&
-
                     ratio > 2
 
                 ){
@@ -712,8 +675,6 @@ coin,
 price
 )}
 
-✅ Buyer pressure kuat
-
 🔥 Momentum ke atas`
 
                     );
@@ -723,17 +684,12 @@ price
 
                 }
 
-                // SELLER MOMENTUM
-
                 else if(
 
                     resistanceVolume >
                     supportVolume * 2 &&
 
-                    change < -1 &&
-
-                    price <
-                    oldPrice * 0.995
+                    change < -1
 
                 ){
 
@@ -749,8 +705,6 @@ coin,
 price
 )}
 
-⚠️ Seller pressure tinggi
-
 📉 Momentum ke bawah`
 
                     );
@@ -760,16 +714,11 @@ price
 
                 }
 
-                // BREAKOUT
-
                 else if(
 
                     price >
                     resistance * 1.002 &&
-
-                    ratio > 2 &&
-
-                    change > 1
+                    ratio > 2
 
                 ){
 
@@ -779,13 +728,8 @@ price
 
 RM${formatPrice(
 coin,
-oldPrice
-)} → RM${formatPrice(
-coin,
 price
 )}
-
-✅ Resistance pecah
 
 🔥 Bullish momentum`
 
@@ -796,16 +740,11 @@ price
 
                 }
 
-                // REJECTION
-
                 else if(
 
                     price < resistance &&
-
                     resistanceVolume >
-                    supportVolume * 2 &&
-
-                    Math.abs(change) < 0.5
+                    supportVolume * 2
 
                 ){
 
@@ -856,6 +795,128 @@ resistance
 }
 
 // =====================================
+// LIVE CRYPTO NEWS
+// =====================================
+
+async function cryptoNewsScanner(){
+
+    try{
+
+        const response =
+        await axios.get(
+            "https://min-api.cryptocompare.com/data/v2/news/?lang=EN"
+        );
+
+        const news =
+        response.data.Data;
+
+        if(!news || news.length === 0){
+            return;
+        }
+
+        for(const item of news.slice(0,5)){
+
+            const title =
+            item.title;
+
+            if(
+                LAST_NEWS.includes(title)
+            ){
+                continue;
+            }
+
+            LAST_NEWS.push(title);
+
+            if(LAST_NEWS.length > 30){
+                LAST_NEWS.shift();
+            }
+
+            let summary =
+            "";
+
+            const lower =
+            title.toLowerCase();
+
+            if(lower.includes("bitcoin")){
+                summary =
+                "🟠 Berita berkaitan Bitcoin";
+            }
+
+            else if(lower.includes("ethereum")){
+                summary =
+                "🟣 Berita berkaitan Ethereum";
+            }
+
+            else if(lower.includes("xrp")){
+                summary =
+                "⚫ Berita berkaitan XRP";
+            }
+
+            else if(lower.includes("etf")){
+                summary =
+                "🏦 Berita ETF kripto";
+            }
+
+            else if(lower.includes("sec")){
+                summary =
+                "⚖️ Berita regulator SEC";
+            }
+
+            else if(lower.includes("binance")){
+                summary =
+                "🟡 Berita Binance";
+            }
+
+            else if(lower.includes("hack")){
+                summary =
+                "🚨 Berita hack/exploit";
+            }
+
+            else if(lower.includes("whale")){
+                summary =
+                "🐋 Aktiviti whale dikesan";
+            }
+
+            else if(lower.includes("bull")){
+                summary =
+                "📈 Sentimen bullish";
+            }
+
+            else if(lower.includes("bear")){
+                summary =
+                "📉 Sentimen bearish";
+            }
+
+            else{
+                summary =
+                "📰 Update pasaran kripto";
+            }
+
+            await sendTelegram(
+
+`📰 LIVE CRYPTO NEWS
+
+${title}
+
+${summary}`
+
+            );
+
+        }
+
+    }catch(err){
+
+        console.log(
+            "Crypto news scanner failed"
+        );
+
+        console.log(err.message);
+
+    }
+
+}
+
+// =====================================
 // START SERVER
 // =====================================
 
@@ -881,6 +942,7 @@ setTimeout(() => {
     scanPrices();
     marketStructure();
     eventScanner();
+    cryptoNewsScanner();
 
     setInterval(
         scanPrices,
@@ -895,6 +957,13 @@ setTimeout(() => {
     setInterval(
         eventScanner,
         300000
+    );
+
+    // CHECK NEWS EVERY 30 MINUTES
+
+    setInterval(
+        cryptoNewsScanner,
+        1800000
     );
 
 }, 10000);
