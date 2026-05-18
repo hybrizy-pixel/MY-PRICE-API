@@ -109,6 +109,64 @@ app.get("/", (req, res) => {
 });
 
 // =====================================
+// LIVE PRICE API
+// =====================================
+
+app.get("/price/:symbol", async (req, res) => {
+
+    try{
+
+        const symbol =
+        req.params.symbol.toUpperCase();
+
+        let pair = "";
+
+        if(symbol === "BTC"){
+
+            pair = "XBTMYR";
+
+        }
+
+        else{
+
+            pair = symbol + "MYR";
+
+        }
+
+        const response =
+        await axios.get(
+            "https://api.luno.com/api/1/ticker?pair=" + pair
+        );
+
+        res.json({
+
+            success: true,
+
+            symbol: symbol,
+
+            pair: pair,
+
+            price:
+            response.data.last_trade
+
+        });
+
+    }catch(err){
+
+        res.status(500).json({
+
+            success: false,
+
+            error:
+            "Failed to fetch live price"
+
+        });
+
+    }
+
+});
+
+// =====================================
 // TELEGRAM
 // =====================================
 
@@ -487,9 +545,7 @@ async function eventScanner(){
                 / oldPrice
             ) * 100;
 
-            // =====================================
             // BREAKOUT
-            // =====================================
 
             if(
 
@@ -532,9 +588,7 @@ async function eventScanner(){
 
             }
 
-            // =====================================
             // REJECTION
-            // =====================================
 
             else if(
 
@@ -575,9 +629,7 @@ async function eventScanner(){
 
             }
 
-            // =====================================
             // VALIDATED BUYER SURGE
-            // =====================================
 
             else if(
 
@@ -623,9 +675,7 @@ async function eventScanner(){
 
             }
 
-            // =====================================
             // VALIDATED SELLER SURGE
-            // =====================================
 
             else if(
 
@@ -671,9 +721,7 @@ async function eventScanner(){
 
             }
 
-            // =====================================
             // REVERSAL
-            // =====================================
 
             else if(
 
@@ -711,9 +759,7 @@ async function eventScanner(){
 
             }
 
-            // =====================================
             // LIQUIDITY SWEEP
-            // =====================================
 
             else if(
 
@@ -741,9 +787,7 @@ async function eventScanner(){
 
             }
 
-            // =====================================
             // WHALE DETECTION
-            // =====================================
 
             if(
                 !WALL_MEMORY[coin]
@@ -841,19 +885,16 @@ eventScanner();
 // AUTO RUN
 // =====================================
 
-// EVERY 5 MINUTES
 setInterval(
     scanPrices,
     300000
 );
 
-// EVERY 15 MINUTES
 setInterval(
     marketStructure,
     900000
 );
 
-// EVENT SCANNER
 setInterval(
     eventScanner,
     300000
