@@ -13,10 +13,19 @@ const PORT = process.env.PORT || 3000;
 // =====================================
 
 const TELEGRAM_TOKEN =
-"8979342744:AAFbamnzNXbeJCAIxuUf78NAxKspoWvymGs";
+process.env.TELEGRAM_TOKEN;
 
 const CHAT_ID =
-"7161546";
+process.env.CHAT_ID;
+
+// =====================================
+// INSTANCE
+// =====================================
+
+const INSTANCE =
+Math.random().toString(36).substring(7);
+
+console.log("INSTANCE:", INSTANCE);
 
 // =====================================
 // MAIN COINS
@@ -46,36 +55,32 @@ const EVENT_COINS = {
 const LAST_PRICES = {};
 const LAST_SUPPORT = {};
 const LAST_RESISTANCE = {};
-const WALL_MEMORY = {};
 const LAST_ALERT_TIME = {};
 
 // =====================================
-// PRICE FORMAT
+// FORMAT PRICE
 // =====================================
 
 function formatPrice(coin, price){
+
+    if(!price){
+        return "0";
+    }
 
     if(coin === "BTC"){
         return price.toFixed(2);
     }
 
+    // GRT 4 DECIMAL
     if(coin === "GRT"){
         return price.toFixed(4);
     }
 
-    if(coin === "XRP"){
-        return price.toFixed(2);
-    }
-
-    if(coin === "AAVE"){
-        return price.toFixed(2);
-    }
-
-    if(coin === "CRV"){
-        return price.toFixed(3);
-    }
-
-    if(coin === "XLM"){
+    // ALTCOIN SMALL DECIMAL
+    if(
+        coin === "CRV" ||
+        coin === "XLM"
+    ){
         return price.toFixed(3);
     }
 
@@ -93,13 +98,11 @@ async function sendTelegram(message){
 
         await axios.post(
 
-            "https://api.telegram.org/bot" +
-            TELEGRAM_TOKEN +
-            "/sendMessage",
+            `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
 
             {
                 chat_id: CHAT_ID,
-                text: message
+                text: `[${INSTANCE}]\n\n${message}`
             }
 
         );
@@ -109,6 +112,7 @@ async function sendTelegram(message){
     }catch(err){
 
         console.log("Telegram failed");
+        console.log(err.message);
 
     }
 
@@ -121,7 +125,10 @@ async function sendTelegram(message){
 app.get("/", (req, res) => {
 
     res.json({
-        status: "SMART SCANNER RUNNING 🔥"
+
+        status: "SMART SCANNER RUNNING 🔥",
+        instance: INSTANCE
+
     });
 
 });
@@ -140,18 +147,14 @@ app.get("/price/:symbol", async (req, res) => {
         let pair = "";
 
         if(symbol === "BTC"){
-
             pair = "XBTMYR";
-
         }else{
-
             pair = symbol + "MYR";
-
         }
 
         const response =
         await axios.get(
-            "https://api.luno.com/api/1/ticker?pair=" + pair
+            `https://api.luno.com/api/1/ticker?pair=${pair}`
         );
 
         res.json({
@@ -186,47 +189,61 @@ function getWalls(
     currentPrice
 ){
 
-    const filteredBids =
-    bids.filter(b =>
-        parseFloat(b.price) >
-        currentPrice * 0.98
-    );
+    try{
 
-    const filteredAsks =
-    asks.filter(a =>
-        parseFloat(a.price) <
-        currentPrice * 1.02
-    );
+        const filteredBids =
+        bids.filter(b =>
+            parseFloat(b.price) >
+            currentPrice * 0.98
+        );
 
-    const topBid =
-    filteredBids
-    .sort((a,b)=>
-        parseFloat(b.volume) -
-        parseFloat(a.volume)
-    )[0];
+        const filteredAsks =
+        asks.filter(a =>
+            parseFloat(a.price) <
+            currentPrice * 1.02
+        );
 
-    const topAsk =
-    filteredAsks
-    .sort((a,b)=>
-        parseFloat(b.volume) -
-        parseFloat(a.volume)
-    )[0];
+        const topBid =
+        filteredBids
+        .sort((a,b)=>
+            parseFloat(b.volume) -
+            parseFloat(a.volume)
+        )[0];
 
-    return {
+        const topAsk =
+        filteredAsks
+        .sort((a,b)=>
+            parseFloat(b.volume) -
+            parseFloat(a.volume)
+        )[0];
 
-        support:
-        parseFloat(topBid.price),
+        if(!topBid || !topAsk){
 
-        supportVolume:
-        parseFloat(topBid.volume),
+            return null;
 
-        resistance:
-        parseFloat(topAsk.price),
+        }
 
-        resistanceVolume:
-        parseFloat(topAsk.volume)
+        return {
 
-    };
+            support:
+            parseFloat(topBid.price),
+
+            supportVolume:
+            parseFloat(topBid.volume),
+
+            resistance:
+            parseFloat(topAsk.price),
+
+            resistanceVolume:
+            parseFloat(topAsk.volume)
+
+        };
+
+    }catch{
+
+        return null;
+
+    }
 
 }
 
@@ -249,7 +266,7 @@ async function scanPrices(){
 
             const response =
             await axios.get(
-                "https://api.luno.com/api/1/ticker?pair=" + pair
+                `https://api.luno.com/api/1/ticker?pair=${pair}`
             );
 
             const price =
@@ -257,9 +274,7 @@ async function scanPrices(){
                 response.data.last_trade
             );
 
-            if(
-                !LAST_PRICES[coin]
-            ){
+            if(!LAST_PRICES[coin]){
 
                 LAST_PRICES[coin] =
                 price;
@@ -278,31 +293,19 @@ async function scanPrices(){
             let direction = "➖";
 
             if(change > 0){
-
                 direction = "🟢";
-
             }
 
             else if(change < 0){
-
                 direction = "🔴";
-
             }
 
             message +=
 
-            direction + " " +
-            coin +
-
-            " RM" +
-            formatPrice(
+            `${direction} ${coin} RM${formatPrice(
                 coin,
                 price
-            ) +
-
-            " (" +
-            change.toFixed(2) +
-            "%)\n";
+            )} (${change.toFixed(2)}%)\n`;
 
             LAST_PRICES[coin] =
             price;
@@ -340,7 +343,7 @@ async function marketStructure(){
 
             const ticker =
             await axios.get(
-                "https://api.luno.com/api/1/ticker?pair=" + pair
+                `https://api.luno.com/api/1/ticker?pair=${pair}`
             );
 
             const price =
@@ -350,7 +353,7 @@ async function marketStructure(){
 
             const orderbook =
             await axios.get(
-                "https://api.luno.com/api/1/orderbook?pair=" + pair
+                `https://api.luno.com/api/1/orderbook?pair=${pair}`
             );
 
             const bids =
@@ -359,6 +362,19 @@ async function marketStructure(){
             const asks =
             orderbook.data.asks;
 
+            const walls =
+            getWalls(
+                bids,
+                asks,
+                price
+            );
+
+            if(!walls){
+
+                continue;
+
+            }
+
             const {
 
                 support,
@@ -366,12 +382,7 @@ async function marketStructure(){
                 resistance,
                 resistanceVolume
 
-            } =
-            getWalls(
-                bids,
-                asks,
-                price
-            );
+            } = walls;
 
             let strength =
             "";
@@ -405,30 +416,25 @@ async function marketStructure(){
 
             message +=
 
-            "📊 " + coin +
+            `📊 ${coin}
 
-            "\n\n🟢 Support RM" +
-            formatPrice(
+🟢 Support RM${formatPrice(
                 coin,
                 support
-            ) +
+            )}
 
-            "\nVolume: " +
-            supportVolume.toFixed(2) +
+Volume: ${supportVolume.toFixed(2)}
 
-            "\n\n🔴 Resistance RM" +
-            formatPrice(
+🔴 Resistance RM${formatPrice(
                 coin,
                 resistance
-            ) +
+            )}
 
-            "\nVolume: " +
-            resistanceVolume.toFixed(2) +
+Volume: ${resistanceVolume.toFixed(2)}
 
-            "\n\n" +
-            strength +
+${strength}
 
-            "\n\n";
+`;
 
             LAST_SUPPORT[coin] =
             support;
@@ -465,7 +471,7 @@ async function eventScanner(){
 
             const ticker =
             await axios.get(
-                "https://api.luno.com/api/1/ticker?pair=" + pair
+                `https://api.luno.com/api/1/ticker?pair=${pair}`
             );
 
             const price =
@@ -475,7 +481,7 @@ async function eventScanner(){
 
             const orderbook =
             await axios.get(
-                "https://api.luno.com/api/1/orderbook?pair=" + pair
+                `https://api.luno.com/api/1/orderbook?pair=${pair}`
             );
 
             const bids =
@@ -484,6 +490,19 @@ async function eventScanner(){
             const asks =
             orderbook.data.asks;
 
+            const walls =
+            getWalls(
+                bids,
+                asks,
+                price
+            );
+
+            if(!walls){
+
+                continue;
+
+            }
+
             const {
 
                 support,
@@ -491,19 +510,14 @@ async function eventScanner(){
                 resistance,
                 resistanceVolume
 
-            } =
-            getWalls(
-                bids,
-                asks,
-                price
-            );
+            } = walls;
 
-            if(
-                !LAST_PRICES[coin]
-            ){
+            if(!LAST_PRICES[coin]){
 
-                LAST_PRICES[coin]
-                = price;
+                LAST_PRICES[coin] =
+                price;
+
+                continue;
 
             }
 
@@ -520,19 +534,19 @@ async function eventScanner(){
             supportVolume /
             resistanceVolume;
 
-            // =====================================
-            // ALERT COOLDOWN
-            // =====================================
+            const now =
+            Date.now();
 
-            const now = Date.now();
+            if(!LAST_ALERT_TIME[coin]){
 
-            if(
-                !LAST_ALERT_TIME[coin]
-            ){
-
-                LAST_ALERT_TIME[coin] = 0;
+                LAST_ALERT_TIME[coin] =
+                0;
 
             }
+
+            // =====================================
+            // 5 MINUTE COOLDOWN
+            // =====================================
 
             if(
                 now -
@@ -550,7 +564,7 @@ async function eventScanner(){
 
             if(coin === "BTC"){
 
-                // VALID BUYER MOMENTUM
+                // BUYER MOMENTUM
 
                 if(
 
@@ -562,32 +576,28 @@ async function eventScanner(){
                     oldPrice * 1.005 &&
 
                     support >
-                    (LAST_SUPPORT[coin] || support)
+                    (
+                        LAST_SUPPORT[coin]
+                        || support
+                    )
 
                 ){
 
                     await sendTelegram(
 
-                        "🚀 BTC BUYER MOMENTUM\n\n" +
+`🚀 BTC BUYER MOMENTUM
 
-                        "RM" +
+RM${formatPrice(
+coin,
+oldPrice
+)} → RM${formatPrice(
+coin,
+price
+)}
 
-                        formatPrice(
-                            coin,
-                            oldPrice
-                        ) +
+✅ Orderbook ratio: ${ratio.toFixed(2)}x
 
-                        " → RM" +
-
-                        formatPrice(
-                            coin,
-                            price
-                        ) +
-
-                        "\n\n✅ Orderbook ratio: " +
-                        ratio.toFixed(2) + "x" +
-
-                        "\n🔥 Real upward momentum"
+🔥 Real upward momentum`
 
                     );
 
@@ -596,7 +606,7 @@ async function eventScanner(){
 
                 }
 
-                // VALID SELLER MOMENTUM
+                // SELLER MOMENTUM
 
                 else if(
 
@@ -612,25 +622,19 @@ async function eventScanner(){
 
                     await sendTelegram(
 
-                        "🔴 BTC SELLER MOMENTUM\n\n" +
+`🔴 BTC SELLER MOMENTUM
 
-                        "RM" +
+RM${formatPrice(
+coin,
+oldPrice
+)} → RM${formatPrice(
+coin,
+price
+)}
 
-                        formatPrice(
-                            coin,
-                            oldPrice
-                        ) +
+⚠️ Seller ratio dominate
 
-                        " → RM" +
-
-                        formatPrice(
-                            coin,
-                            price
-                        ) +
-
-                        "\n\n⚠️ Seller ratio dominate" +
-
-                        "\n📉 Real downward momentum"
+📉 Real downward momentum`
 
                     );
 
@@ -654,25 +658,19 @@ async function eventScanner(){
 
                     await sendTelegram(
 
-                        "🚀 BTC BREAKOUT\n\n" +
+`🚀 BTC BREAKOUT
 
-                        "RM" +
+RM${formatPrice(
+coin,
+oldPrice
+)} → RM${formatPrice(
+coin,
+price
+)}
 
-                        formatPrice(
-                            coin,
-                            oldPrice
-                        ) +
+✅ Resistance pecah
 
-                        " → RM" +
-
-                        formatPrice(
-                            coin,
-                            price
-                        ) +
-
-                        "\n\n✅ Resistance pecah" +
-
-                        "\n🔥 Bullish continuation"
+🔥 Bullish continuation`
 
                     );
 
@@ -704,26 +702,19 @@ async function eventScanner(){
 
                     await sendTelegram(
 
-                        "🚀 " + coin +
-                        " BUYER MOMENTUM\n\n" +
+`🚀 ${coin} BUYER MOMENTUM
 
-                        "RM" +
+RM${formatPrice(
+coin,
+oldPrice
+)} → RM${formatPrice(
+coin,
+price
+)}
 
-                        formatPrice(
-                            coin,
-                            oldPrice
-                        ) +
+✅ Buyer pressure kuat
 
-                        " → RM" +
-
-                        formatPrice(
-                            coin,
-                            price
-                        ) +
-
-                        "\n\n✅ Buyer pressure kuat" +
-
-                        "\n🔥 Momentum ke atas"
+🔥 Momentum ke atas`
 
                     );
 
@@ -748,26 +739,19 @@ async function eventScanner(){
 
                     await sendTelegram(
 
-                        "🔴 " + coin +
-                        " SELLER MOMENTUM\n\n" +
+`🔴 ${coin} SELLER MOMENTUM
 
-                        "RM" +
+RM${formatPrice(
+coin,
+oldPrice
+)} → RM${formatPrice(
+coin,
+price
+)}
 
-                        formatPrice(
-                            coin,
-                            oldPrice
-                        ) +
+⚠️ Seller pressure tinggi
 
-                        " → RM" +
-
-                        formatPrice(
-                            coin,
-                            price
-                        ) +
-
-                        "\n\n⚠️ Seller pressure tinggi" +
-
-                        "\n📉 Momentum ke bawah"
+📉 Momentum ke bawah`
 
                     );
 
@@ -791,26 +775,19 @@ async function eventScanner(){
 
                     await sendTelegram(
 
-                        "🚀 " + coin +
-                        " BREAKOUT\n\n" +
+`🚀 ${coin} BREAKOUT
 
-                        "RM" +
+RM${formatPrice(
+coin,
+oldPrice
+)} → RM${formatPrice(
+coin,
+price
+)}
 
-                        formatPrice(
-                            coin,
-                            oldPrice
-                        ) +
+✅ Resistance pecah
 
-                        " → RM" +
-
-                        formatPrice(
-                            coin,
-                            price
-                        ) +
-
-                        "\n\n✅ Resistance pecah" +
-
-                        "\n🔥 Bullish momentum"
+🔥 Bullish momentum`
 
                     );
 
@@ -834,24 +811,17 @@ async function eventScanner(){
 
                     await sendTelegram(
 
-                        "⚠️ " + coin +
-                        " REJECTION\n\n" +
+`⚠️ ${coin} REJECTION
 
-                        "RM" +
+RM${formatPrice(
+coin,
+price
+)} gagal lepas RM${formatPrice(
+coin,
+resistance
+)}
 
-                        formatPrice(
-                            coin,
-                            price
-                        ) +
-
-                        " gagal lepas RM" +
-
-                        formatPrice(
-                            coin,
-                            resistance
-                        ) +
-
-                        "\n\n🔴 Resistance wall tebal"
+🔴 Resistance wall tebal`
 
                     );
 
@@ -862,14 +832,14 @@ async function eventScanner(){
 
             }
 
-            LAST_SUPPORT[coin]
-            = support;
+            LAST_SUPPORT[coin] =
+            support;
 
-            LAST_RESISTANCE[coin]
-            = resistance;
+            LAST_RESISTANCE[coin] =
+            resistance;
 
-            LAST_PRICES[coin]
-            = price;
+            LAST_PRICES[coin] =
+            price;
 
         }
 
@@ -878,6 +848,8 @@ async function eventScanner(){
         console.log(
             "Event scanner failed"
         );
+
+        console.log(err.message);
 
     }
 
@@ -897,28 +869,32 @@ app.listen(PORT, () => {
 });
 
 // =====================================
-// FIRST RUN
+// SAFE START
 // =====================================
 
-scanPrices();
-marketStructure();
-eventScanner();
+setTimeout(() => {
 
-// =====================================
-// AUTO RUN
-// =====================================
+    console.log(
+        "Scanner started"
+    );
 
-setInterval(
-    scanPrices,
-    300000
-);
+    scanPrices();
+    marketStructure();
+    eventScanner();
 
-setInterval(
-    marketStructure,
-    900000
-);
+    setInterval(
+        scanPrices,
+        300000
+    );
 
-setInterval(
-    eventScanner,
-    300000
-);
+    setInterval(
+        marketStructure,
+        900000
+    );
+
+    setInterval(
+        eventScanner,
+        300000
+    );
+
+}, 10000);
