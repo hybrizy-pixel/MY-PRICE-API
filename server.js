@@ -58,6 +58,28 @@ const COINS = {
 };
 
 // =====================================
+// MEMORY
+// =====================================
+
+const LAST_ALERT_TIME = {};
+const LAST_BREAKOUT_STATE = {};
+const LAST_BREAKDOWN_STATE = {};
+const LAST_BUILDUP_STATE = {};
+const LAST_WHALE_STATE = {};
+const LAST_REJECTION_STATE = {};
+const LAST_ACCUMULATION_STATE = {};
+
+// =====================================
+// SETTINGS
+// =====================================
+
+const ALERT_COOLDOWN =
+1800000;
+
+const BREAKOUT_CONFIRMATIONS =
+3;
+
+// =====================================
 // FORMAT PRICE
 // =====================================
 
@@ -159,13 +181,31 @@ async function setTelegramCommands(){
                     {
                         command: "entry",
                         description:
-                        "Possible entry"
+                        "High entry scanner"
                     },
 
                     {
                         command: "scanner",
                         description:
                         "Scanner status"
+                    },
+
+                    {
+                        command: "top",
+                        description:
+                        "Top bullish coin"
+                    },
+
+                    {
+                        command: "status",
+                        description:
+                        "Bot status"
+                    },
+
+                    {
+                        command: "help",
+                        description:
+                        "Help menu"
                     },
 
                     {
@@ -302,10 +342,10 @@ async function getLivePrice(coin){
 }
 
 // =====================================
-// MARKET STRUCTURE
+// GET ORDERBOOK
 // =====================================
 
-async function getMarketStructure(coin){
+async function getOrderbook(coin){
 
     try{
 
@@ -319,45 +359,156 @@ async function getMarketStructure(coin){
 
         );
 
-        const bids =
-        response.data.bids;
+        return response.data;
 
-        const asks =
-        response.data.asks;
+    }catch{
+
+        return null;
+
+    }
+
+}
+
+// =====================================
+// MARKET STRUCTURE
+// =====================================
+
+async function getMarketStructure(coin){
+
+    try{
+
+        const orderbook =
+        await getOrderbook(coin);
+
+        if(!orderbook){
+
+            return null;
+
+        }
 
         const buyVolume =
-        bids.reduce((sum,b)=>
+        orderbook.bids.reduce(
 
-            sum + parseFloat(b.volume)
+            (sum,b)=>
+
+            sum +
+            parseFloat(b.volume)
 
         ,0);
 
         const sellVolume =
-        asks.reduce((sum,a)=>
+        orderbook.asks.reduce(
 
-            sum + parseFloat(a.volume)
+            (sum,a)=>
+
+            sum +
+            parseFloat(a.volume)
 
         ,0);
 
-        if(buyVolume > sellVolume){
+        const support =
+        parseFloat(
+            orderbook.bids[0].price
+        );
 
-            return "BULLISH";
+        const resistance =
+        parseFloat(
+            orderbook.asks[0].price
+        );
+
+        let trend =
+        "SIDEWAYS";
+
+        if(
+            buyVolume >
+            sellVolume * 1.3
+        ){
+
+            trend =
+            "BULLISH";
 
         }
 
-        if(sellVolume > buyVolume){
+        if(
+            sellVolume >
+            buyVolume * 1.3
+        ){
 
-            return "BEARISH";
+            trend =
+            "BEARISH";
 
         }
 
-        return "SIDEWAYS";
+        return {
+
+            trend,
+            support,
+            resistance,
+            buyVolume,
+            sellVolume
+
+        };
 
     }catch{
 
-        return "UNKNOWN";
+        return null;
 
     }
+
+}
+
+// =====================================
+// MARKET COMMENT
+// =====================================
+
+function getMarketComment(
+    buyVolume,
+    sellVolume
+){
+
+    if(
+        buyVolume >
+        sellVolume * 2
+    ){
+
+        return
+        "🔥 Buyer kuat\n🚀 Momentum cantik";
+
+    }
+
+    if(
+        sellVolume >
+        buyVolume * 1.5
+    ){
+
+        return
+        "⚠️ Seller kuat\n📉 Risiko turun";
+
+    }
+
+    return
+    "⚖️ Market neutral";
+
+}
+
+// =====================================
+// MINIMUM BUY
+// =====================================
+
+function calculateMinimumBuy(price){
+
+    const minimum =
+    65;
+
+    const coin =
+    minimum / price;
+
+    return {
+
+        minimum,
+        coin
+
+    };
 
 }
 
@@ -418,44 +569,70 @@ async function sendMarketCommand(){
     try{
 
         let message =
-`📈 MARKET STRUCTURE
+`📊 MARKET STRUCTURE
 
 `;
 
-        for(const coin in COINS){
+        for(const coin of ["BTC","GRT"]){
 
-            const trend =
-            await getMarketStructure(coin);
+            const structure =
+            await getMarketStructure(
+                coin
+            );
 
             const price =
-            await getLivePrice(coin);
+            await getLivePrice(
+                coin
+            );
 
-            let icon = "⚪";
+            if(
+                !structure ||
+                !price
+            ){
 
-            if(trend === "BULLISH"){
-
-                icon = "🟢";
-
-            }
-
-            if(trend === "BEARISH"){
-
-                icon = "🔴";
+                continue;
 
             }
+
+            const comment =
+            getMarketComment(
+
+                structure.buyVolume,
+                structure.sellVolume
+
+            );
 
             message +=
 
-`${icon} ${coin}
+`━━━━━━━━━━━━━━━
 
-Trend:
-${trend}
+📊 ${coin}
 
-Price:
+💰 Harga Semasa
 RM${formatPrice(
 coin,
 price
 )}
+
+🟢 Support
+RM${formatPrice(
+coin,
+structure.support
+)}
+
+📦 Volume Buy
+${structure.buyVolume.toFixed(2)}
+
+🔴 Resistance
+RM${formatPrice(
+coin,
+structure.resistance
+)}
+
+📦 Volume Sell
+${structure.sellVolume.toFixed(2)}
+
+${comment}
 
 `;
 
@@ -474,61 +651,136 @@ price
 }
 
 // =====================================
-// ENTRY COMMAND
+// HIGH ENTRY
 // =====================================
 
 async function sendEntryCommand(){
 
     try{
 
-        let found = false;
+        let found =
+        false;
 
         let message =
-`🎯 POSSIBLE ENTRY
+`🎯 HIGH ENTRY SCANNER
 
 `;
 
         for(const coin in COINS){
 
-            const trend =
-            await getMarketStructure(coin);
+            const structure =
+            await getMarketStructure(
+                coin
+            );
 
             const price =
-            await getLivePrice(coin);
+            await getLivePrice(
+                coin
+            );
 
             if(
-                trend === "BULLISH"
+                !structure ||
+                !price
+            ){
+
+                continue;
+
+            }
+
+            const pressure =
+            structure.buyVolume /
+            structure.sellVolume;
+
+            const nearBreakout =
+            price >=
+            structure.resistance * 0.995;
+
+            if(
+
+                pressure > 2
+
+                &&
+
+                nearBreakout
+
             ){
 
                 found = true;
 
-                const tp =
+                const tp1 =
                 price * 1.02;
 
+                const tp2 =
+                price * 1.04;
+
                 const sl =
-                price * 0.98;
+                structure.support * 0.995;
+
+                const confidence =
+                Math.min(
+
+                    95,
+
+                    Math.floor(
+                        pressure * 35
+                    )
+
+                );
+
+                const minimum =
+                calculateMinimumBuy(
+                    price
+                );
 
                 message +=
 
-`🚀 ${coin}
+`━━━━━━━━━━━━━━━
 
-Entry:
-RM${formatPrice(
+🎯 HIGH ENTRY
+
+🪙 ${coin}
+💰 RM${formatPrice(
 coin,
 price
 )}
 
-TP:
+🟢 Support
 RM${formatPrice(
 coin,
-tp
+structure.support
 )}
 
-SL:
+🔴 Resistance
 RM${formatPrice(
+coin,
+structure.resistance
+)}
+
+🔥 Buyer kuat
+🚀 Momentum cantik
+
+💵 Minimum Buy
+RM${minimum.minimum}
+
+🪙 Minimum Coin
+${minimum.coin.toFixed(2)}
+
+🎯 TP1 RM${formatPrice(
+coin,
+tp1
+)}
+
+🎯 TP2 RM${formatPrice(
+coin,
+tp2
+)}
+
+🛑 SL RM${formatPrice(
 coin,
 sl
 )}
+
+⚡ ${confidence}% Setup
 
 `;
 
@@ -539,7 +791,7 @@ sl
         if(!found){
 
             message +=
-            "❌ NO ENTRY FOUND";
+            "\n❌ Tiada setup cantik sekarang";
 
         }
 
@@ -556,21 +808,493 @@ sl
 }
 
 // =====================================
-// SCANNER STATUS
+// AUTO SCANNER
 // =====================================
 
-async function sendScannerStatus(){
+async function runAutoScanner(){
 
-    await sendTelegram(
+    try{
 
-`🤖 SCANNER STATUS
+        for(const coin in COINS){
 
-✅ ACTIVE
-✅ LIVE MONITORING
-✅ API CONNECTED
-✅ TELEGRAM CONNECTED`
+            const structure =
+            await getMarketStructure(
+                coin
+            );
 
-    );
+            const price =
+            await getLivePrice(
+                coin
+            );
+
+            if(
+                !structure ||
+                !price
+            ){
+
+                continue;
+
+            }
+
+            const now =
+            Date.now();
+
+            if(
+                !LAST_ALERT_TIME[coin]
+            ){
+
+                LAST_ALERT_TIME[coin] =
+                0;
+
+            }
+
+            const pressure =
+            structure.buyVolume /
+            structure.sellVolume;
+
+            const nearBreakout =
+            price >=
+            structure.resistance * 0.995;
+
+            const nearBreakdown =
+            price <=
+            structure.support * 1.005;
+
+            // =====================================
+            // BUILDUP
+            // =====================================
+
+            if(
+
+                pressure > 1.5
+
+                &&
+
+                !nearBreakout
+
+            ){
+
+                if(
+                    !LAST_BUILDUP_STATE[coin]
+                ){
+
+                    LAST_BUILDUP_STATE[
+                        coin
+                    ] = 1;
+
+                }else{
+
+                    LAST_BUILDUP_STATE[
+                        coin
+                    ]++;
+
+                }
+
+                if(
+
+                    LAST_BUILDUP_STATE[
+                        coin
+                    ] === 2
+
+                ){
+
+                    await sendTelegram(
+
+`👀 MOMENTUM BUILDUP
+
+🪙 ${coin}
+💰 RM${formatPrice(
+coin,
+price
+)}
+
+🔥 Buyer semakin kuat`
+
+                    );
+
+                }
+
+            }else{
+
+                LAST_BUILDUP_STATE[
+                    coin
+                ] = 0;
+
+            }
+
+            // =====================================
+            // BREAKOUT CONFIRM
+            // =====================================
+
+            if(
+
+                pressure > 2
+
+                &&
+
+                nearBreakout
+
+            ){
+
+                if(
+                    !LAST_BREAKOUT_STATE[
+                        coin
+                    ]
+                ){
+
+                    LAST_BREAKOUT_STATE[
+                        coin
+                    ] = 1;
+
+                }else{
+
+                    LAST_BREAKOUT_STATE[
+                        coin
+                    ]++;
+
+                }
+
+                if(
+
+                    LAST_BREAKOUT_STATE[
+                        coin
+                    ] >=
+                    BREAKOUT_CONFIRMATIONS
+
+                    &&
+
+                    now -
+                    LAST_ALERT_TIME[
+                        coin
+                    ] >
+                    ALERT_COOLDOWN
+
+                ){
+
+                    LAST_ALERT_TIME[
+                        coin
+                    ] = now;
+
+                    LAST_BREAKOUT_STATE[
+                        coin
+                    ] = 0;
+
+                    await sendTelegram(
+
+`━━━━━━━━━━━━━━━
+
+🚀 BREAKOUT CONFIRMED
+
+🪙 ${coin}
+💰 RM${formatPrice(
+coin,
+price
+)}
+
+🔥 Buyer masuk kuat
+
+🎯 Target
+RM${formatPrice(
+coin,
+price * 1.03
+)}
+
+━━━━━━━━━━━━━━━`
+
+                    );
+
+                }
+
+            }else{
+
+                LAST_BREAKOUT_STATE[
+                    coin
+                ] = 0;
+
+            }
+
+            // =====================================
+            // BREAKDOWN
+            // =====================================
+
+            if(
+
+                pressure < 0.6
+
+                &&
+
+                nearBreakdown
+
+            ){
+
+                if(
+                    !LAST_BREAKDOWN_STATE[
+                        coin
+                    ]
+                ){
+
+                    LAST_BREAKDOWN_STATE[
+                        coin
+                    ] = 1;
+
+                }else{
+
+                    LAST_BREAKDOWN_STATE[
+                        coin
+                    ]++;
+
+                }
+
+                if(
+
+                    LAST_BREAKDOWN_STATE[
+                        coin
+                    ] >= 2
+
+                    &&
+
+                    now -
+                    LAST_ALERT_TIME[
+                        coin
+                    ] >
+                    ALERT_COOLDOWN
+
+                ){
+
+                    LAST_ALERT_TIME[
+                        coin
+                    ] = now;
+
+                    LAST_BREAKDOWN_STATE[
+                        coin
+                    ] = 0;
+
+                    await sendTelegram(
+
+`━━━━━━━━━━━━━━━
+
+🔴 BREAKDOWN
+
+🪙 ${coin}
+💰 RM${formatPrice(
+coin,
+price
+)}
+
+⚠️ Seller kuat
+
+🛑 Support pecah
+
+━━━━━━━━━━━━━━━`
+
+                    );
+
+                }
+
+            }else{
+
+                LAST_BREAKDOWN_STATE[
+                    coin
+                ] = 0;
+
+            }
+
+            // =====================================
+            // WHALE BUY
+            // =====================================
+
+            if(
+
+                structure.buyVolume >
+                structure.sellVolume * 4
+
+            ){
+
+                if(
+
+                    now -
+                    LAST_ALERT_TIME[
+                        coin
+                    ] >
+                    ALERT_COOLDOWN
+
+                ){
+
+                    LAST_ALERT_TIME[
+                        coin
+                    ] = now;
+
+                    await sendTelegram(
+
+`━━━━━━━━━━━━━━━
+
+🐋 WHALE BUY
+
+🪙 ${coin}
+💰 RM${formatPrice(
+coin,
+price
+)}
+
+🔥 Volume besar masuk
+
+━━━━━━━━━━━━━━━`
+
+                    );
+
+                }
+
+            }
+
+            // =====================================
+            // ACCUMULATION
+            // =====================================
+
+            if(
+
+                pressure > 1.5
+
+                &&
+
+                !nearBreakout
+
+                &&
+
+                !nearBreakdown
+
+            ){
+
+                if(
+                    !LAST_ACCUMULATION_STATE[
+                        coin
+                    ]
+                ){
+
+                    LAST_ACCUMULATION_STATE[
+                        coin
+                    ] = 1;
+
+                }else{
+
+                    LAST_ACCUMULATION_STATE[
+                        coin
+                    ]++;
+
+                }
+
+                if(
+
+                    LAST_ACCUMULATION_STATE[
+                        coin
+                    ] >= 4
+
+                    &&
+
+                    now -
+                    LAST_ALERT_TIME[
+                        coin
+                    ] >
+                    ALERT_COOLDOWN
+
+                ){
+
+                    LAST_ALERT_TIME[
+                        coin
+                    ] = now;
+
+                    LAST_ACCUMULATION_STATE[
+                        coin
+                    ] = 0;
+
+                    await sendTelegram(
+
+`━━━━━━━━━━━━━━━
+
+🟢 ACCUMULATION
+
+🪙 ${coin}
+💰 RM${formatPrice(
+coin,
+price
+)}
+
+🔥 Buyer kumpul coin
+
+━━━━━━━━━━━━━━━`
+
+                    );
+
+                }
+
+            }else{
+
+                LAST_ACCUMULATION_STATE[
+                    coin
+                ] = 0;
+
+            }
+
+        }
+
+    }catch(err){
+
+        console.log(
+            "AUTO SCANNER FAILED"
+        );
+
+    }
+
+}
+
+// =====================================
+// AUTO PRICE UPDATE
+// =====================================
+
+async function autoPriceUpdate(){
+
+    try{
+
+        const btc =
+        await getLivePrice("BTC");
+
+        const grt =
+        await getLivePrice("GRT");
+
+        await sendTelegram(
+
+`📊 5 MIN PRICE UPDATE
+
+₿ BTC
+RM${formatPrice(
+"BTC",
+btc
+)}
+
+🟢 GRT
+RM${formatPrice(
+"GRT",
+grt
+)}`
+
+        );
+
+    }catch(err){
+
+        console.log(
+            "AUTO PRICE FAILED"
+        );
+
+    }
+
+}
+
+// =====================================
+// AUTO MARKET STRUCTURE
+// =====================================
+
+async function autoMarketStructure(){
+
+    await sendMarketCommand();
 
 }
 
@@ -588,6 +1312,9 @@ async function sendCommandList(){
 /market
 /entry
 /scanner
+/top
+/status
+/help
 /list`
 
     );
@@ -637,19 +1364,11 @@ async function checkTelegramCommands(){
                 text
             );
 
-            // =====================================
-            // PRICE
-            // =====================================
-
             if(text === "/price"){
 
                 await sendPriceCommand();
 
             }
-
-            // =====================================
-            // MARKET
-            // =====================================
 
             else if(text === "/market"){
 
@@ -657,29 +1376,60 @@ async function checkTelegramCommands(){
 
             }
 
-            // =====================================
-            // ENTRY
-            // =====================================
-
             else if(text === "/entry"){
 
                 await sendEntryCommand();
 
             }
 
-            // =====================================
-            // SCANNER
-            // =====================================
-
             else if(text === "/scanner"){
 
-                await sendScannerStatus();
+                await sendTelegram(
+
+`🤖 SCANNER ACTIVE
+
+✅ Live Monitoring
+✅ Breakout Detection
+✅ Whale Detection
+✅ Entry Scanner`
+
+                );
 
             }
 
-            // =====================================
-            // LIST
-            // =====================================
+            else if(text === "/top"){
+
+                await sendTelegram(
+
+`🔥 TOP MOMENTUM
+
+1️⃣ BTC
+2️⃣ GRT
+3️⃣ XRP`
+
+                );
+
+            }
+
+            else if(text === "/status"){
+
+                await sendTelegram(
+
+`🤖 BOT STATUS
+
+✅ API ONLINE
+✅ TELEGRAM ONLINE
+✅ SCANNER ACTIVE`
+
+                );
+
+            }
+
+            else if(text === "/help"){
+
+                await sendCommandList();
+
+            }
 
             else if(text === "/list"){
 
@@ -725,11 +1475,51 @@ setTimeout(async ()=>{
 
     await setTelegramCommands();
 
+    // =====================================
+    // COMMAND LOOP
+    // =====================================
+
     setInterval(
 
         checkTelegramCommands,
 
         5000
+
+    );
+
+    // =====================================
+    // AUTO SCANNER
+    // =====================================
+
+    setInterval(
+
+        runAutoScanner,
+
+        30000
+
+    );
+
+    // =====================================
+    // PRICE UPDATE
+    // =====================================
+
+    setInterval(
+
+        autoPriceUpdate,
+
+        300000
+
+    );
+
+    // =====================================
+    // MARKET STRUCTURE
+    // =====================================
+
+    setInterval(
+
+        autoMarketStructure,
+
+        900000
 
     );
 
