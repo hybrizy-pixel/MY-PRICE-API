@@ -49,9 +49,9 @@ console.log(
 const COINS = {
 
     BTC: "XBTMYR",
+    GRT: "GRTMYR",
     XRP: "XRPMYR",
     XLM: "XLMMYR",
-    GRT: "GRTMYR",
     AAVE: "AAVEMYR",
     CRV: "CRVMYR"
 
@@ -62,11 +62,10 @@ const COINS = {
 // =====================================
 
 const LAST_ALERT_TIME = {};
+
 const LAST_BREAKOUT_STATE = {};
 const LAST_BREAKDOWN_STATE = {};
 const LAST_BUILDUP_STATE = {};
-const LAST_WHALE_STATE = {};
-const LAST_REJECTION_STATE = {};
 const LAST_ACCUMULATION_STATE = {};
 
 // =====================================
@@ -169,13 +168,13 @@ async function setTelegramCommands(){
                     {
                         command: "price",
                         description:
-                        "Live crypto prices"
+                        "Live BTC & GRT price"
                     },
 
                     {
                         command: "market",
                         description:
-                        "Market structure"
+                        "BTC & GRT market"
                     },
 
                     {
@@ -191,12 +190,6 @@ async function setTelegramCommands(){
                     },
 
                     {
-                        command: "top",
-                        description:
-                        "Top bullish coin"
-                    },
-
-                    {
                         command: "status",
                         description:
                         "Bot status"
@@ -206,12 +199,6 @@ async function setTelegramCommands(){
                         command: "help",
                         description:
                         "Help menu"
-                    },
-
-                    {
-                        command: "list",
-                        description:
-                        "Command list"
                     }
 
                 ]
@@ -416,32 +403,8 @@ async function getMarketStructure(coin){
             orderbook.asks[0].price
         );
 
-        let trend =
-        "SIDEWAYS";
-
-        if(
-            buyVolume >
-            sellVolume * 1.3
-        ){
-
-            trend =
-            "BULLISH";
-
-        }
-
-        if(
-            sellVolume >
-            buyVolume * 1.3
-        ){
-
-            trend =
-            "BEARISH";
-
-        }
-
         return {
 
-            trend,
             support,
             resistance,
             buyVolume,
@@ -520,35 +483,39 @@ async function sendPriceCommand(){
 
     try{
 
-        let message =
+        const btc =
+        await getLivePrice(
+            "BTC"
+        );
+
+        const grt =
+        await getLivePrice(
+            "GRT"
+        );
+
+        await sendTelegram(
+
 `📊 LIVE PRICE
 
-`;
+━━━━━━━━━━━━━━━
 
-        for(const coin in COINS){
-
-            const price =
-            await getLivePrice(coin);
-
-            if(!price){
-
-                continue;
-
-            }
-
-            message +=
-
-`${coin}
-RM${formatPrice(
-coin,
-price
+₿ BTC
+💰 RM${formatPrice(
+"BTC",
+btc
 )}
 
-`;
+━━━━━━━━━━━━━━━
 
-        }
+🟢 GRT
+💰 RM${formatPrice(
+"GRT",
+grt
+)}
 
-        await sendTelegram(message);
+━━━━━━━━━━━━━━━`
+
+        );
 
     }catch(err){
 
@@ -1100,53 +1067,6 @@ price
             }
 
             // =====================================
-            // WHALE BUY
-            // =====================================
-
-            if(
-
-                structure.buyVolume >
-                structure.sellVolume * 4
-
-            ){
-
-                if(
-
-                    now -
-                    LAST_ALERT_TIME[
-                        coin
-                    ] >
-                    ALERT_COOLDOWN
-
-                ){
-
-                    LAST_ALERT_TIME[
-                        coin
-                    ] = now;
-
-                    await sendTelegram(
-
-`━━━━━━━━━━━━━━━
-
-🐋 WHALE BUY
-
-🪙 ${coin}
-💰 RM${formatPrice(
-coin,
-price
-)}
-
-🔥 Volume besar masuk
-
-━━━━━━━━━━━━━━━`
-
-                    );
-
-                }
-
-            }
-
-            // =====================================
             // ACCUMULATION
             // =====================================
 
@@ -1264,17 +1184,23 @@ async function autoPriceUpdate(){
 
 `📊 5 MIN PRICE UPDATE
 
+━━━━━━━━━━━━━━━
+
 ₿ BTC
-RM${formatPrice(
+💰 RM${formatPrice(
 "BTC",
 btc
 )}
 
+━━━━━━━━━━━━━━━
+
 🟢 GRT
-RM${formatPrice(
+💰 RM${formatPrice(
 "GRT",
 grt
-)}`
+)}
+
+━━━━━━━━━━━━━━━`
 
         );
 
@@ -1312,10 +1238,8 @@ async function sendCommandList(){
 /market
 /entry
 /scanner
-/top
 /status
-/help
-/list`
+/help`
 
     );
 
@@ -1388,24 +1312,10 @@ async function checkTelegramCommands(){
 
 `🤖 SCANNER ACTIVE
 
-✅ Live Monitoring
 ✅ Breakout Detection
-✅ Whale Detection
-✅ Entry Scanner`
-
-                );
-
-            }
-
-            else if(text === "/top"){
-
-                await sendTelegram(
-
-`🔥 TOP MOMENTUM
-
-1️⃣ BTC
-2️⃣ GRT
-3️⃣ XRP`
+✅ Breakdown Detection
+✅ Accumulation Detection
+✅ High Entry Scanner`
 
                 );
 
@@ -1426,12 +1336,6 @@ async function checkTelegramCommands(){
             }
 
             else if(text === "/help"){
-
-                await sendCommandList();
-
-            }
-
-            else if(text === "/list"){
 
                 await sendCommandList();
 
