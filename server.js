@@ -10,7 +10,8 @@ const app = express();
 
 app.use(cors());
 
-const PORT = process.env.PORT || 3000;
+const PORT =
+process.env.PORT || 3000;
 
 // =====================================
 // TELEGRAM ENV
@@ -30,20 +31,6 @@ const TELEGRAM_API =
 `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 // =====================================
-// ENV CHECK
-// =====================================
-
-console.log(
-    "TOKEN EXISTS:",
-    !!TELEGRAM_TOKEN
-);
-
-console.log(
-    "CHAT ID EXISTS:",
-    !!CHAT_ID
-);
-
-// =====================================
 // INSTANCE
 // =====================================
 
@@ -59,58 +46,16 @@ console.log(
 // COINS
 // =====================================
 
-const MAIN_COINS = {
-
-    BTC: "XBTMYR",
-    GRT: "GRTMYR"
-
-};
-
-const EVENT_COINS = {
+const COINS = {
 
     BTC: "XBTMYR",
     XRP: "XRPMYR",
     XLM: "XLMMYR",
-    CRV: "CRVMYR",
-    AAVE: "AAVEMYR"
+    GRT: "GRTMYR",
+    AAVE: "AAVEMYR",
+    CRV: "CRVMYR"
 
 };
-
-// =====================================
-// MEMORY
-// =====================================
-
-const LAST_PRICES = {};
-const LAST_SUPPORT = {};
-const LAST_RESISTANCE = {};
-const LAST_EVENT_PRICE = {};
-const LAST_ALERT_TIME = {};
-const LAST_NEWS = [];
-
-// =====================================
-// STATES
-// =====================================
-
-const BREAKOUT_ACTIVE = {};
-const BREAKDOWN_ACTIVE = {};
-const REJECTION_ACTIVE = {};
-
-const ACCUMULATION_ACTIVE = {};
-const ACCUMULATION_CONFIRMED = {};
-const ACCUMULATION_TIMER = {};
-
-// =====================================
-// SETTINGS
-// =====================================
-
-const ALERT_COOLDOWN =
-300000;
-
-const ACCUMULATION_CONFIRM_MS =
-15000;
-
-const LUNO_FEE =
-0.005;
 
 // =====================================
 // FORMAT PRICE
@@ -133,22 +78,16 @@ function formatPrice(
 
     }
 
-    if(coin === "GRT"){
-
-        return price.toFixed(4);
-
-    }
-
     if(
-        coin === "CRV" ||
-        coin === "XLM"
+        coin === "XLM" ||
+        coin === "CRV"
     ){
 
         return price.toFixed(3);
 
     }
 
-    return price.toFixed(2);
+    return price.toFixed(4);
 
 }
 
@@ -167,20 +106,22 @@ async function sendTelegram(message){
             {
 
                 chat_id: CHAT_ID,
-                text: `[${INSTANCE}]\n\n${message}`
+
+                text:
+                `[${INSTANCE}]\n\n${message}`
 
             }
 
         );
 
         console.log(
-            "✅ Telegram sent"
+            "✅ TELEGRAM SENT"
         );
 
     }catch(err){
 
         console.log(
-            "Telegram failed"
+            "❌ TELEGRAM FAILED"
         );
 
     }
@@ -188,7 +129,7 @@ async function sendTelegram(message){
 }
 
 // =====================================
-// SET TELEGRAM COMMANDS
+// SET COMMANDS
 // =====================================
 
 async function setTelegramCommands(){
@@ -206,31 +147,19 @@ async function setTelegramCommands(){
                     {
                         command: "price",
                         description:
-                        "Live harga crypto"
+                        "Live crypto prices"
                     },
 
                     {
                         command: "market",
                         description:
-                        "Market structure semasa"
+                        "Market structure"
                     },
 
                     {
                         command: "entry",
                         description:
-                        "Cari possible entry"
-                    },
-
-                    {
-                        command: "news",
-                        description:
-                        "Latest crypto news"
-                    },
-
-                    {
-                        command: "top",
-                        description:
-                        "Top bullish coin"
+                        "Possible entry"
                     },
 
                     {
@@ -242,7 +171,7 @@ async function setTelegramCommands(){
                     {
                         command: "list",
                         description:
-                        "List semua command"
+                        "Command list"
                     }
 
                 ]
@@ -252,13 +181,13 @@ async function setTelegramCommands(){
         );
 
         console.log(
-            "Telegram commands updated"
+            "✅ COMMANDS UPDATED"
         );
 
     }catch(err){
 
         console.log(
-            "Failed set commands"
+            "❌ COMMAND UPDATE FAILED"
         );
 
     }
@@ -269,7 +198,7 @@ async function setTelegramCommands(){
 // HOMEPAGE
 // =====================================
 
-app.get("/", (req, res) => {
+app.get("/", (req,res)=>{
 
     res.json({
 
@@ -294,15 +223,17 @@ app.get('/price/:pair', async (req,res)=>{
         const pair =
         req.params.pair.toUpperCase();
 
-        let lunoPair = '';
+        const lunoPair =
+        COINS[pair];
 
-        if(pair === 'BTC'){
+        if(!lunoPair){
 
-            lunoPair = 'XBTMYR';
+            return res.status(404).json({
 
-        }else{
+                error:
+                "PAIR NOT FOUND"
 
-            lunoPair = pair + 'MYR';
+            });
 
         }
 
@@ -319,7 +250,10 @@ app.get('/price/:pair', async (req,res)=>{
         );
 
         res.json({
+
+            pair,
             price
+
         });
 
     }catch(err){
@@ -327,7 +261,10 @@ app.get('/price/:pair', async (req,res)=>{
         console.log(err);
 
         res.status(500).json({
-            error:'FAILED'
+
+            error:
+            "FAILED"
+
         });
 
     }
@@ -335,72 +272,26 @@ app.get('/price/:pair', async (req,res)=>{
 });
 
 // =====================================
-// GET WALLS
+// GET LIVE PRICE
 // =====================================
 
-function getWalls(
-    bids,
-    asks,
-    currentPrice
-){
+async function getLivePrice(coin){
 
     try{
 
-        const filteredBids =
-        bids.filter(b =>
+        const pair =
+        COINS[coin];
 
-            parseFloat(b.price) >
-            currentPrice * 0.98
+        const response =
+        await axios.get(
 
-        );
-
-        const filteredAsks =
-        asks.filter(a =>
-
-            parseFloat(a.price) <
-            currentPrice * 1.02
+            `https://api.luno.com/api/1/ticker?pair=${pair}`
 
         );
 
-        const topBid =
-        filteredBids
-        .sort((a,b)=>
-
-            parseFloat(b.volume) -
-            parseFloat(a.volume)
-
-        )[0];
-
-        const topAsk =
-        filteredAsks
-        .sort((a,b)=>
-
-            parseFloat(b.volume) -
-            parseFloat(a.volume)
-
-        )[0];
-
-        if(!topBid || !topAsk){
-
-            return null;
-
-        }
-
-        return {
-
-            support:
-            parseFloat(topBid.price),
-
-            supportVolume:
-            parseFloat(topBid.volume),
-
-            resistance:
-            parseFloat(topAsk.price),
-
-            resistanceVolume:
-            parseFloat(topAsk.volume)
-
-        };
+        return parseFloat(
+            response.data.last_trade
+        );
 
     }catch{
 
@@ -411,105 +302,98 @@ function getWalls(
 }
 
 // =====================================
-// TREND DETECTOR
+// MARKET STRUCTURE
 // =====================================
 
-function detectTrend(
-    supportVolume,
-    resistanceVolume
-){
+async function getMarketStructure(coin){
 
-    const ratio =
-    supportVolume /
-    resistanceVolume;
+    try{
 
-    if(ratio > 1.8){
+        const pair =
+        COINS[coin];
 
-        return "BULLISH";
+        const response =
+        await axios.get(
+
+            `https://api.luno.com/api/1/orderbook?pair=${pair}`
+
+        );
+
+        const bids =
+        response.data.bids;
+
+        const asks =
+        response.data.asks;
+
+        const buyVolume =
+        bids.reduce((sum,b)=>
+
+            sum + parseFloat(b.volume)
+
+        ,0);
+
+        const sellVolume =
+        asks.reduce((sum,a)=>
+
+            sum + parseFloat(a.volume)
+
+        ,0);
+
+        if(buyVolume > sellVolume){
+
+            return "BULLISH";
+
+        }
+
+        if(sellVolume > buyVolume){
+
+            return "BEARISH";
+
+        }
+
+        return "SIDEWAYS";
+
+    }catch{
+
+        return "UNKNOWN";
 
     }
-
-    if(
-        resistanceVolume >
-        supportVolume * 1.5
-    ){
-
-        return "BEARISH";
-
-    }
-
-    return "SIDEWAYS";
 
 }
 
 // =====================================
-// LIVE PRICE
+// PRICE COMMAND
 // =====================================
 
-async function scanPrices(){
+async function sendPriceCommand(){
 
     try{
 
         let message =
-        "📊 PRICE UPDATE\n";
+`📊 LIVE PRICE
 
-        const coins =
-        Object.keys(MAIN_COINS);
+`;
 
-        for(const coin of coins){
-
-            const response =
-            await axios.get(
-
-                `https://api.luno.com/api/1/ticker?pair=${MAIN_COINS[coin]}`
-
-            );
+        for(const coin in COINS){
 
             const price =
-            parseFloat(
-                response.data.last_trade
-            );
+            await getLivePrice(coin);
 
-            if(!LAST_PRICES[coin]){
+            if(!price){
 
-                LAST_PRICES[coin] =
-                price;
-
-            }
-
-            const oldPrice =
-            LAST_PRICES[coin];
-
-            const change =
-            (
-                (price - oldPrice)
-                / oldPrice
-            ) * 100;
-
-            let icon = "➖";
-
-            if(change > 0){
-
-                icon = "🟢";
-
-            }
-
-            else if(change < 0){
-
-                icon = "🔴";
+                continue;
 
             }
 
             message +=
 
-`\n${coin}
-${icon} RM${formatPrice(
+`${coin}
+RM${formatPrice(
 coin,
 price
-)} (${change.toFixed(2)}%)\n`;
+)}
 
-            LAST_PRICES[coin] =
-            price;
+`;
 
         }
 
@@ -518,7 +402,298 @@ price
     }catch(err){
 
         console.log(
-            "Price update failed"
+            "PRICE COMMAND FAILED"
+        );
+
+    }
+
+}
+
+// =====================================
+// MARKET COMMAND
+// =====================================
+
+async function sendMarketCommand(){
+
+    try{
+
+        let message =
+`📈 MARKET STRUCTURE
+
+`;
+
+        for(const coin in COINS){
+
+            const trend =
+            await getMarketStructure(coin);
+
+            const price =
+            await getLivePrice(coin);
+
+            let icon = "⚪";
+
+            if(trend === "BULLISH"){
+
+                icon = "🟢";
+
+            }
+
+            if(trend === "BEARISH"){
+
+                icon = "🔴";
+
+            }
+
+            message +=
+
+`${icon} ${coin}
+
+Trend:
+${trend}
+
+Price:
+RM${formatPrice(
+coin,
+price
+)}
+
+`;
+
+        }
+
+        await sendTelegram(message);
+
+    }catch(err){
+
+        console.log(
+            "MARKET COMMAND FAILED"
+        );
+
+    }
+
+}
+
+// =====================================
+// ENTRY COMMAND
+// =====================================
+
+async function sendEntryCommand(){
+
+    try{
+
+        let found = false;
+
+        let message =
+`🎯 POSSIBLE ENTRY
+
+`;
+
+        for(const coin in COINS){
+
+            const trend =
+            await getMarketStructure(coin);
+
+            const price =
+            await getLivePrice(coin);
+
+            if(
+                trend === "BULLISH"
+            ){
+
+                found = true;
+
+                const tp =
+                price * 1.02;
+
+                const sl =
+                price * 0.98;
+
+                message +=
+
+`🚀 ${coin}
+
+Entry:
+RM${formatPrice(
+coin,
+price
+)}
+
+TP:
+RM${formatPrice(
+coin,
+tp
+)}
+
+SL:
+RM${formatPrice(
+coin,
+sl
+)}
+
+`;
+
+            }
+
+        }
+
+        if(!found){
+
+            message +=
+            "❌ NO ENTRY FOUND";
+
+        }
+
+        await sendTelegram(message);
+
+    }catch(err){
+
+        console.log(
+            "ENTRY COMMAND FAILED"
+        );
+
+    }
+
+}
+
+// =====================================
+// SCANNER STATUS
+// =====================================
+
+async function sendScannerStatus(){
+
+    await sendTelegram(
+
+`🤖 SCANNER STATUS
+
+✅ ACTIVE
+✅ LIVE MONITORING
+✅ API CONNECTED
+✅ TELEGRAM CONNECTED`
+
+    );
+
+}
+
+// =====================================
+// COMMAND LIST
+// =====================================
+
+async function sendCommandList(){
+
+    await sendTelegram(
+
+`📋 COMMAND LIST
+
+/price
+/market
+/entry
+/scanner
+/list`
+
+    );
+
+}
+
+// =====================================
+// TELEGRAM COMMAND HANDLER
+// =====================================
+
+let LAST_UPDATE_ID = 0;
+
+async function checkTelegramCommands(){
+
+    try{
+
+        const response =
+        await axios.get(
+
+            `${TELEGRAM_API}/getUpdates?offset=${LAST_UPDATE_ID + 1}`
+
+        );
+
+        const updates =
+        response.data.result;
+
+        for(const update of updates){
+
+            LAST_UPDATE_ID =
+            update.update_id;
+
+            if(
+                !update.message ||
+                !update.message.text
+            ){
+
+                continue;
+
+            }
+
+            const text =
+            update.message.text
+            .toLowerCase();
+
+            console.log(
+                "COMMAND:",
+                text
+            );
+
+            // =====================================
+            // PRICE
+            // =====================================
+
+            if(text === "/price"){
+
+                await sendPriceCommand();
+
+            }
+
+            // =====================================
+            // MARKET
+            // =====================================
+
+            else if(text === "/market"){
+
+                await sendMarketCommand();
+
+            }
+
+            // =====================================
+            // ENTRY
+            // =====================================
+
+            else if(text === "/entry"){
+
+                await sendEntryCommand();
+
+            }
+
+            // =====================================
+            // SCANNER
+            // =====================================
+
+            else if(text === "/scanner"){
+
+                await sendScannerStatus();
+
+            }
+
+            // =====================================
+            // LIST
+            // =====================================
+
+            else if(text === "/list"){
+
+                await sendCommandList();
+
+            }
+
+        }
+
+    }catch(err){
+
+        console.log(
+            "COMMAND ERROR",
+            err.message
         );
 
     }
@@ -529,10 +704,10 @@ price
 // START SERVER
 // =====================================
 
-app.listen(PORT, () => {
+app.listen(PORT, ()=>{
 
     console.log(
-        "Server running on port " +
+        "SERVER RUNNING ON PORT",
         PORT
     );
 
@@ -542,19 +717,20 @@ app.listen(PORT, () => {
 // START SYSTEM
 // =====================================
 
-setTimeout(() => {
+setTimeout(async ()=>{
 
     console.log(
-        "Scanner started"
+        "🚀 SYSTEM STARTED"
     );
 
-    setTelegramCommands();
-
-    scanPrices();
+    await setTelegramCommands();
 
     setInterval(
-        scanPrices,
-        300000
+
+        checkTelegramCommands,
+
+        5000
+
     );
 
-}, 10000);
+}, 5000);
