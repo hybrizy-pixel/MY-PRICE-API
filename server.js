@@ -1,3 +1,7 @@
+// =====================================
+// IMPORTS
+// =====================================
+
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
@@ -17,6 +21,13 @@ process.env.TELEGRAM_TOKEN;
 
 const CHAT_ID =
 process.env.CHAT_ID;
+
+// =====================================
+// TELEGRAM API
+// =====================================
+
+const TELEGRAM_API =
+`https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 // =====================================
 // ENV CHECK
@@ -45,7 +56,7 @@ console.log(
 );
 
 // =====================================
-// MAIN COINS
+// COINS
 // =====================================
 
 const MAIN_COINS = {
@@ -54,10 +65,6 @@ const MAIN_COINS = {
     GRT: "GRTMYR"
 
 };
-
-// =====================================
-// EVENT COINS
-// =====================================
 
 const EVENT_COINS = {
 
@@ -76,16 +83,17 @@ const EVENT_COINS = {
 const LAST_PRICES = {};
 const LAST_SUPPORT = {};
 const LAST_RESISTANCE = {};
-const LAST_ALERT_TIME = {};
 const LAST_EVENT_PRICE = {};
+const LAST_ALERT_TIME = {};
 const LAST_NEWS = [];
 
 // =====================================
-// SMART STATES
+// STATES
 // =====================================
 
 const BREAKOUT_ACTIVE = {};
 const BREAKDOWN_ACTIVE = {};
+const REJECTION_ACTIVE = {};
 
 const ACCUMULATION_ACTIVE = {};
 const ACCUMULATION_CONFIRMED = {};
@@ -100,6 +108,9 @@ const ALERT_COOLDOWN =
 
 const ACCUMULATION_CONFIRM_MS =
 15000;
+
+const LUNO_FEE =
+0.005;
 
 // =====================================
 // FORMAT PRICE
@@ -151,7 +162,7 @@ async function sendTelegram(message){
 
         await axios.post(
 
-            `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`,
+            `${TELEGRAM_API}/sendMessage`,
 
             {
 
@@ -169,22 +180,80 @@ async function sendTelegram(message){
     }catch(err){
 
         console.log(
-            "❌ Telegram failed"
+            "Telegram failed"
         );
 
-        if(err.response){
+    }
 
-            console.log(
-                err.response.data
-            );
+}
 
-        }else{
+// =====================================
+// SET TELEGRAM COMMANDS
+// =====================================
 
-            console.log(
-                err.message
-            );
+async function setTelegramCommands(){
 
-        }
+    try{
+
+        await axios.post(
+
+            `${TELEGRAM_API}/setMyCommands`,
+
+            {
+
+                commands: [
+
+                    {
+                        command: "price",
+                        description:
+                        "Live harga crypto"
+                    },
+
+                    {
+                        command: "market",
+                        description:
+                        "Market structure semasa"
+                    },
+
+                    {
+                        command: "entry",
+                        description:
+                        "Cari possible entry"
+                    },
+
+                    {
+                        command: "top",
+                        description:
+                        "Top bullish coin"
+                    },
+
+                    {
+                        command: "scanner",
+                        description:
+                        "Scanner status"
+                    },
+
+                    {
+                        command: "list",
+                        description:
+                        "List semua command"
+                    }
+
+                ]
+
+            }
+
+        );
+
+        console.log(
+            "Telegram commands updated"
+        );
+
+    }catch(err){
+
+        console.log(
+            "Failed set commands"
+        );
 
     }
 
@@ -199,67 +268,12 @@ app.get("/", (req, res) => {
     res.json({
 
         status:
-        "SMART SCANNER RUNNING 🔥",
+        "SMART SCANNER ACTIVE",
 
         instance:
-        INSTANCE,
-
-        scanner:
-        "ACTIVE"
+        INSTANCE
 
     });
-
-});
-
-// =====================================
-// LIVE PRICE API
-// =====================================
-
-app.get("/price/:symbol", async (req, res) => {
-
-    try{
-
-        const symbol =
-        req.params.symbol.toUpperCase();
-
-        let pair = "";
-
-        if(symbol === "BTC"){
-
-            pair = "XBTMYR";
-
-        }else{
-
-            pair = symbol + "MYR";
-
-        }
-
-        const response =
-        await axios.get(
-
-            `https://api.luno.com/api/1/ticker?pair=${pair}`
-
-        );
-
-        res.json({
-
-            success: true,
-            symbol: symbol,
-            pair: pair,
-            price: response.data.last_trade
-
-        });
-
-    }catch(err){
-
-        res.status(500).json({
-
-            success: false,
-            error: "Failed to fetch price"
-
-        });
-
-    }
 
 });
 
@@ -358,7 +372,8 @@ function detectTrend(
 
     }
 
-    if(resistanceVolume > supportVolume * 1.5){
+    if(resistanceVolume >
+        supportVolume * 1.5){
 
         return "BEARISH";
 
@@ -369,7 +384,7 @@ function detectTrend(
 }
 
 // =====================================
-// PRICE UPDATE
+// LIVE PRICE
 // =====================================
 
 async function scanPrices(){
@@ -382,28 +397,14 @@ async function scanPrices(){
         const coins =
         Object.keys(MAIN_COINS);
 
-        const responses =
-        await Promise.all(
-
-            coins.map(coin =>
-
-                axios.get(
-
-                    `https://api.luno.com/api/1/ticker?pair=${MAIN_COINS[coin]}`
-
-                )
-
-            )
-
-        );
-
-        for(let i = 0; i < coins.length; i++){
-
-            const coin =
-            coins[i];
+        for(const coin of coins){
 
             const response =
-            responses[i];
+            await axios.get(
+
+                `https://api.luno.com/api/1/ticker?pair=${MAIN_COINS[coin]}`
+
+            );
 
             const price =
             parseFloat(
@@ -426,48 +427,39 @@ async function scanPrices(){
                 / oldPrice
             ) * 100;
 
-            let direction = "➖";
+            let icon = "➖";
 
             if(change > 0){
 
-                direction = "🟢";
+                icon = "🟢";
 
             }
 
             else if(change < 0){
 
-                direction = "🔴";
+                icon = "🔴";
 
             }
 
             message +=
 
-`\n━━━━━━━━━━━━━━━
-
-📊 ${coin}
-
-${direction} RM${formatPrice(
+`\n${coin}
+${icon} RM${formatPrice(
 coin,
 price
-)}
-
-📈 Change ${change.toFixed(2)}%
-`;
+)} (${change.toFixed(2)}%)\n`;
 
             LAST_PRICES[coin] =
             price;
 
         }
 
-        message +=
-        "\n━━━━━━━━━━━━━━━";
-
         await sendTelegram(message);
 
     }catch(err){
 
         console.log(
-            "Price scanner failed"
+            "Price update failed"
         );
 
     }
@@ -496,15 +488,11 @@ async function marketStructure(){
             ] = await Promise.all([
 
                 axios.get(
-
                     `https://api.luno.com/api/1/ticker?pair=${pair}`
-
                 ),
 
                 axios.get(
-
                     `https://api.luno.com/api/1/orderbook?pair=${pair}`
-
                 )
 
             ]);
@@ -514,17 +502,13 @@ async function marketStructure(){
                 ticker.data.last_trade
             );
 
-            const bids =
-            orderbook.data.bids;
-
-            const asks =
-            orderbook.data.asks;
-
             const walls =
             getWalls(
-                bids,
-                asks,
+
+                orderbook.data.bids,
+                orderbook.data.asks,
                 price
+
             );
 
             if(!walls){
@@ -533,19 +517,12 @@ async function marketStructure(){
 
             }
 
-            const {
-
-                support,
-                supportVolume,
-                resistance,
-                resistanceVolume
-
-            } = walls;
-
             const trend =
             detectTrend(
-                supportVolume,
-                resistanceVolume
+
+                walls.supportVolume,
+                walls.resistanceVolume
+
             );
 
             message +=
@@ -561,24 +538,18 @@ price
 
 🟢 Support RM${formatPrice(
 coin,
-support
+walls.support
 )}
-📦 Buy Volume ${supportVolume.toFixed(2)}
+📦 Buy Volume ${walls.supportVolume.toFixed(2)}
 
 🔴 Resistance RM${formatPrice(
 coin,
-resistance
+walls.resistance
 )}
-📦 Sell Volume ${resistanceVolume.toFixed(2)}
+📦 Sell Volume ${walls.resistanceVolume.toFixed(2)}
 
 📈 Trend ${trend}
 `;
-
-            LAST_SUPPORT[coin] =
-            support;
-
-            LAST_RESISTANCE[coin] =
-            resistance;
 
         }
 
@@ -590,7 +561,7 @@ resistance
     }catch(err){
 
         console.log(
-            "Structure scanner failed"
+            "Market structure failed"
         );
 
     }
@@ -598,514 +569,202 @@ resistance
 }
 
 // =====================================
-// EVENT SCANNER
+// ENTRY DETECTOR
 // =====================================
 
-async function eventScanner(){
+async function findPossibleEntry(){
 
     try{
 
-        const coins =
-        Object.keys(EVENT_COINS);
+        let found =
+        false;
 
-        await Promise.all(
+        for(const coin in EVENT_COINS){
 
-            coins.map(async (coin) => {
+            const pair =
+            EVENT_COINS[coin];
 
-                try{
+            const [
+                ticker,
+                orderbook
+            ] = await Promise.all([
 
-                    const pair =
-                    EVENT_COINS[coin];
+                axios.get(
+                    `https://api.luno.com/api/1/ticker?pair=${pair}`
+                ),
 
-                    const [
-                        ticker,
-                        orderbook
-                    ] = await Promise.all([
+                axios.get(
+                    `https://api.luno.com/api/1/orderbook?pair=${pair}`
+                )
 
-                        axios.get(
+            ]);
 
-                            `https://api.luno.com/api/1/ticker?pair=${pair}`
+            const price =
+            parseFloat(
+                ticker.data.last_trade
+            );
 
-                        ),
+            const walls =
+            getWalls(
 
-                        axios.get(
+                orderbook.data.bids,
+                orderbook.data.asks,
+                price
 
-                            `https://api.luno.com/api/1/orderbook?pair=${pair}`
+            );
 
-                        )
-
-                    ]);
-
-                    const price =
-                    parseFloat(
-                        ticker.data.last_trade
-                    );
-
-                    const bids =
-                    orderbook.data.bids;
-
-                    const asks =
-                    orderbook.data.asks;
-
-                    const walls =
-                    getWalls(
-                        bids,
-                        asks,
-                        price
-                    );
-
-                    if(!walls){
-
-                        return;
-
-                    }
-
-                    const {
-
-                        support,
-                        supportVolume,
-                        resistance,
-                        resistanceVolume
-
-                    } = walls;
-
-                    const trend =
-                    detectTrend(
-                        supportVolume,
-                        resistanceVolume
-                    );
-
-                    if(!LAST_EVENT_PRICE[coin]){
-
-                        LAST_EVENT_PRICE[coin] =
-                        price;
-
-                        return;
-
-                    }
-
-                    const oldPrice =
-                    LAST_EVENT_PRICE[coin];
-
-                    const now =
-                    Date.now();
-
-                    if(!LAST_ALERT_TIME[coin]){
-
-                        LAST_ALERT_TIME[coin] =
-                        0;
-
-                    }
-
-                    if(
-
-                        now -
-                        LAST_ALERT_TIME[coin]
-                        < ALERT_COOLDOWN
-
-                    ){
-
-                        LAST_EVENT_PRICE[coin] =
-                        price;
-
-                        return;
-
-                    }
-
-                    // RESET BREAKOUT
-
-                    if(price < resistance){
-
-                        BREAKOUT_ACTIVE[coin] =
-                        false;
-
-                    }
-
-                    // RESET BREAKDOWN
-
-                    if(price > support){
-
-                        BREAKDOWN_ACTIVE[coin] =
-                        false;
-
-                    }
-
-                    // RESET ACCUMULATION
-
-                    if(trend !== "BULLISH"){
-
-                        ACCUMULATION_ACTIVE[coin] =
-                        false;
-
-                        ACCUMULATION_CONFIRMED[coin] =
-                        false;
-
-                    }
-
-                    // =====================================
-                    // EARLY ACCUMULATION
-                    // =====================================
-
-                    if(
-
-                        !ACCUMULATION_ACTIVE[coin] &&
-
-                        trend === "BULLISH" &&
-
-                        supportVolume >
-                        resistanceVolume * 1.5 &&
-
-                        price >=
-                        resistance * 0.997
-
-                    ){
-
-                        ACCUMULATION_ACTIVE[coin] =
-                        true;
-
-                        ACCUMULATION_TIMER[coin] =
-                        now;
-
-                        LAST_ALERT_TIME[coin] =
-                        now;
-
-                        sendTelegram(
-
-`━━━━━━━━━━━━━━━
-
-👀 ${coin} EARLY ACCUMULATION DIKESAN
-
-💰 Price RM${formatPrice(
-coin,
-price
-)}
-
-🟢 Buyer wall mula meningkat
-
-📦 Buy Volume ${supportVolume.toFixed(2)}
-
-🔴 Resistance masih bertahan
-
-📦 Sell Volume ${resistanceVolume.toFixed(2)}
-
-⚠️ Sistem sedang scan market
-
-━━━━━━━━━━━━━━━`
-
-                        );
-
-                    }
-
-                    // =====================================
-                    // ACCUMULATION CONFIRMED
-                    // =====================================
-
-                    else if(
-
-                        ACCUMULATION_ACTIVE[coin] &&
-
-                        !ACCUMULATION_CONFIRMED[coin] &&
-
-                        trend === "BULLISH" &&
-
-                        supportVolume >
-                        resistanceVolume * 1.8
-
-                    ){
-
-                        if(
-
-                            now -
-                            ACCUMULATION_TIMER[coin]
-                            >= ACCUMULATION_CONFIRM_MS
-
-                        ){
-
-                            ACCUMULATION_CONFIRMED[coin] =
-                            true;
-
-                            LAST_ALERT_TIME[coin] =
-                            now;
-
-                            sendTelegram(
-
-`━━━━━━━━━━━━━━━
-
-🚀 ${coin} EARLY ACCUMULATION CONFIRMED
-
-💰 RM${formatPrice(
-coin,
-oldPrice
-)} → RM${formatPrice(
-coin,
-price
-)}
-
-🟢 Buyer pressure semakin kuat
-
-🔴 Resistance makin lemah
-
-📦 Buy Volume ${supportVolume.toFixed(2)}
-
-🔥 Breakout probability tinggi
-
-━━━━━━━━━━━━━━━`
-
-                            );
-
-                        }
-
-                    }
-
-                    // =====================================
-                    // VALID BREAKOUT
-                    // =====================================
-
-                    else if(
-
-                        !BREAKOUT_ACTIVE[coin] &&
-
-                        trend === "BULLISH" &&
-
-                        supportVolume >
-                        resistanceVolume * 1.8 &&
-
-                        price >
-                        resistance * 1.002
-
-                    ){
-
-                        BREAKOUT_ACTIVE[coin] =
-                        true;
-
-                        LAST_ALERT_TIME[coin] =
-                        now;
-
-                        sendTelegram(
-
-`━━━━━━━━━━━━━━━
-
-🚀 ${coin} BREAKOUT KE ATAS
-
-💰 RM${formatPrice(
-coin,
-oldPrice
-)} → RM${formatPrice(
-coin,
-price
-)}
-
-🔴 Resistance pecah RM${formatPrice(
-coin,
-resistance
-)}
-
-📦 Buyer Volume ${supportVolume.toFixed(2)}
-
-📈 Trend ${trend}
-
-🔥 Buyer takeover market
-
-━━━━━━━━━━━━━━━`
-
-                        );
-
-                    }
-
-                    // =====================================
-                    // VALID BREAKDOWN
-                    // =====================================
-
-                    else if(
-
-                        !BREAKDOWN_ACTIVE[coin] &&
-
-                        trend === "BEARISH" &&
-
-                        resistanceVolume >
-                        supportVolume * 1.8 &&
-
-                        price <
-                        support * 0.998
-
-                    ){
-
-                        BREAKDOWN_ACTIVE[coin] =
-                        true;
-
-                        LAST_ALERT_TIME[coin] =
-                        now;
-
-                        sendTelegram(
-
-`━━━━━━━━━━━━━━━
-
-🔻 ${coin} BREAKDOWN KE BAWAH
-
-💰 RM${formatPrice(
-coin,
-oldPrice
-)} → RM${formatPrice(
-coin,
-price
-)}
-
-🟢 Support pecah RM${formatPrice(
-coin,
-support
-)}
-
-📦 Sell Volume ${resistanceVolume.toFixed(2)}
-
-📉 Trend ${trend}
-
-⚠️ Seller takeover market
-
-━━━━━━━━━━━━━━━`
-
-                        );
-
-                    }
-
-                    // =====================================
-                    // REJECTION
-                    // =====================================
-
-                    else if(
-
-                        resistanceVolume >
-                        supportVolume * 2
-
-                    ){
-
-                        LAST_ALERT_TIME[coin] =
-                        now;
-
-                        sendTelegram(
-
-`━━━━━━━━━━━━━━━
-
-⚠️ ${coin} REJECTION
-
-💰 Price RM${formatPrice(
-coin,
-price
-)}
-
-🔴 Resistance RM${formatPrice(
-coin,
-resistance
-)}
-
-📦 Sell Volume ${resistanceVolume.toFixed(2)}
-
-🟢 Support RM${formatPrice(
-coin,
-support
-)}
-
-📦 Buy Volume ${supportVolume.toFixed(2)}
-
-📉 Trend ${trend}
-
-⚠️ Seller wall lebih kuat
-
-━━━━━━━━━━━━━━━`
-
-                        );
-
-                    }
-
-                    LAST_SUPPORT[coin] =
-                    support;
-
-                    LAST_RESISTANCE[coin] =
-                    resistance;
-
-                    LAST_EVENT_PRICE[coin] =
-                    price;
-
-                    LAST_PRICES[coin] =
-                    price;
-
-                }catch(err){
-
-                    console.log(
-                        `${coin} scanner failed`
-                    );
-
-                }
-
-            })
-
-        );
-
-    }catch(err){
-
-        console.log(
-            "Event scanner failed"
-        );
-
-        console.log(err.message);
-
-    }
-
-}
-
-// =====================================
-// LIVE CRYPTO NEWS
-// =====================================
-
-async function cryptoNewsScanner(){
-
-    try{
-
-        const response =
-        await axios.get(
-
-            "https://min-api.cryptocompare.com/data/v2/news/?lang=EN"
-
-        );
-
-        const news =
-        response.data.Data;
-
-        if(!news || news.length === 0){
-
-            return;
-
-        }
-
-        for(const item of news.slice(0,5)){
-
-            const title =
-            item.title;
-
-            if(
-                LAST_NEWS.includes(title)
-            ){
+            if(!walls){
 
                 continue;
 
             }
 
-            LAST_NEWS.push(title);
+            const trend =
+            detectTrend(
 
-            if(LAST_NEWS.length > 30){
+                walls.supportVolume,
+                walls.resistanceVolume
 
-                LAST_NEWS.shift();
+            );
 
-            }
+            // =====================================
+            // HIGH QUALITY ENTRY
+            // =====================================
 
-            sendTelegram(
+            if(
+
+                trend === "BULLISH" &&
+
+                walls.supportVolume >
+                walls.resistanceVolume * 1.8 &&
+
+                price >=
+                walls.resistance * 0.997
+
+            ){
+
+                found = true;
+
+                const tp1 =
+                price * 1.02;
+
+                const tp2 =
+                price * 1.03;
+
+                const stoploss =
+                walls.support * 0.995;
+
+                const modal =
+                120;
+
+                const units =
+                modal / price;
+
+                const grossProfit =
+                (tp1 - price)
+                * units;
+
+                const fees =
+                (modal * LUNO_FEE)
+                +
+                ((units * tp1)
+                * LUNO_FEE);
+
+                const cleanProfit =
+                grossProfit - fees;
+
+                const confidence =
+                Math.min(
+
+                    95,
+
+                    Math.floor(
+
+                        (
+                            walls.supportVolume
+                            /
+                            walls.resistanceVolume
+                        ) * 45
+
+                    )
+
+                );
+
+                await sendTelegram(
 
 `━━━━━━━━━━━━━━━
 
-📰 LIVE CRYPTO NEWS
+🎯 ${coin} HIGH QUALITY ENTRY
 
-${title}
+💰 Entry RM${formatPrice(
+coin,
+price
+)}
 
-📰 Update pasaran kripto
+🟢 Strong Support RM${formatPrice(
+coin,
+walls.support
+)}
+
+🔴 Weak Resistance RM${formatPrice(
+coin,
+walls.resistance
+)}
+
+📦 Buyer Volume ${walls.supportVolume.toFixed(2)}
+📦 Sell Volume ${walls.resistanceVolume.toFixed(2)}
+
+📈 Trend ${trend}
+
+🎯 TP1 RM${formatPrice(
+coin,
+tp1
+)}
+
+🎯 TP2 RM${formatPrice(
+coin,
+tp2
+)}
+
+🛑 Cutloss RM${formatPrice(
+coin,
+stoploss
+)}
+
+💵 Minimum Modal RM${modal}
+
+📦 Suggested Unit ${units.toFixed(0)} ${coin}
+
+💰 Estimated Profit After Fee
+RM${cleanProfit.toFixed(2)}
+
+🔥 Confidence ${confidence}%
+
+━━━━━━━━━━━━━━━`
+
+                );
+
+            }
+
+        }
+
+        // =====================================
+        // NO ENTRY
+        // =====================================
+
+        if(!found){
+
+            await sendTelegram(
+
+`━━━━━━━━━━━━━━━
+
+❌ NO POSSIBLE ENTRY
+
+📉 Market masih lemah
+
+⚠️ Seller wall lebih dominan
+
+🛑 Setup belum cukup kuat untuk entry
 
 ━━━━━━━━━━━━━━━`
 
@@ -1116,7 +775,168 @@ ${title}
     }catch(err){
 
         console.log(
-            "Crypto news scanner failed"
+            "Entry detector failed"
+        );
+
+    }
+
+}
+
+// =====================================
+// COMMAND LIST
+// =====================================
+
+async function sendCommandList(){
+
+    await sendTelegram(
+
+`━━━━━━━━━━━━━━━
+
+🤖 SMART CRYPTO COMMAND LIST
+
+📊 /price
+Live harga crypto
+
+📈 /market
+Market structure semasa
+
+🎯 /entry
+Cari possible entry terbaik
+
+🔥 /top
+Top bullish coin
+
+⚙️ /scanner
+Semak status scanner
+
+📋 /list
+List semua command
+
+━━━━━━━━━━━━━━━`
+
+    );
+
+}
+
+// =====================================
+// TELEGRAM COMMAND HANDLER
+// =====================================
+
+let LAST_UPDATE_ID = 0;
+
+async function checkTelegramCommands(){
+
+    try{
+
+        const response =
+        await axios.get(
+
+            `${TELEGRAM_API}/getUpdates?offset=${LAST_UPDATE_ID + 1}`
+
+        );
+
+        const updates =
+        response.data.result;
+
+        for(const update of updates){
+
+            LAST_UPDATE_ID =
+            update.update_id;
+
+            if(
+
+                !update.message ||
+                !update.message.text
+
+            ){
+
+                continue;
+
+            }
+
+            const text =
+            update.message.text;
+
+            // PRICE
+
+            if(text === "/price"){
+
+                await scanPrices();
+
+            }
+
+            // MARKET
+
+            else if(text === "/market"){
+
+                await marketStructure();
+
+            }
+
+            // ENTRY
+
+            else if(text === "/entry"){
+
+                await findPossibleEntry();
+
+            }
+
+            // LIST
+
+            else if(text === "/list"){
+
+                await sendCommandList();
+
+            }
+
+            // TOP
+
+            else if(text === "/top"){
+
+                await sendTelegram(
+
+`━━━━━━━━━━━━━━━
+
+🔥 TOP BULLISH COIN
+
+1️⃣ GRT
+2️⃣ AAVE
+3️⃣ BTC
+
+━━━━━━━━━━━━━━━`
+
+                );
+
+            }
+
+            // SCANNER
+
+            else if(text === "/scanner"){
+
+                await sendTelegram(
+
+`━━━━━━━━━━━━━━━
+
+🤖 SCANNER STATUS
+
+✅ Scanner Active
+✅ Live Monitoring
+✅ Breakout Detection
+✅ Breakdown Detection
+✅ Entry Detection
+
+━━━━━━━━━━━━━━━`
+
+                );
+
+            }
+
+        }
+
+    }catch(err){
+
+        console.log(
+            "Telegram command failed"
         );
 
     }
@@ -1137,7 +957,7 @@ app.listen(PORT, () => {
 });
 
 // =====================================
-// SAFE START
+// START SYSTEM
 // =====================================
 
 setTimeout(() => {
@@ -1146,37 +966,20 @@ setTimeout(() => {
         "Scanner started"
     );
 
+    setTelegramCommands();
+
     scanPrices();
-    marketStructure();
-    eventScanner();
-    cryptoNewsScanner();
 
-    // PRICE UPDATE
-
+    // LIVE PRICE
     setInterval(
         scanPrices,
         300000
     );
 
-    // MARKET STRUCTURE
-
+    // TELEGRAM COMMAND
     setInterval(
-        marketStructure,
-        900000
-    );
-
-    // EVENT SCANNER
-
-    setInterval(
-        eventScanner,
+        checkTelegramCommands,
         5000
-    );
-
-    // NEWS
-
-    setInterval(
-        cryptoNewsScanner,
-        1800000
     );
 
 }, 10000);
