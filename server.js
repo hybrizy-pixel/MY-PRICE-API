@@ -81,11 +81,15 @@ const LAST_EVENT_PRICE = {};
 const LAST_NEWS = [];
 
 // =====================================
-// BREAKOUT STATE
+// SMART STATES
 // =====================================
 
 const BREAKOUT_ACTIVE = {};
 const BREAKDOWN_ACTIVE = {};
+
+const ACCUMULATION_ACTIVE = {};
+const ACCUMULATION_CONFIRMED = {};
+const ACCUMULATION_TIMER = {};
 
 // =====================================
 // SETTINGS
@@ -94,8 +98,8 @@ const BREAKDOWN_ACTIVE = {};
 const ALERT_COOLDOWN =
 300000;
 
-const BREAKOUT_CONFIRM_MS =
-5000;
+const ACCUMULATION_CONFIRM_MS =
+15000;
 
 // =====================================
 // FORMAT PRICE
@@ -737,10 +741,135 @@ async function eventScanner(){
                     }
 
                     // =====================================
-                    // VALID BREAKOUT
+                    // RESET ACCUMULATION
                     // =====================================
 
                     if(
+
+                        trend !== "BULLISH"
+
+                    ){
+
+                        ACCUMULATION_ACTIVE[coin] =
+                        false;
+
+                        ACCUMULATION_CONFIRMED[coin] =
+                        false;
+
+                    }
+
+                    // =====================================
+                    // EARLY ACCUMULATION
+                    // =====================================
+
+                    if(
+
+                        !ACCUMULATION_ACTIVE[coin] &&
+
+                        trend === "BULLISH" &&
+
+                        supportVolume >
+                        resistanceVolume * 1.5 &&
+
+                        price >=
+                        resistance * 0.997
+
+                    ){
+
+                        ACCUMULATION_ACTIVE[coin] =
+                        true;
+
+                        ACCUMULATION_TIMER[coin] =
+                        now;
+
+                        LAST_ALERT_TIME[coin] =
+                        now;
+
+                        sendTelegram(
+
+`👀 ${coin} EARLY ACCUMULATION DIKESAN
+
+💰 Price RM${formatPrice(
+coin,
+price
+)}
+
+🟢 Buyer wall mula meningkat
+
+📦 Buy Volume ${supportVolume.toFixed(2)}
+
+🔴 Resistance masih bertahan
+
+📦 Sell Volume ${resistanceVolume.toFixed(2)}
+
+⚠️ Sistem sedang scan market`
+
+                        );
+
+                    }
+
+                    // =====================================
+                    // ACCUMULATION CONFIRMED
+                    // =====================================
+
+                    else if(
+
+                        ACCUMULATION_ACTIVE[coin] &&
+
+                        !ACCUMULATION_CONFIRMED[coin] &&
+
+                        trend === "BULLISH" &&
+
+                        supportVolume >
+                        resistanceVolume * 1.8
+
+                    ){
+
+                        if(
+
+                            now -
+                            ACCUMULATION_TIMER[coin]
+                            >= ACCUMULATION_CONFIRM_MS
+
+                        ){
+
+                            ACCUMULATION_CONFIRMED[coin] =
+                            true;
+
+                            LAST_ALERT_TIME[coin] =
+                            now;
+
+                            sendTelegram(
+
+`🚀 ${coin} EARLY ACCUMULATION CONFIRMED
+
+💰 RM${formatPrice(
+coin,
+oldPrice
+)} → RM${formatPrice(
+coin,
+price
+)}
+
+🟢 Buyer pressure semakin kuat
+
+🔴 Resistance makin lemah
+
+📦 Buy Volume ${supportVolume.toFixed(2)}
+
+🔥 Breakout probability tinggi`
+
+                            );
+
+                        }
+
+                    }
+
+                    // =====================================
+                    // VALID BREAKOUT
+                    // =====================================
+
+                    else if(
 
                         !BREAKOUT_ACTIVE[coin] &&
 
@@ -849,6 +978,9 @@ support
 
                     ){
 
+                        LAST_ALERT_TIME[coin] =
+                        now;
+
                         sendTelegram(
 
 `⚠️ ${coin} REJECTION
@@ -877,9 +1009,6 @@ support
 ⚠️ Seller wall lebih kuat`
 
                         );
-
-                        LAST_ALERT_TIME[coin] =
-                        now;
 
                     }
 
