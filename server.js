@@ -111,7 +111,8 @@ function formatPrice(
 
     ){
 
-        return price.toFixed(2);
+        return Number(price)
+        .toFixed(2);
 
     }
 
@@ -125,11 +126,13 @@ function formatPrice(
 
     ){
 
-        return price.toFixed(4);
+        return Number(price)
+        .toFixed(4);
 
     }
 
-    return price.toFixed(2);
+    return Number(price)
+    .toFixed(2);
 
 }
 
@@ -146,6 +149,28 @@ function formatPercent(percent){
     }
 
     return `${percent.toFixed(2)}%`;
+
+}
+
+// =====================================
+// PRICE EMOJI
+// =====================================
+
+function getPriceEmoji(percent){
+
+    if(percent > 0){
+
+        return "🟢";
+
+    }
+
+    if(percent < 0){
+
+        return "🔴";
+
+    }
+
+    return "➖";
 
 }
 
@@ -546,16 +571,12 @@ async function sendPriceCommand(){
         await sendTelegram(
 
 `₿ BTC
-
 RM${formatPrice(
 "BTC",
 btc
 )}
 
-──────────────
-
 🟢 GRT
-
 RM${formatPrice(
 "GRT",
 grt
@@ -792,9 +813,7 @@ coin,
 sl
 )}
 
-⚡ ${confidence}% Setup
-
-──────────────`;
+⚡ ${confidence}% Setup`;
 
             }
 
@@ -835,7 +854,9 @@ async function autoPriceUpdate(){
         let btcMessage = "";
         let grtMessage = "";
 
+        // =====================================
         // BTC
+        // =====================================
 
         if(
             LAST_PRICE_MEMORY.BTC
@@ -851,6 +872,11 @@ async function autoPriceUpdate(){
                 ) / old
             ) * 100;
 
+            const emoji =
+            getPriceEmoji(
+                percent
+            );
+
             if(
                 old.toFixed(2) ===
                 btc.toFixed(2)
@@ -858,8 +884,7 @@ async function autoPriceUpdate(){
 
                 btcMessage =
 
-`₿ BTC
-
+`${emoji} BTC
 RM${formatPrice(
 "BTC",
 btc
@@ -869,8 +894,7 @@ btc
 
                 btcMessage =
 
-`₿ BTC
-
+`${emoji} BTC
 RM${formatPrice(
 "BTC",
 old
@@ -887,8 +911,7 @@ percent
 
             btcMessage =
 
-`₿ BTC
-
+`➖ BTC
 RM${formatPrice(
 "BTC",
 btc
@@ -896,7 +919,9 @@ btc
 
         }
 
+        // =====================================
         // GRT
+        // =====================================
 
         if(
             LAST_PRICE_MEMORY.GRT
@@ -912,6 +937,11 @@ btc
                 ) / old
             ) * 100;
 
+            const emoji =
+            getPriceEmoji(
+                percent
+            );
+
             if(
                 old.toFixed(4) ===
                 grt.toFixed(4)
@@ -919,8 +949,7 @@ btc
 
                 grtMessage =
 
-`🟢 GRT
-
+`${emoji} GRT
 RM${formatPrice(
 "GRT",
 grt
@@ -930,8 +959,7 @@ grt
 
                 grtMessage =
 
-`🟢 GRT
-
+`${emoji} GRT
 RM${formatPrice(
 "GRT",
 old
@@ -948,8 +976,7 @@ percent
 
             grtMessage =
 
-`🟢 GRT
-
+`➖ GRT
 RM${formatPrice(
 "GRT",
 grt
@@ -966,8 +993,6 @@ grt
         await sendTelegram(
 
 `${btcMessage}
-
-──────────────
 
 ${grtMessage}`
 
@@ -1110,67 +1135,6 @@ async function runAutoScanner(){
             structure.support * 1.005;
 
             // =====================================
-            // BUILDUP
-            // =====================================
-
-            if(
-
-                pressure > 1.5
-
-                &&
-
-                !nearBreakout
-
-            ){
-
-                if(
-                    !LAST_BUILDUP_STATE[coin]
-                ){
-
-                    LAST_BUILDUP_STATE[
-                        coin
-                    ] = 1;
-
-                }else{
-
-                    LAST_BUILDUP_STATE[
-                        coin
-                    ]++;
-
-                }
-
-                if(
-
-                    LAST_BUILDUP_STATE[
-                        coin
-                    ] === 2
-
-                ){
-
-                    await sendTelegram(
-
-`👀 MOMENTUM BUILDUP
-
-🪙 ${coin}
-
-RM${formatPrice(
-coin,
-price
-)}`
-
-                    );
-
-                }
-
-            }else{
-
-                LAST_BUILDUP_STATE[
-                    coin
-                ] = 0;
-
-            }
-
-            // =====================================
             // BREAKOUT
             // =====================================
 
@@ -1179,7 +1143,6 @@ price
                 pressure > 2
 
                 &&
-
                 nearBreakout
 
             ){
@@ -1277,7 +1240,6 @@ price * 1.03
                 pressure < 0.6
 
                 &&
-
                 nearBreakdown
 
             ){
@@ -1364,89 +1326,6 @@ structure.support * 0.98
             }else{
 
                 LAST_BREAKDOWN_STATE[
-                    coin
-                ] = 0;
-
-            }
-
-            // =====================================
-            // ACCUMULATION
-            // =====================================
-
-            if(
-
-                pressure > 1.5
-
-                &&
-
-                !nearBreakout
-
-                &&
-
-                !nearBreakdown
-
-            ){
-
-                if(
-                    !LAST_ACCUMULATION_STATE[
-                        coin
-                    ]
-                ){
-
-                    LAST_ACCUMULATION_STATE[
-                        coin
-                    ] = 1;
-
-                }else{
-
-                    LAST_ACCUMULATION_STATE[
-                        coin
-                    ]++;
-
-                }
-
-                if(
-
-                    LAST_ACCUMULATION_STATE[
-                        coin
-                    ] >= 4
-
-                    &&
-
-                    now -
-                    LAST_ALERT_TIME[
-                        coin
-                    ] >
-                    ALERT_COOLDOWN
-
-                ){
-
-                    LAST_ALERT_TIME[
-                        coin
-                    ] = now;
-
-                    LAST_ACCUMULATION_STATE[
-                        coin
-                    ] = 0;
-
-                    await sendTelegram(
-
-`🟢 ACCUMULATION
-
-🪙 ${coin}
-
-RM${formatPrice(
-coin,
-price
-)}`
-
-                    );
-
-                }
-
-            }else{
-
-                LAST_ACCUMULATION_STATE[
                     coin
                 ] = 0;
 
@@ -1613,9 +1492,7 @@ setTimeout(async ()=>{
 
     await setTelegramCommands();
 
-    // =====================================
     // COMMAND LOOP
-    // =====================================
 
     setInterval(
 
@@ -1625,9 +1502,7 @@ setTimeout(async ()=>{
 
     );
 
-    // =====================================
     // AUTO SCANNER
-    // =====================================
 
     setInterval(
 
@@ -1637,9 +1512,7 @@ setTimeout(async ()=>{
 
     );
 
-    // =====================================
     // PRICE UPDATE
-    // =====================================
 
     setInterval(
 
@@ -1649,9 +1522,7 @@ setTimeout(async ()=>{
 
     );
 
-    // =====================================
     // MARKET STRUCTURE
-    // =====================================
 
     setInterval(
 
