@@ -14,7 +14,7 @@ const PORT =
 process.env.PORT || 3000;
 
 // =====================================
-// TELEGRAM ENV
+// ENV
 // =====================================
 
 const TELEGRAM_TOKEN =
@@ -27,23 +27,21 @@ const CRYPTOPANIC_API_KEY =
 process.env.CRYPTOPANIC_API_KEY;
 
 // =====================================
+// RANDOM INSTANCE CODE
+// =====================================
+
+const INSTANCE =
+Math.random()
+.toString(36)
+.substring(2,6)
+.toUpperCase();
+
+// =====================================
 // TELEGRAM API
 // =====================================
 
 const TELEGRAM_API =
 `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
-
-// =====================================
-// INSTANCE
-// =====================================
-
-const INSTANCE =
-Math.random().toString(36).substring(7);
-
-console.log(
-    "INSTANCE:",
-    INSTANCE
-);
 
 // =====================================
 // COINS
@@ -78,8 +76,6 @@ const LAST_PRICE_MEMORY = {
 
 };
 
-const LAST_NEWS_ID = null;
-
 // =====================================
 // SETTINGS
 // =====================================
@@ -105,13 +101,35 @@ function formatPrice(
 
     }
 
-    if(coin === "BTC"){
+    // 2 DECIMAL
+
+    if(
+
+        coin === "BTC" ||
+        coin === "AAVE" ||
+        coin === "XRP"
+
+    ){
 
         return price.toFixed(2);
 
     }
 
-    return price.toFixed(4);
+    // 4 DECIMAL
+
+    if(
+
+        coin === "XLM" ||
+        coin === "CRV" ||
+        coin === "GRT"
+
+    ){
+
+        return price.toFixed(4);
+
+    }
+
+    return price.toFixed(2);
 
 }
 
@@ -148,7 +166,9 @@ async function sendTelegram(message){
                 chat_id: CHAT_ID,
 
                 text:
-                `${message}`
+`[${INSTANCE}]
+
+${message}`
 
             }
 
@@ -587,7 +607,7 @@ async function sendMarketCommand(){
 
 ₿ BTC
 
-${formatPrice(
+RM${formatPrice(
 "BTC",
 btcPrice
 )}
@@ -598,13 +618,13 @@ btc.sellVolume
 )}
 
 🟢 Support
-${formatPrice(
+RM${formatPrice(
 "BTC",
 btc.support
 )} (${btc.supportVolume.toFixed(2)} BTC)
 
 🔴 Resistance
-${formatPrice(
+RM${formatPrice(
 "BTC",
 btc.resistance
 )} (${btc.resistanceVolume.toFixed(2)} BTC)
@@ -613,7 +633,7 @@ btc.resistance
 
 🟢 GRT
 
-${formatPrice(
+RM${formatPrice(
 "GRT",
 grtPrice
 )}
@@ -624,13 +644,13 @@ grt.sellVolume
 )}
 
 🟢 Support
-${formatPrice(
+RM${formatPrice(
 "GRT",
 grt.support
 )} (${grt.supportVolume.toFixed(0)} GRT)
 
 🔴 Resistance
-${formatPrice(
+RM${formatPrice(
 "GRT",
 grt.resistance
 )} (${grt.resistanceVolume.toFixed(0)} GRT)`
@@ -658,8 +678,7 @@ async function sendEntryCommand(){
         let found =
         false;
 
-        let message =
-`🎯 HIGH ENTRY\n`;
+        let message = "";
 
         for(const coin in COINS){
 
@@ -731,21 +750,23 @@ async function sendEntryCommand(){
 
 `
 
+🎯 HIGH ENTRY
+
 🪙 ${coin}
 
-${formatPrice(
+RM${formatPrice(
 coin,
 price
 )}
 
 🟢 Support
-${formatPrice(
+RM${formatPrice(
 coin,
 structure.support
 )} (${structure.supportVolume.toFixed(2)})
 
 🔴 Resistance
-${formatPrice(
+RM${formatPrice(
 coin,
 structure.resistance
 )} (${structure.resistanceVolume.toFixed(2)})
@@ -756,17 +777,17 @@ RM${minimum.minimum}
 🪙 Minimum Coin
 ${minimum.coin.toFixed(2)}
 
-🎯 TP1: ${formatPrice(
+🎯 TP1: RM${formatPrice(
 coin,
 tp1
 )}
 
-🎯 TP2: ${formatPrice(
+🎯 TP2: RM${formatPrice(
 coin,
 tp2
 )}
 
-🛑 SL: ${formatPrice(
+🛑 SL: RM${formatPrice(
 coin,
 sl
 )}
@@ -781,8 +802,7 @@ sl
 
         if(!found){
 
-            message =
-            "❌ Tiada setup cantik sekarang";
+            return;
 
         }
 
@@ -840,7 +860,7 @@ async function autoPriceUpdate(){
 
 `₿ BTC
 
-${formatPrice(
+RM${formatPrice(
 "BTC",
 btc
 )} (0.00%)`;
@@ -851,10 +871,10 @@ btc
 
 `₿ BTC
 
-${formatPrice(
+RM${formatPrice(
 "BTC",
 old
-)} → ${formatPrice(
+)} → RM${formatPrice(
 "BTC",
 btc
 )} (${formatPercent(
@@ -869,7 +889,7 @@ percent
 
 `₿ BTC
 
-${formatPrice(
+RM${formatPrice(
 "BTC",
 btc
 )}`;
@@ -901,7 +921,7 @@ btc
 
 `🟢 GRT
 
-${formatPrice(
+RM${formatPrice(
 "GRT",
 grt
 )} (0.00%)`;
@@ -912,10 +932,10 @@ grt
 
 `🟢 GRT
 
-${formatPrice(
+RM${formatPrice(
 "GRT",
 old
-)} → ${formatPrice(
+)} → RM${formatPrice(
 "GRT",
 grt
 )} (${formatPercent(
@@ -930,7 +950,7 @@ percent
 
 `🟢 GRT
 
-${formatPrice(
+RM${formatPrice(
 "GRT",
 grt
 )}`;
@@ -1089,7 +1109,9 @@ async function runAutoScanner(){
             price <=
             structure.support * 1.005;
 
+            // =====================================
             // BUILDUP
+            // =====================================
 
             if(
 
@@ -1131,7 +1153,7 @@ async function runAutoScanner(){
 
 🪙 ${coin}
 
-${formatPrice(
+RM${formatPrice(
 coin,
 price
 )}`
@@ -1148,7 +1170,9 @@ price
 
             }
 
+            // =====================================
             // BREAKOUT
+            // =====================================
 
             if(
 
@@ -1209,13 +1233,25 @@ price
 
 🪙 ${coin}
 
-${formatPrice(
+RM${formatPrice(
 coin,
 price
 )}
 
-🎯 Target:
-${formatPrice(
+🟢 Support
+RM${formatPrice(
+coin,
+structure.support
+)}
+
+🔴 Resistance
+RM${formatPrice(
+coin,
+structure.resistance
+)}
+
+📈 Resistance naik ke:
+RM${formatPrice(
 coin,
 price * 1.03
 )}`
@@ -1232,7 +1268,9 @@ price * 1.03
 
             }
 
+            // =====================================
             // BREAKDOWN
+            // =====================================
 
             if(
 
@@ -1292,12 +1330,32 @@ price * 1.03
 
 🪙 ${coin}
 
-${formatPrice(
+RM${formatPrice(
 coin,
 price
 )}
 
-🛑 Support pecah`
+⚠️ Support pecah
+
+🟢 Support
+RM${formatPrice(
+coin,
+structure.support
+)}
+
+🔴 Resistance
+RM${formatPrice(
+coin,
+structure.resistance
+)}
+
+📉 Seller kuat
+
+📉 Support turun ke:
+RM${formatPrice(
+coin,
+structure.support * 0.98
+)}`
 
                     );
 
@@ -1311,7 +1369,9 @@ price
 
             }
 
+            // =====================================
             // ACCUMULATION
+            // =====================================
 
             if(
 
@@ -1375,7 +1435,7 @@ price
 
 🪙 ${coin}
 
-${formatPrice(
+RM${formatPrice(
 coin,
 price
 )}`
@@ -1496,9 +1556,7 @@ async function checkTelegramCommands(){
             else if(text === "/scanner"){
 
                 await sendTelegram(
-
-`🤖 SCANNER ACTIVE`
-
+                    "🔍 SCANNER ACTIVE"
                 );
 
             }
@@ -1506,9 +1564,7 @@ async function checkTelegramCommands(){
             else if(text === "/status"){
 
                 await sendTelegram(
-
-`🤖 BOT ONLINE`
-
+                    "🤖 BOT ONLINE"
                 );
 
             }
@@ -1557,7 +1613,9 @@ setTimeout(async ()=>{
 
     await setTelegramCommands();
 
+    // =====================================
     // COMMAND LOOP
+    // =====================================
 
     setInterval(
 
@@ -1567,7 +1625,9 @@ setTimeout(async ()=>{
 
     );
 
-    // SCANNER
+    // =====================================
+    // AUTO SCANNER
+    // =====================================
 
     setInterval(
 
@@ -1577,7 +1637,9 @@ setTimeout(async ()=>{
 
     );
 
+    // =====================================
     // PRICE UPDATE
+    // =====================================
 
     setInterval(
 
@@ -1587,7 +1649,9 @@ setTimeout(async ()=>{
 
     );
 
+    // =====================================
     // MARKET STRUCTURE
+    // =====================================
 
     setInterval(
 
