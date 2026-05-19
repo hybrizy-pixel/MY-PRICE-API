@@ -222,6 +222,12 @@ async function setTelegramCommands(){
                     },
 
                     {
+                        command: "news",
+                        description:
+                        "Latest crypto news"
+                    },
+
+                    {
                         command: "top",
                         description:
                         "Top bullish coin"
@@ -372,8 +378,10 @@ function detectTrend(
 
     }
 
-    if(resistanceVolume >
-        supportVolume * 1.5){
+    if(
+        resistanceVolume >
+        supportVolume * 1.5
+    ){
 
         return "BEARISH";
 
@@ -569,7 +577,7 @@ walls.resistance
 }
 
 // =====================================
-// ENTRY DETECTOR
+// HIGH QUALITY ENTRY
 // =====================================
 
 async function findPossibleEntry(){
@@ -628,7 +636,7 @@ async function findPossibleEntry(){
             );
 
             // =====================================
-            // HIGH QUALITY ENTRY
+            // HIGH QUALITY FILTER
             // =====================================
 
             if(
@@ -748,10 +756,6 @@ RM${cleanProfit.toFixed(2)}
 
         }
 
-        // =====================================
-        // NO ENTRY
-        // =====================================
-
         if(!found){
 
             await sendTelegram(
@@ -783,6 +787,75 @@ RM${cleanProfit.toFixed(2)}
 }
 
 // =====================================
+// NEWS COMMAND
+// =====================================
+
+async function sendNews(keyword = "CRYPTO"){
+
+    try{
+
+        const response =
+        await axios.get(
+
+            "https://min-api.cryptocompare.com/data/v2/news/?lang=EN"
+
+        );
+
+        const news =
+        response.data.Data;
+
+        let filtered =
+        news.filter(item =>
+
+            item.title
+            .toUpperCase()
+            .includes(keyword)
+
+        );
+
+        if(filtered.length === 0){
+
+            filtered =
+            news.slice(0,3);
+
+        }
+
+        let message =
+
+`━━━━━━━━━━━━━━━
+
+📰 ${keyword} NEWS
+
+`;
+
+        filtered
+        .slice(0,3)
+        .forEach((item,index)=>{
+
+            message +=
+
+`\n${index + 1}. ${item.title}\n`;
+
+        });
+
+        message +=
+`\n━━━━━━━━━━━━━━━`;
+
+        await sendTelegram(
+            message
+        );
+
+    }catch(err){
+
+        console.log(
+            "News failed"
+        );
+
+    }
+
+}
+
+// =====================================
 // COMMAND LIST
 // =====================================
 
@@ -803,11 +876,14 @@ Market structure semasa
 🎯 /entry
 Cari possible entry terbaik
 
+📰 /news BTC
+Latest crypto news
+
 🔥 /top
 Top bullish coin
 
 ⚙️ /scanner
-Semak status scanner
+Scanner status
 
 📋 /list
 List semua command
@@ -857,15 +933,11 @@ async function checkTelegramCommands(){
             const text =
             update.message.text;
 
-            // PRICE
-
             if(text === "/price"){
 
                 await scanPrices();
 
             }
-
-            // MARKET
 
             else if(text === "/market"){
 
@@ -873,23 +945,40 @@ async function checkTelegramCommands(){
 
             }
 
-            // ENTRY
-
             else if(text === "/entry"){
 
                 await findPossibleEntry();
 
             }
 
-            // LIST
+            else if(
+                text.startsWith("/news")
+            ){
+
+                const parts =
+                text.split(" ");
+
+                let keyword =
+                "CRYPTO";
+
+                if(parts[1]){
+
+                    keyword =
+                    parts[1].toUpperCase();
+
+                }
+
+                await sendNews(
+                    keyword
+                );
+
+            }
 
             else if(text === "/list"){
 
                 await sendCommandList();
 
             }
-
-            // TOP
 
             else if(text === "/top"){
 
@@ -908,8 +997,6 @@ async function checkTelegramCommands(){
                 );
 
             }
-
-            // SCANNER
 
             else if(text === "/scanner"){
 
