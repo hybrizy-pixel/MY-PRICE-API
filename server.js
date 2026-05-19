@@ -377,7 +377,7 @@ async function scanPrices(){
     try{
 
         let message =
-        "📊 PRICE UPDATE\n\n";
+        "📊 PRICE UPDATE\n";
 
         const coins =
         Object.keys(MAIN_COINS);
@@ -442,15 +442,25 @@ async function scanPrices(){
 
             message +=
 
-`${direction} ${coin} RM${formatPrice(
+`\n━━━━━━━━━━━━━━━
+
+📊 ${coin}
+
+${direction} RM${formatPrice(
 coin,
 price
-)} (${change.toFixed(2)}%)\n`;
+)}
+
+📈 Change ${change.toFixed(2)}%
+`;
 
             LAST_PRICES[coin] =
             price;
 
         }
+
+        message +=
+        "\n━━━━━━━━━━━━━━━";
 
         await sendTelegram(message);
 
@@ -473,7 +483,7 @@ async function marketStructure(){
     try{
 
         let message =
-        "📊 MARKET STRUCTURE\n\n";
+        "📊 MARKET STRUCTURE\n";
 
         for(const coin in MAIN_COINS){
 
@@ -540,7 +550,9 @@ async function marketStructure(){
 
             message +=
 
-`📊 ${coin}
+`\n━━━━━━━━━━━━━━━
+
+📊 ${coin}
 
 💰 Price RM${formatPrice(
 coin,
@@ -551,18 +563,15 @@ price
 coin,
 support
 )}
-
 📦 Buy Volume ${supportVolume.toFixed(2)}
 
 🔴 Resistance RM${formatPrice(
 coin,
 resistance
 )}
-
 📦 Sell Volume ${resistanceVolume.toFixed(2)}
 
 📈 Trend ${trend}
-
 `;
 
             LAST_SUPPORT[coin] =
@@ -572,6 +581,9 @@ resistance
             resistance;
 
         }
+
+        message +=
+        "\n━━━━━━━━━━━━━━━";
 
         await sendTelegram(message);
 
@@ -663,10 +675,6 @@ async function eventScanner(){
                         resistanceVolume
                     );
 
-                    // =====================================
-                    // FIRST MEMORY
-                    // =====================================
-
                     if(!LAST_EVENT_PRICE[coin]){
 
                         LAST_EVENT_PRICE[coin] =
@@ -681,10 +689,6 @@ async function eventScanner(){
 
                     const now =
                     Date.now();
-
-                    // =====================================
-                    // COOLDOWN
-                    // =====================================
 
                     if(!LAST_ALERT_TIME[coin]){
 
@@ -708,47 +712,27 @@ async function eventScanner(){
 
                     }
 
-                    // =====================================
                     // RESET BREAKOUT
-                    // =====================================
 
-                    if(
-
-                        price <
-                        resistance
-
-                    ){
+                    if(price < resistance){
 
                         BREAKOUT_ACTIVE[coin] =
                         false;
 
                     }
 
-                    // =====================================
                     // RESET BREAKDOWN
-                    // =====================================
 
-                    if(
-
-                        price >
-                        support
-
-                    ){
+                    if(price > support){
 
                         BREAKDOWN_ACTIVE[coin] =
                         false;
 
                     }
 
-                    // =====================================
                     // RESET ACCUMULATION
-                    // =====================================
 
-                    if(
-
-                        trend !== "BULLISH"
-
-                    ){
+                    if(trend !== "BULLISH"){
 
                         ACCUMULATION_ACTIVE[coin] =
                         false;
@@ -787,7 +771,9 @@ async function eventScanner(){
 
                         sendTelegram(
 
-`👀 ${coin} EARLY ACCUMULATION DIKESAN
+`━━━━━━━━━━━━━━━
+
+👀 ${coin} EARLY ACCUMULATION DIKESAN
 
 💰 Price RM${formatPrice(
 coin,
@@ -802,7 +788,9 @@ price
 
 📦 Sell Volume ${resistanceVolume.toFixed(2)}
 
-⚠️ Sistem sedang scan market`
+⚠️ Sistem sedang scan market
+
+━━━━━━━━━━━━━━━`
 
                         );
 
@@ -841,7 +829,9 @@ price
 
                             sendTelegram(
 
-`🚀 ${coin} EARLY ACCUMULATION CONFIRMED
+`━━━━━━━━━━━━━━━
+
+🚀 ${coin} EARLY ACCUMULATION CONFIRMED
 
 💰 RM${formatPrice(
 coin,
@@ -857,7 +847,9 @@ price
 
 📦 Buy Volume ${supportVolume.toFixed(2)}
 
-🔥 Breakout probability tinggi`
+🔥 Breakout probability tinggi
+
+━━━━━━━━━━━━━━━`
 
                             );
 
@@ -891,7 +883,9 @@ price
 
                         sendTelegram(
 
-`🚀 ${coin} BREAKOUT KE ATAS
+`━━━━━━━━━━━━━━━
+
+🚀 ${coin} BREAKOUT KE ATAS
 
 💰 RM${formatPrice(
 coin,
@@ -910,7 +904,9 @@ resistance
 
 📈 Trend ${trend}
 
-🔥 Buyer takeover market`
+🔥 Buyer takeover market
+
+━━━━━━━━━━━━━━━`
 
                         );
 
@@ -942,7 +938,9 @@ resistance
 
                         sendTelegram(
 
-`🔻 ${coin} BREAKDOWN KE BAWAH
+`━━━━━━━━━━━━━━━
+
+🔻 ${coin} BREAKDOWN KE BAWAH
 
 💰 RM${formatPrice(
 coin,
@@ -961,7 +959,9 @@ support
 
 📉 Trend ${trend}
 
-⚠️ Seller takeover market`
+⚠️ Seller takeover market
+
+━━━━━━━━━━━━━━━`
 
                         );
 
@@ -983,7 +983,9 @@ support
 
                         sendTelegram(
 
-`⚠️ ${coin} REJECTION
+`━━━━━━━━━━━━━━━
+
+⚠️ ${coin} REJECTION
 
 💰 Price RM${formatPrice(
 coin,
@@ -1006,7 +1008,9 @@ support
 
 📉 Trend ${trend}
 
-⚠️ Seller wall lebih kuat`
+⚠️ Seller wall lebih kuat
+
+━━━━━━━━━━━━━━━`
 
                         );
 
@@ -1095,11 +1099,15 @@ async function cryptoNewsScanner(){
 
             sendTelegram(
 
-`📰 LIVE CRYPTO NEWS
+`━━━━━━━━━━━━━━━
+
+📰 LIVE CRYPTO NEWS
 
 ${title}
 
-📰 Update pasaran kripto`
+📰 Update pasaran kripto
+
+━━━━━━━━━━━━━━━`
 
             );
 
@@ -1144,7 +1152,6 @@ setTimeout(() => {
     cryptoNewsScanner();
 
     // PRICE UPDATE
-    // EVERY 5 MINUTES
 
     setInterval(
         scanPrices,
@@ -1152,15 +1159,13 @@ setTimeout(() => {
     );
 
     // MARKET STRUCTURE
-    // EVERY 15 MINUTES
 
     setInterval(
         marketStructure,
         900000
     );
 
-    // REALTIME EVENT SCANNER
-    // EVERY 5 SECONDS
+    // EVENT SCANNER
 
     setInterval(
         eventScanner,
@@ -1168,7 +1173,6 @@ setTimeout(() => {
     );
 
     // NEWS
-    // EVERY 30 MINUTES
 
     setInterval(
         cryptoNewsScanner,
