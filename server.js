@@ -91,6 +91,7 @@ const BREAKOUT_CANDIDATE = {};
 const BREAKOUT_TIMER = {};
 
 const LAST_EVENT_PRICE = {};
+const TREND_DIRECTION = {};
 
 // =====================================
 // SETTINGS
@@ -341,6 +342,65 @@ function getWalls(
 }
 
 // =====================================
+// TREND DETECTOR
+// =====================================
+
+function detectTrend(
+    price,
+    support,
+    resistance,
+    supportVolume,
+    resistanceVolume
+){
+
+    const ratio =
+    supportVolume /
+    resistanceVolume;
+
+    // STRONG BULLISH
+
+    if(
+
+        price > support &&
+        ratio > 1.8
+
+    ){
+
+        return "BULLISH";
+
+    }
+
+    // WEAK / SIDEWAYS
+
+    if(
+
+        ratio > 0.8 &&
+        ratio < 1.3
+
+    ){
+
+        return "SIDEWAYS";
+
+    }
+
+    // BEARISH
+
+    if(
+
+        resistanceVolume >
+        supportVolume * 1.5
+
+    ){
+
+        return "BEARISH";
+
+    }
+
+    return "NEUTRAL";
+
+}
+
+// =====================================
 // PRICE UPDATE
 // EVERY 5 MINUTES
 // =====================================
@@ -505,59 +565,41 @@ async function marketStructure(){
 
             } = walls;
 
-            let strength =
-            "";
+            const trend =
+            detectTrend(
 
-            if(
+                price,
+                support,
+                resistance,
+                supportVolume,
+                resistanceVolume
 
-                supportVolume >
-                resistanceVolume * 1.5
-
-            ){
-
-                strength =
-                "🔥 Buyer pressure kuat";
-
-            }
-
-            else if(
-
-                resistanceVolume >
-                supportVolume * 1.5
-
-            ){
-
-                strength =
-                "⚠️ Resistance kuat";
-
-            }
-
-            else{
-
-                strength =
-                "➖ Market masih seimbang";
-
-            }
+            );
 
             message +=
 
 `📊 ${coin}
+
+💰 Price RM${formatPrice(
+coin,
+price
+)}
 
 🟢 Support RM${formatPrice(
 coin,
 support
 )}
 
-Volume: ${supportVolume.toFixed(2)}
+📦 Buy Volume ${supportVolume.toFixed(2)}
 
 🔴 Resistance RM${formatPrice(
 coin,
 resistance
 )}
 
-Volume: ${resistanceVolume.toFixed(2)}
+📦 Sell Volume ${resistanceVolume.toFixed(2)}
 
-${strength}
+📈 Trend ${trend}
 
 `;
 
@@ -566,6 +608,9 @@ ${strength}
 
             LAST_RESISTANCE[coin] =
             resistance;
+
+            TREND_DIRECTION[coin] =
+            trend;
 
         }
 
@@ -583,7 +628,6 @@ ${strength}
 
 // =====================================
 // EVENT SCANNER
-// REALTIME 5 SEC
 // =====================================
 
 async function eventScanner(){
@@ -653,6 +697,35 @@ async function eventScanner(){
                         resistanceVolume
 
                     } = walls;
+
+                    const trend =
+                    detectTrend(
+
+                        price,
+                        support,
+                        resistance,
+                        supportVolume,
+                        resistanceVolume
+
+                    );
+
+                    // =====================================
+                    // TREND FILTER
+                    // =====================================
+
+                    if(
+
+                        trend === "BEARISH"
+
+                    ){
+
+                        console.log(
+                            `${coin} bearish trend filtered`
+                        );
+
+                        return;
+
+                    }
 
                     // =====================================
                     // FIRST MEMORY
@@ -735,7 +808,7 @@ async function eventScanner(){
                     }
 
                     // =====================================
-                    // EARLY BUYER MOMENTUM
+                    // BUYER MOMENTUM
                     // =====================================
 
                     if(
@@ -743,7 +816,8 @@ async function eventScanner(){
                         !MOMENTUM_ACTIVE[coin] &&
 
                         change > 0.3 &&
-                        ratio > 1.5
+                        ratio > 1.8 &&
+                        trend === "BULLISH"
 
                     ){
 
@@ -751,7 +825,7 @@ async function eventScanner(){
 
 `🚀 ${coin} BUYER MOMENTUM
 
-RM${formatPrice(
+💰 RM${formatPrice(
 coin,
 oldPrice
 )} → RM${formatPrice(
@@ -759,7 +833,13 @@ coin,
 price
 )}
 
-🔥 Buyer acceleration detected`
+🟢 Buyer wall semakin kuat
+
+📦 Buy Volume ${supportVolume.toFixed(2)}
+
+📈 Trend ${trend}
+
+🔥 Momentum increasing`
 
                         );
 
@@ -772,82 +852,77 @@ price
                     }
 
                     // =====================================
-                    // SELLER MOMENTUM
-                    // =====================================
-
-                    else if(
-
-                        resistanceVolume >
-                        supportVolume * 2 &&
-
-                        change < -0.5
-
-                    ){
-
-                        sendTelegram(
-
-`🔴 ${coin} SELLER MOMENTUM
-
-RM${formatPrice(
-coin,
-oldPrice
-)} → RM${formatPrice(
-coin,
-price
-)}
-
-📉 Momentum ke bawah`
-
-                        );
-
-                        LAST_ALERT_TIME[coin] =
-                        now;
-
-                    }
-
-                    // =====================================
-                    // SMART BREAKOUT FILTER
+                    // ACCUMULATION DETECTOR
                     // =====================================
 
                     else if(
 
                         !BREAKOUT_ACTIVE[coin] &&
 
-                        price >=
-                        resistance * 0.999 &&
+                        !BREAKOUT_CANDIDATE[coin] &&
 
-                        ratio > 1.4
+                        ratio > 1.5 &&
+
+                        price >= resistance * 0.998 &&
+
+                        supportVolume >
+                        resistanceVolume * 1.5 &&
+
+                        trend === "BULLISH"
 
                     ){
 
-                        // FIRST DETECTION
+                        sendTelegram(
 
-                        if(!BREAKOUT_CANDIDATE[coin]){
+`👀 ${coin} ACCUMULATION DETECTED
 
-                            BREAKOUT_CANDIDATE[coin] =
-                            true;
-
-                            BREAKOUT_TIMER[coin] =
-                            now;
-
-                            sendTelegram(
-
-`⚠️ ${coin} POTENTIAL BREAKOUT
-
-RM${formatPrice(
+💰 Price RM${formatPrice(
 coin,
 price
 )}
 
-👀 Monitoring breakout strength`
+🟢 Buyer wall meningkat
 
-                            );
+🔴 Resistance makin lemah
 
-                        }
+📦 Buy Volume ${supportVolume.toFixed(2)}
 
-                        // CONFIRM BREAKOUT
+📦 Sell Volume ${resistanceVolume.toFixed(2)}
 
-                        else if(
+📈 Trend ${trend}
+
+⚠️ Possible breakout brewing`
+
+                        );
+
+                        BREAKOUT_CANDIDATE[coin] =
+                        true;
+
+                        BREAKOUT_TIMER[coin] =
+                        now;
+
+                    }
+
+                    // =====================================
+                    // CONFIRMED BREAKOUT
+                    // =====================================
+
+                    else if(
+
+                        BREAKOUT_CANDIDATE[coin] &&
+
+                        !BREAKOUT_ACTIVE[coin] &&
+
+                        price >
+                        resistance * 1.002 &&
+
+                        ratio > 1.8 &&
+
+                        trend === "BULLISH"
+
+                    ){
+
+                        if(
 
                             now -
                             BREAKOUT_TIMER[coin]
@@ -859,10 +934,19 @@ price
 
 `🚀 ${coin} CONFIRMED BREAKOUT
 
-RM${formatPrice(
+💰 Price RM${formatPrice(
 coin,
 price
 )}
+
+🔴 Resistance Broken RM${formatPrice(
+coin,
+resistance
+)}
+
+📦 Buyer Volume ${supportVolume.toFixed(2)}
+
+📈 Trend ${trend}
 
 🔥 Breakout confirmed`
 
@@ -881,7 +965,9 @@ price
 
                     }
 
-                    // RESET BREAKOUT CANDIDATE
+                    // =====================================
+                    // RESET BREAKOUT
+                    // =====================================
 
                     else{
 
@@ -907,12 +993,28 @@ price
 
 `⚠️ ${coin} REJECTION
 
-RM${formatPrice(
+💰 Price RM${formatPrice(
 coin,
 price
 )}
 
-🔴 Heavy resistance detected`
+🔴 Resistance RM${formatPrice(
+coin,
+resistance
+)}
+
+📦 Sell Volume ${resistanceVolume.toFixed(2)}
+
+🟢 Support RM${formatPrice(
+coin,
+support
+)}
+
+📦 Buy Volume ${supportVolume.toFixed(2)}
+
+📉 Trend ${trend}
+
+⚠️ Seller wall lebih kuat`
 
                         );
 
@@ -935,6 +1037,9 @@ price
 
                     LAST_PRICES[coin] =
                     price;
+
+                    TREND_DIRECTION[coin] =
+                    trend;
 
                 }catch(err){
 
