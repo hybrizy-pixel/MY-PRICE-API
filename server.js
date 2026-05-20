@@ -10,8 +10,7 @@ const app = express();
 
 app.use(cors());
 
-const PORT =
-process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
 // =====================================
 // ENV
@@ -31,7 +30,7 @@ const TELEGRAM_API =
 `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 // =====================================
-// RANDOM INSTANCE CODE
+// RANDOM INSTANCE
 // =====================================
 
 const INSTANCE =
@@ -101,21 +100,29 @@ function formatPrice(
 
     }
 
-    if(
+    return Number(price)
+    .toFixed(4);
 
-        coin === "GRT" ||
-        coin === "XLM" ||
-        coin === "CRV"
+}
 
-    ){
+// =====================================
+// FORMAT VOLUME
+// =====================================
 
-        return Number(price)
-        .toFixed(4);
+function formatVolume(
+    coin,
+    volume
+){
+
+    if(coin === "BTC"){
+
+        return `${Number(volume)
+        .toFixed(4)} BTC`;
 
     }
 
-    return Number(price)
-    .toFixed(2);
+    return `${Number(volume)
+    .toLocaleString()} ${coin}`;
 
 }
 
@@ -183,8 +190,6 @@ async function sendTelegram(
 
 ${message}`,
 
-                parse_mode: "HTML",
-
                 ...extra
 
             }
@@ -233,7 +238,7 @@ async function setTelegramCommands(){
                     {
                         command: "entry",
                         description:
-                        "High entry"
+                        "Entry update"
                     },
 
                     {
@@ -245,7 +250,7 @@ async function setTelegramCommands(){
                     {
                         command: "testsell",
                         description:
-                        "Test sell"
+                        "Test sell now"
                     },
 
                     {
@@ -280,9 +285,7 @@ async function setTelegramCommands(){
 
     }catch(err){
 
-        console.log(
-            err.message
-        );
+        console.log(err.message);
 
     }
 
@@ -378,7 +381,7 @@ function getMarketComment(
 }
 
 // =====================================
-// MARKET STRUCTURE
+// GET MARKET STRUCTURE
 // =====================================
 
 async function getMarketStructure(coin){
@@ -404,8 +407,14 @@ async function getMarketStructure(coin){
 
         }
 
+        const bids =
+        orderbook.bids;
+
+        const asks =
+        orderbook.asks;
+
         const supports =
-        orderbook.bids.filter(b=>{
+        bids.filter(b=>{
 
             const price =
             parseFloat(b.price);
@@ -425,7 +434,7 @@ async function getMarketStructure(coin){
         });
 
         const resistances =
-        orderbook.asks.filter(a=>{
+        asks.filter(a=>{
 
             const price =
             parseFloat(a.price);
@@ -502,7 +511,6 @@ async function getMarketStructure(coin){
             ){
 
                 majorSupport = s;
-
                 break;
 
             }
@@ -522,7 +530,6 @@ async function getMarketStructure(coin){
             ){
 
                 majorResistance = r;
-
                 break;
 
             }
@@ -530,7 +537,7 @@ async function getMarketStructure(coin){
         }
 
         const buyVolume =
-        orderbook.bids.reduce(
+        bids.reduce(
 
             (sum,b)=>
 
@@ -542,7 +549,7 @@ async function getMarketStructure(coin){
         ,0);
 
         const sellVolume =
-        orderbook.asks.reduce(
+        asks.reduce(
 
             (sum,a)=>
 
@@ -554,6 +561,8 @@ async function getMarketStructure(coin){
         ,0);
 
         return {
+
+            currentPrice,
 
             support:
             parseFloat(
@@ -795,9 +804,7 @@ ${grtMessage}`
 
     }catch(err){
 
-        console.log(
-            err.message
-        );
+        console.log(err.message);
 
     }
 
@@ -821,16 +828,6 @@ async function sendMarketStructure(){
             "GRT"
         );
 
-        const btcPrice =
-        await getLivePrice(
-            "BTC"
-        );
-
-        const grtPrice =
-        await getLivePrice(
-            "GRT"
-        );
-
         if(
             !btc ||
             !grt
@@ -848,7 +845,7 @@ async function sendMarketStructure(){
 
 RM${formatPrice(
 "BTC",
-btcPrice
+btc.currentPrice
 )}
 
 ${getMarketComment(
@@ -860,7 +857,10 @@ btc.sellVolume
 RM${formatPrice(
 "BTC",
 btc.support
-)} (${btc.supportVolume.toFixed(2)} BTC)
+)} (${formatVolume(
+"BTC",
+btc.supportVolume
+)})
 
 ${btc.majorSupport
 ?
@@ -868,7 +868,10 @@ ${btc.majorSupport
 RM${formatPrice(
 "BTC",
 btc.majorSupport
-)} (${btc.majorSupportVolume.toFixed(2)} BTC)`
+)} (${formatVolume(
+"BTC",
+btc.majorSupportVolume
+)})`
 :
 ""
 }
@@ -877,7 +880,10 @@ btc.majorSupport
 RM${formatPrice(
 "BTC",
 btc.resistance
-)} (${btc.resistanceVolume.toFixed(2)} BTC)
+)} (${formatVolume(
+"BTC",
+btc.resistanceVolume
+)})
 
 ${btc.majorResistance
 ?
@@ -885,7 +891,10 @@ ${btc.majorResistance
 RM${formatPrice(
 "BTC",
 btc.majorResistance
-)} (${btc.majorResistanceVolume.toFixed(2)} BTC)`
+)} (${formatVolume(
+"BTC",
+btc.majorResistanceVolume
+)})`
 :
 ""
 }
@@ -896,7 +905,7 @@ btc.majorResistance
 
 RM${formatPrice(
 "GRT",
-grtPrice
+grt.currentPrice
 )}
 
 ${getMarketComment(
@@ -908,7 +917,10 @@ grt.sellVolume
 RM${formatPrice(
 "GRT",
 grt.support
-)} (${grt.supportVolume.toFixed(0)} GRT)
+)} (${formatVolume(
+"GRT",
+grt.supportVolume
+)})
 
 ${grt.majorSupport
 ?
@@ -916,7 +928,10 @@ ${grt.majorSupport
 RM${formatPrice(
 "GRT",
 grt.majorSupport
-)} (${grt.majorSupportVolume.toFixed(0)} GRT)`
+)} (${formatVolume(
+"GRT",
+grt.majorSupportVolume
+)})`
 :
 ""
 }
@@ -925,7 +940,10 @@ grt.majorSupport
 RM${formatPrice(
 "GRT",
 grt.resistance
-)} (${grt.resistanceVolume.toFixed(0)} GRT)
+)} (${formatVolume(
+"GRT",
+grt.resistanceVolume
+)})
 
 ${grt.majorResistance
 ?
@@ -933,7 +951,10 @@ ${grt.majorResistance
 RM${formatPrice(
 "GRT",
 grt.majorResistance
-)} (${grt.majorResistanceVolume.toFixed(0)} GRT)`
+)} (${formatVolume(
+"GRT",
+grt.majorResistanceVolume
+)})`
 :
 ""
 }`
@@ -942,11 +963,63 @@ grt.majorResistance
 
     }catch(err){
 
-        console.log(
-            err.message
-        );
+        console.log(err.message);
 
     }
+
+}
+
+// =====================================
+// TEST ENTRY
+// =====================================
+
+async function sendTestEntry(){
+
+    await sendTelegram(
+
+`🎯 HIGH ENTRY
+
+🟢 XLM
+
+RM0.5123
+
+🟢 Support
+RM0.5010 (120,000 XLM)
+
+🔴 Resistance
+RM0.5200 (85,000 XLM)
+
+💵 Minimum Entry
+RM65
+
+🪙 Minimum Coin
+126 XLM
+
+⚡ 91% Setup`,
+
+{
+
+reply_markup: {
+
+inline_keyboard: [
+
+[
+{
+text:
+"✅ CONFIRM ENTRY",
+
+callback_data:
+"confirm_XLM_0.5123_0.5010"
+}
+]
+
+]
+
+}
+
+}
+
+    );
 
 }
 
@@ -961,8 +1034,6 @@ async function sendEntryUpdate(){
         let found =
         false;
 
-        let message = "";
-
         for(const coin of Object.keys(COINS)){
 
             const structure =
@@ -970,15 +1041,7 @@ async function sendEntryUpdate(){
                 coin
             );
 
-            const price =
-            await getLivePrice(
-                coin
-            );
-
-            if(
-                !structure ||
-                !price
-            ){
+            if(!structure){
 
                 continue;
 
@@ -1005,7 +1068,7 @@ async function sendEntryUpdate(){
 
                 );
 
-                message +=
+                await sendTelegram(
 
 `🎯 HIGH ENTRY
 
@@ -1013,20 +1076,26 @@ async function sendEntryUpdate(){
 
 RM${formatPrice(
 coin,
-price
+structure.currentPrice
 )}
 
 🟢 Support
 RM${formatPrice(
 coin,
 structure.support
-)} (${structure.supportVolume.toFixed(0)} ${coin})
+)} (${formatVolume(
+coin,
+structure.supportVolume
+)})
 
 🔴 Resistance
 RM${formatPrice(
 coin,
 structure.resistance
-)} (${structure.resistanceVolume.toFixed(0)} ${coin})
+)} (${formatVolume(
+coin,
+structure.resistanceVolume
+)})
 
 💵 Minimum Entry
 RM65
@@ -1034,11 +1103,7 @@ RM65
 🪙 Minimum Coin
 126 ${coin}
 
-⚡ ${setup}% Setup`;
-
-                await sendTelegram(
-
-message,
+⚡ ${setup}% Setup`,
 
 {
 
@@ -1052,7 +1117,7 @@ text:
 "✅ CONFIRM ENTRY",
 
 callback_data:
-`confirm_${coin}_${price}_${structure.support}`
+`confirm_${coin}_${structure.currentPrice}_${structure.support}`
 }
 ]
 
@@ -1084,16 +1149,14 @@ No Best Entry Now`
 
     }catch(err){
 
-        console.log(
-            err.message
-        );
+        console.log(err.message);
 
     }
 
 }
 
 // =====================================
-// TEST COMMANDS
+// TEST SELL
 // =====================================
 
 async function sendTestSell(){
@@ -1144,6 +1207,10 @@ callback_data:
 
 }
 
+// =====================================
+// TEST EXTEND
+// =====================================
+
 async function sendTestExtend(){
 
     await sendTelegram(
@@ -1185,6 +1252,10 @@ callback_data:
     );
 
 }
+
+// =====================================
+// TEST CUTLOSS
+// =====================================
 
 async function sendTestCutloss(){
 
@@ -1234,6 +1305,10 @@ callback_data:
 
 }
 
+// =====================================
+// TEST OFF
+// =====================================
+
 async function sendTestOff(){
 
     await sendTelegram(
@@ -1251,7 +1326,7 @@ async function sendTestOff(){
 }
 
 // =====================================
-// MONITOR ACTIVE TRADES
+// MONITOR TRADES
 // =====================================
 
 async function monitorTrades(){
@@ -1353,7 +1428,7 @@ callback_data:
             }
 
             // =====================================
-            // PROFIT EXTENDED
+            // EXTENDED
             // =====================================
 
             if(
@@ -1421,7 +1496,7 @@ callback_data:
             }
 
             // =====================================
-            // AUTO MONITOR OFF
+            // AUTO OFF SELL
             // =====================================
 
             if(
@@ -1526,7 +1601,7 @@ callback_data:
                 }
 
                 // =====================================
-                // CUTLOSS AUTO OFF
+                // AUTO OFF CUTLOSS
                 // =====================================
 
                 if(
@@ -1566,16 +1641,14 @@ callback_data:
 
     }catch(err){
 
-        console.log(
-            err.message
-        );
+        console.log(err.message);
 
     }
 
 }
 
 // =====================================
-// TELEGRAM HANDLER
+// TELEGRAM LOOP
 // =====================================
 
 let LAST_UPDATE_ID = 0;
@@ -1600,7 +1673,7 @@ async function checkTelegramCommands(){
             update.update_id;
 
             // =====================================
-            // CALLBACK BUTTON
+            // CALLBACK
             // =====================================
 
             if(
@@ -1665,6 +1738,10 @@ async function checkTelegramCommands(){
                     )
                 ){
 
+                    delete ACTIVE_TRADES[
+                        userId
+                    ];
+
                     await sendTelegram(
 
 `✅ Trade Closed
@@ -1672,10 +1749,6 @@ async function checkTelegramCommands(){
 🟢 Monitoring stopped`
 
                     );
-
-                    delete ACTIVE_TRADES[
-                        userId
-                    ];
 
                 }
 
@@ -1689,6 +1762,10 @@ async function checkTelegramCommands(){
                     )
                 ){
 
+                    delete ACTIVE_TRADES[
+                        userId
+                    ];
+
                     await sendTelegram(
 
 `✅ Trade Closed
@@ -1696,10 +1773,6 @@ async function checkTelegramCommands(){
 🔴 Monitoring stopped`
 
                     );
-
-                    delete ACTIVE_TRADES[
-                        userId
-                    ];
 
                 }
 
@@ -1924,7 +1997,7 @@ sl
                 lower === "/testentry"
             ){
 
-                await sendEntryUpdate();
+                await sendTestEntry();
 
             }
 
@@ -1976,9 +2049,7 @@ sl
 
     }catch(err){
 
-        console.log(
-            err.message
-        );
+        console.log(err.message);
 
     }
 
@@ -1996,7 +2067,12 @@ app.get("/", (req,res)=>{
         "BOT ACTIVE",
 
         instance:
-        INSTANCE
+        INSTANCE,
+
+        activeTrades:
+        Object.keys(
+            ACTIVE_TRADES
+        ).length
 
     });
 
@@ -2085,7 +2161,7 @@ setTimeout(async ()=>{
     );
 
     // =====================================
-    // LIVE MONITOR
+    // MONITOR TRADES
     // =====================================
 
     setInterval(
