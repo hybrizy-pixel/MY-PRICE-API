@@ -204,7 +204,8 @@ ${message}`
     }catch(err){
 
         console.log(
-            "❌ TELEGRAM FAILED"
+            "❌ TELEGRAM FAILED",
+            err.message
         );
 
     }
@@ -433,9 +434,7 @@ async function getMarketStructure(coin){
 
         }
 
-        // =====================================
         // SUPPORT
-        // =====================================
 
         const validBids =
         orderbook.bids.filter(b=>{
@@ -457,9 +456,7 @@ async function getMarketStructure(coin){
 
         });
 
-        // =====================================
         // RESISTANCE
-        // =====================================
 
         const validAsks =
         orderbook.asks.filter(a=>{
@@ -481,9 +478,16 @@ async function getMarketStructure(coin){
 
         });
 
-        // =====================================
+        if(
+            validBids.length === 0 ||
+            validAsks.length === 0
+        ){
+
+            return null;
+
+        }
+
         // BIGGEST SUPPORT
-        // =====================================
 
         let support =
         validBids[0];
@@ -508,9 +512,7 @@ async function getMarketStructure(coin){
 
         }
 
-        // =====================================
         // BIGGEST RESISTANCE
-        // =====================================
 
         let resistance =
         validAsks[0];
@@ -535,9 +537,7 @@ async function getMarketStructure(coin){
 
         }
 
-        // =====================================
         // TOTAL VOLUME
-        // =====================================
 
         const buyVolume =
         orderbook.bids.reduce(
@@ -590,7 +590,12 @@ async function getMarketStructure(coin){
 
         };
 
-    }catch{
+    }catch(err){
+
+        console.log(
+            "MARKET STRUCTURE ERROR",
+            err.message
+        );
 
         return null;
 
@@ -656,17 +661,25 @@ function calculateMinimumBuy(price){
 
 async function sendPriceCommand(){
 
-    const btc =
-    await getLivePrice(
-        "BTC"
-    );
+    try{
 
-    const grt =
-    await getLivePrice(
-        "GRT"
-    );
+        const btc =
+        await getLivePrice(
+            "BTC"
+        );
 
-    await sendTelegram(
+        const grt =
+        await getLivePrice(
+            "GRT"
+        );
+
+        if(!btc || !grt){
+
+            return;
+
+        }
+
+        await sendTelegram(
 
 `₿ BTC
 RM${formatPrice(
@@ -680,7 +693,16 @@ RM${formatPrice(
 grt
 )}`
 
-    );
+        );
+
+    }catch(err){
+
+        console.log(
+            "PRICE COMMAND ERROR",
+            err.message
+        );
+
+    }
 
 }
 
@@ -690,27 +712,42 @@ grt
 
 async function sendMarketCommand(){
 
-    const btc =
-    await getMarketStructure(
-        "BTC"
-    );
+    try{
 
-    const btcPrice =
-    await getLivePrice(
-        "BTC"
-    );
+        const btc =
+        await getMarketStructure(
+            "BTC"
+        );
 
-    const grt =
-    await getMarketStructure(
-        "GRT"
-    );
+        const btcPrice =
+        await getLivePrice(
+            "BTC"
+        );
 
-    const grtPrice =
-    await getLivePrice(
-        "GRT"
-    );
+        const grt =
+        await getMarketStructure(
+            "GRT"
+        );
 
-    await sendTelegram(
+        const grtPrice =
+        await getLivePrice(
+            "GRT"
+        );
+
+        if(
+
+            !btc ||
+            !grt ||
+            !btcPrice ||
+            !grtPrice
+
+        ){
+
+            return;
+
+        }
+
+        await sendTelegram(
 
 `📊 MARKET STRUCTURE
 
@@ -764,7 +801,18 @@ RM${formatPrice(
 grt.resistance
 )} (${grt.resistanceVolume.toFixed(0)} GRT)`
 
-    );
+        );
+
+    }catch(err){
+
+        console.log(
+
+            "MARKET STRUCTURE FAILED",
+            err.message
+
+        );
+
+    }
 
 }
 
@@ -774,75 +822,77 @@ grt.resistance
 
 async function sendEntryCommand(){
 
-    let found =
-    false;
+    try{
 
-    let message = "";
+        let found =
+        false;
 
-    for(const coin in COINS){
+        let message = "";
 
-        const structure =
-        await getMarketStructure(
-            coin
-        );
+        for(const coin in COINS){
 
-        const price =
-        await getLivePrice(
-            coin
-        );
-
-        if(
-            !structure ||
-            !price
-        ){
-
-            continue;
-
-        }
-
-        const pressure =
-        structure.buyVolume /
-        structure.sellVolume;
-
-        const nearBreakout =
-        price >=
-        structure.resistance * 0.995;
-
-        if(
-
-            pressure > 2
-
-            &&
-
-            nearBreakout
-
-        ){
-
-            found = true;
-
-            const tp =
-            price * 1.10;
-
-            const sl =
-            structure.support * 0.995;
-
-            const minimum =
-            calculateMinimumBuy(
-                price
+            const structure =
+            await getMarketStructure(
+                coin
             );
 
-            const confidence =
-            Math.min(
-
-                95,
-
-                Math.floor(
-                    pressure * 35
-                )
-
+            const price =
+            await getLivePrice(
+                coin
             );
 
-            message +=
+            if(
+                !structure ||
+                !price
+            ){
+
+                continue;
+
+            }
+
+            const pressure =
+            structure.buyVolume /
+            structure.sellVolume;
+
+            const nearBreakout =
+            price >=
+            structure.resistance * 0.995;
+
+            if(
+
+                pressure > 2
+
+                &&
+
+                nearBreakout
+
+            ){
+
+                found = true;
+
+                const tp =
+                price * 1.10;
+
+                const sl =
+                structure.support * 0.995;
+
+                const minimum =
+                calculateMinimumBuy(
+                    price
+                );
+
+                const confidence =
+                Math.min(
+
+                    95,
+
+                    Math.floor(
+                        pressure * 35
+                    )
+
+                );
+
+                message +=
 
 `
 
@@ -887,27 +937,36 @@ sl
 
 ⚡ ${confidence}% Setup`;
 
+            }
+
         }
 
-    }
+        if(!found){
 
-    if(!found){
-
-        await sendTelegram(
+            await sendTelegram(
 
 `⏳ ENTRY UPDATE
 
 No Best Entry Now`
 
+            );
+
+            return;
+
+        }
+
+        await sendTelegram(
+            message
         );
 
-        return;
+    }catch(err){
+
+        console.log(
+            "ENTRY ERROR",
+            err.message
+        );
 
     }
-
-    await sendTelegram(
-        message
-    );
 
 }
 
@@ -917,46 +976,57 @@ No Best Entry Now`
 
 async function autoPriceUpdate(){
 
-    const btc =
-    await getLivePrice(
-        "BTC"
-    );
+    try{
 
-    const grt =
-    await getLivePrice(
-        "GRT"
-    );
+        const btc =
+        await getLivePrice(
+            "BTC"
+        );
 
-    let btcMessage = "";
-    let grtMessage = "";
-
-    // BTC
-
-    if(
-        LAST_PRICE_MEMORY.BTC
-    ){
-
-        const old =
-        LAST_PRICE_MEMORY.BTC;
-
-        const percent =
-        (
-            (
-                btc - old
-            ) / old
-        ) * 100;
-
-        const emoji =
-        getPriceEmoji(
-            percent
+        const grt =
+        await getLivePrice(
+            "GRT"
         );
 
         if(
-            old.toFixed(2) ===
-            btc.toFixed(2)
+            !btc ||
+            !grt
         ){
 
-            btcMessage =
+            return;
+
+        }
+
+        let btcMessage = "";
+        let grtMessage = "";
+
+        // BTC
+
+        if(
+            LAST_PRICE_MEMORY.BTC
+        ){
+
+            const old =
+            LAST_PRICE_MEMORY.BTC;
+
+            const percent =
+            (
+                (
+                    btc - old
+                ) / old
+            ) * 100;
+
+            const emoji =
+            getPriceEmoji(
+                percent
+            );
+
+            if(
+                old.toFixed(2) ===
+                btc.toFixed(2)
+            ){
+
+                btcMessage =
 
 `${emoji} BTC
 RM${formatPrice(
@@ -964,9 +1034,9 @@ RM${formatPrice(
 btc
 )} (0.00%)`;
 
-        }else{
+            }else{
 
-            btcMessage =
+                btcMessage =
 
 `${emoji} BTC
 RM${formatPrice(
@@ -979,11 +1049,11 @@ btc
 percent
 )})`;
 
-        }
+            }
 
-    }else{
+        }else{
 
-        btcMessage =
+            btcMessage =
 
 `➖ BTC
 RM${formatPrice(
@@ -991,35 +1061,35 @@ RM${formatPrice(
 btc
 )}`;
 
-    }
+        }
 
-    // GRT
-
-    if(
-        LAST_PRICE_MEMORY.GRT
-    ){
-
-        const old =
-        LAST_PRICE_MEMORY.GRT;
-
-        const percent =
-        (
-            (
-                grt - old
-            ) / old
-        ) * 100;
-
-        const emoji =
-        getPriceEmoji(
-            percent
-        );
+        // GRT
 
         if(
-            old.toFixed(4) ===
-            grt.toFixed(4)
+            LAST_PRICE_MEMORY.GRT
         ){
 
-            grtMessage =
+            const old =
+            LAST_PRICE_MEMORY.GRT;
+
+            const percent =
+            (
+                (
+                    grt - old
+                ) / old
+            ) * 100;
+
+            const emoji =
+            getPriceEmoji(
+                percent
+            );
+
+            if(
+                old.toFixed(4) ===
+                grt.toFixed(4)
+            ){
+
+                grtMessage =
 
 `${emoji} GRT
 RM${formatPrice(
@@ -1027,9 +1097,9 @@ RM${formatPrice(
 grt
 )} (0.00%)`;
 
-        }else{
+            }else{
 
-            grtMessage =
+                grtMessage =
 
 `${emoji} GRT
 RM${formatPrice(
@@ -1042,11 +1112,11 @@ grt
 percent
 )})`;
 
-        }
+            }
 
-    }else{
+        }else{
 
-        grtMessage =
+            grtMessage =
 
 `➖ GRT
 RM${formatPrice(
@@ -1054,21 +1124,30 @@ RM${formatPrice(
 grt
 )}`;
 
-    }
+        }
 
-    LAST_PRICE_MEMORY.BTC =
-    btc;
+        LAST_PRICE_MEMORY.BTC =
+        btc;
 
-    LAST_PRICE_MEMORY.GRT =
-    grt;
+        LAST_PRICE_MEMORY.GRT =
+        grt;
 
-    await sendTelegram(
+        await sendTelegram(
 
 `${btcMessage}
 
 ${grtMessage}`
 
-    );
+        );
+
+    }catch(err){
+
+        console.log(
+            "AUTO PRICE FAILED",
+            err.message
+        );
+
+    }
 
 }
 
@@ -1104,10 +1183,11 @@ ${news.title}`
 
         );
 
-    }catch{
+    }catch(err){
 
         console.log(
-            "NEWS FAILED"
+            "NEWS FAILED",
+            err.message
         );
 
     }
@@ -1189,7 +1269,8 @@ async function checkTelegramCommands(){
     }catch(err){
 
         console.log(
-            "COMMAND ERROR"
+            "COMMAND ERROR",
+            err.message
         );
 
     }
