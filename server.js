@@ -66,8 +66,6 @@ const LAST_ALERT_TIME = {};
 
 const LAST_BREAKOUT_STATE = {};
 const LAST_BREAKDOWN_STATE = {};
-const LAST_BUILDUP_STATE = {};
-const LAST_ACCUMULATION_STATE = {};
 
 const LAST_PRICE_MEMORY = {
 
@@ -254,21 +252,9 @@ async function setTelegramCommands(){
                     },
 
                     {
-                        command: "scanner",
-                        description:
-                        "Scanner status"
-                    },
-
-                    {
                         command: "status",
                         description:
                         "Bot status"
-                    },
-
-                    {
-                        command: "help",
-                        description:
-                        "Help menu"
                     }
 
                 ]
@@ -277,14 +263,10 @@ async function setTelegramCommands(){
 
         );
 
-        console.log(
-            "✅ COMMANDS UPDATED"
-        );
-
     }catch(err){
 
         console.log(
-            "❌ COMMAND UPDATE FAILED"
+            "COMMAND ERROR"
         );
 
     }
@@ -354,8 +336,6 @@ app.get('/price/:pair', async (req,res)=>{
         });
 
     }catch(err){
-
-        console.log(err);
 
         res.status(500).json({
 
@@ -435,13 +415,129 @@ async function getMarketStructure(coin){
     try{
 
         const orderbook =
-        await getOrderbook(coin);
+        await getOrderbook(
+            coin
+        );
 
-        if(!orderbook){
+        const currentPrice =
+        await getLivePrice(
+            coin
+        );
+
+        if(
+            !orderbook ||
+            !currentPrice
+        ){
 
             return null;
 
         }
+
+        // =====================================
+        // SUPPORT
+        // =====================================
+
+        const validBids =
+        orderbook.bids.filter(b=>{
+
+            const price =
+            parseFloat(b.price);
+
+            return (
+
+                price <
+                currentPrice
+
+                &&
+
+                price >
+                currentPrice * 0.995
+
+            );
+
+        });
+
+        // =====================================
+        // RESISTANCE
+        // =====================================
+
+        const validAsks =
+        orderbook.asks.filter(a=>{
+
+            const price =
+            parseFloat(a.price);
+
+            return (
+
+                price >
+                currentPrice
+
+                &&
+
+                price <
+                currentPrice * 1.005
+
+            );
+
+        });
+
+        // =====================================
+        // BIGGEST SUPPORT
+        // =====================================
+
+        let support =
+        validBids[0];
+
+        for(const bid of validBids){
+
+            if(
+
+                parseFloat(
+                    bid.volume
+                ) >
+
+                parseFloat(
+                    support.volume
+                )
+
+            ){
+
+                support = bid;
+
+            }
+
+        }
+
+        // =====================================
+        // BIGGEST RESISTANCE
+        // =====================================
+
+        let resistance =
+        validAsks[0];
+
+        for(const ask of validAsks){
+
+            if(
+
+                parseFloat(
+                    ask.volume
+                ) >
+
+                parseFloat(
+                    resistance.volume
+                )
+
+            ){
+
+                resistance = ask;
+
+            }
+
+        }
+
+        // =====================================
+        // TOTAL VOLUME
+        // =====================================
 
         const buyVolume =
         orderbook.bids.reduce(
@@ -449,7 +545,9 @@ async function getMarketStructure(coin){
             (sum,b)=>
 
             sum +
-            parseFloat(b.volume)
+            parseFloat(
+                b.volume
+            )
 
         ,0);
 
@@ -459,7 +557,9 @@ async function getMarketStructure(coin){
             (sum,a)=>
 
             sum +
-            parseFloat(a.volume)
+            parseFloat(
+                a.volume
+            )
 
         ,0);
 
@@ -467,22 +567,22 @@ async function getMarketStructure(coin){
 
             support:
             parseFloat(
-                orderbook.bids[0].price
+                support.price
             ),
 
             supportVolume:
             parseFloat(
-                orderbook.bids[0].volume
+                support.volume
             ),
 
             resistance:
             parseFloat(
-                orderbook.asks[0].price
+                resistance.price
             ),
 
             resistanceVolume:
             parseFloat(
-                orderbook.asks[0].volume
+                resistance.volume
             ),
 
             buyVolume,
@@ -530,7 +630,7 @@ function getMarketComment(
 }
 
 // =====================================
-// MINIMUM BUY
+// MINIMUM ENTRY
 // =====================================
 
 function calculateMinimumBuy(price){
@@ -556,19 +656,17 @@ function calculateMinimumBuy(price){
 
 async function sendPriceCommand(){
 
-    try{
+    const btc =
+    await getLivePrice(
+        "BTC"
+    );
 
-        const btc =
-        await getLivePrice(
-            "BTC"
-        );
+    const grt =
+    await getLivePrice(
+        "GRT"
+    );
 
-        const grt =
-        await getLivePrice(
-            "GRT"
-        );
-
-        await sendTelegram(
+    await sendTelegram(
 
 `₿ BTC
 RM${formatPrice(
@@ -582,15 +680,7 @@ RM${formatPrice(
 grt
 )}`
 
-        );
-
-    }catch(err){
-
-        console.log(
-            "PRICE COMMAND FAILED"
-        );
-
-    }
+    );
 
 }
 
@@ -600,29 +690,27 @@ grt
 
 async function sendMarketCommand(){
 
-    try{
+    const btc =
+    await getMarketStructure(
+        "BTC"
+    );
 
-        const btc =
-        await getMarketStructure(
-            "BTC"
-        );
+    const btcPrice =
+    await getLivePrice(
+        "BTC"
+    );
 
-        const btcPrice =
-        await getLivePrice(
-            "BTC"
-        );
+    const grt =
+    await getMarketStructure(
+        "GRT"
+    );
 
-        const grt =
-        await getMarketStructure(
-            "GRT"
-        );
+    const grtPrice =
+    await getLivePrice(
+        "GRT"
+    );
 
-        const grtPrice =
-        await getLivePrice(
-            "GRT"
-        );
-
-        await sendTelegram(
+    await sendTelegram(
 
 `📊 MARKET STRUCTURE
 
@@ -676,15 +764,7 @@ RM${formatPrice(
 grt.resistance
 )} (${grt.resistanceVolume.toFixed(0)} GRT)`
 
-        );
-
-    }catch(err){
-
-        console.log(
-            "MARKET COMMAND FAILED"
-        );
-
-    }
+    );
 
 }
 
@@ -694,80 +774,75 @@ grt.resistance
 
 async function sendEntryCommand(){
 
-    try{
+    let found =
+    false;
 
-        let found =
-        false;
+    let message = "";
 
-        let message = "";
+    for(const coin in COINS){
 
-        for(const coin in COINS){
+        const structure =
+        await getMarketStructure(
+            coin
+        );
 
-            const structure =
-            await getMarketStructure(
-                coin
+        const price =
+        await getLivePrice(
+            coin
+        );
+
+        if(
+            !structure ||
+            !price
+        ){
+
+            continue;
+
+        }
+
+        const pressure =
+        structure.buyVolume /
+        structure.sellVolume;
+
+        const nearBreakout =
+        price >=
+        structure.resistance * 0.995;
+
+        if(
+
+            pressure > 2
+
+            &&
+
+            nearBreakout
+
+        ){
+
+            found = true;
+
+            const tp =
+            price * 1.10;
+
+            const sl =
+            structure.support * 0.995;
+
+            const minimum =
+            calculateMinimumBuy(
+                price
             );
 
-            const price =
-            await getLivePrice(
-                coin
+            const confidence =
+            Math.min(
+
+                95,
+
+                Math.floor(
+                    pressure * 35
+                )
+
             );
 
-            if(
-                !structure ||
-                !price
-            ){
-
-                continue;
-
-            }
-
-            const pressure =
-            structure.buyVolume /
-            structure.sellVolume;
-
-            const nearBreakout =
-            price >=
-            structure.resistance * 0.995;
-
-            if(
-
-                pressure > 2
-
-                &&
-
-                nearBreakout
-
-            ){
-
-                found = true;
-
-                const tp1 =
-                price * 1.02;
-
-                const tp2 =
-                price * 1.04;
-
-                const sl =
-                structure.support * 0.995;
-
-                const confidence =
-                Math.min(
-
-                    95,
-
-                    Math.floor(
-                        pressure * 35
-                    )
-
-                );
-
-                const minimum =
-                calculateMinimumBuy(
-                    price
-                );
-
-                message +=
+            message +=
 
 `
 
@@ -792,48 +867,47 @@ coin,
 structure.resistance
 )} (${structure.resistanceVolume.toFixed(2)})
 
-💵 Minimum Buy
+💵 Minimum Entry
 RM${minimum.minimum}
 
 🪙 Minimum Coin
 ${minimum.coin.toFixed(2)}
 
-🎯 TP1: RM${formatPrice(
+🎯 Target 10%
+RM${formatPrice(
 coin,
-tp1
+tp
 )}
 
-🎯 TP2: RM${formatPrice(
-coin,
-tp2
-)}
-
-🛑 SL: RM${formatPrice(
+🛑 SL
+RM${formatPrice(
 coin,
 sl
 )}
 
 ⚡ ${confidence}% Setup`;
 
-            }
-
         }
-
-        if(!found){
-
-            return;
-
-        }
-
-        await sendTelegram(message);
-
-    }catch(err){
-
-        console.log(
-            "ENTRY COMMAND FAILED"
-        );
 
     }
+
+    if(!found){
+
+        await sendTelegram(
+
+`⏳ ENTRY UPDATE
+
+No Best Entry Now`
+
+        );
+
+        return;
+
+    }
+
+    await sendTelegram(
+        message
+    );
 
 }
 
@@ -843,46 +917,46 @@ sl
 
 async function autoPriceUpdate(){
 
-    try{
+    const btc =
+    await getLivePrice(
+        "BTC"
+    );
 
-        const btc =
-        await getLivePrice("BTC");
+    const grt =
+    await getLivePrice(
+        "GRT"
+    );
 
-        const grt =
-        await getLivePrice("GRT");
+    let btcMessage = "";
+    let grtMessage = "";
 
-        let btcMessage = "";
-        let grtMessage = "";
+    // BTC
 
-        // =====================================
-        // BTC
-        // =====================================
+    if(
+        LAST_PRICE_MEMORY.BTC
+    ){
+
+        const old =
+        LAST_PRICE_MEMORY.BTC;
+
+        const percent =
+        (
+            (
+                btc - old
+            ) / old
+        ) * 100;
+
+        const emoji =
+        getPriceEmoji(
+            percent
+        );
 
         if(
-            LAST_PRICE_MEMORY.BTC
+            old.toFixed(2) ===
+            btc.toFixed(2)
         ){
 
-            const old =
-            LAST_PRICE_MEMORY.BTC;
-
-            const percent =
-            (
-                (
-                    btc - old
-                ) / old
-            ) * 100;
-
-            const emoji =
-            getPriceEmoji(
-                percent
-            );
-
-            if(
-                old.toFixed(2) ===
-                btc.toFixed(2)
-            ){
-
-                btcMessage =
+            btcMessage =
 
 `${emoji} BTC
 RM${formatPrice(
@@ -890,9 +964,9 @@ RM${formatPrice(
 btc
 )} (0.00%)`;
 
-            }else{
+        }else{
 
-                btcMessage =
+            btcMessage =
 
 `${emoji} BTC
 RM${formatPrice(
@@ -905,11 +979,11 @@ btc
 percent
 )})`;
 
-            }
+        }
 
-        }else{
+    }else{
 
-            btcMessage =
+        btcMessage =
 
 `➖ BTC
 RM${formatPrice(
@@ -917,37 +991,35 @@ RM${formatPrice(
 btc
 )}`;
 
-        }
+    }
 
-        // =====================================
-        // GRT
-        // =====================================
+    // GRT
+
+    if(
+        LAST_PRICE_MEMORY.GRT
+    ){
+
+        const old =
+        LAST_PRICE_MEMORY.GRT;
+
+        const percent =
+        (
+            (
+                grt - old
+            ) / old
+        ) * 100;
+
+        const emoji =
+        getPriceEmoji(
+            percent
+        );
 
         if(
-            LAST_PRICE_MEMORY.GRT
+            old.toFixed(4) ===
+            grt.toFixed(4)
         ){
 
-            const old =
-            LAST_PRICE_MEMORY.GRT;
-
-            const percent =
-            (
-                (
-                    grt - old
-                ) / old
-            ) * 100;
-
-            const emoji =
-            getPriceEmoji(
-                percent
-            );
-
-            if(
-                old.toFixed(4) ===
-                grt.toFixed(4)
-            ){
-
-                grtMessage =
+            grtMessage =
 
 `${emoji} GRT
 RM${formatPrice(
@@ -955,9 +1027,9 @@ RM${formatPrice(
 grt
 )} (0.00%)`;
 
-            }else{
+        }else{
 
-                grtMessage =
+            grtMessage =
 
 `${emoji} GRT
 RM${formatPrice(
@@ -970,11 +1042,11 @@ grt
 percent
 )})`;
 
-            }
+        }
 
-        }else{
+    }else{
 
-            grtMessage =
+        grtMessage =
 
 `➖ GRT
 RM${formatPrice(
@@ -982,37 +1054,29 @@ RM${formatPrice(
 grt
 )}`;
 
-        }
+    }
 
-        LAST_PRICE_MEMORY.BTC =
-        btc;
+    LAST_PRICE_MEMORY.BTC =
+    btc;
 
-        LAST_PRICE_MEMORY.GRT =
-        grt;
+    LAST_PRICE_MEMORY.GRT =
+    grt;
 
-        await sendTelegram(
+    await sendTelegram(
 
 `${btcMessage}
 
 ${grtMessage}`
 
-        );
-
-    }catch(err){
-
-        console.log(
-            "AUTO PRICE FAILED"
-        );
-
-    }
+    );
 
 }
 
 // =====================================
-// GET NEWS
+// NEWS
 // =====================================
 
-async function getCryptoNews(){
+async function sendNews(){
 
     try{
 
@@ -1028,39 +1092,8 @@ async function getCryptoNews(){
 
         if(!news){
 
-            return null;
-
-        }
-
-        return {
-
-            title:
-            news.title
-
-        };
-
-    }catch{
-
-        return null;
-
-    }
-
-}
-
-// =====================================
-// NEWS COMMAND
-// =====================================
-
-async function sendNews(){
-
-    try{
-
-        const news =
-        await getCryptoNews();
-
-        if(!news){
-
             return;
+
         }
 
         await sendTelegram(
@@ -1071,7 +1104,7 @@ ${news.title}`
 
         );
 
-    }catch(err){
+    }catch{
 
         console.log(
             "NEWS FAILED"
@@ -1082,291 +1115,7 @@ ${news.title}`
 }
 
 // =====================================
-// AUTO SCANNER
-// =====================================
-
-async function runAutoScanner(){
-
-    try{
-
-        for(const coin in COINS){
-
-            const structure =
-            await getMarketStructure(
-                coin
-            );
-
-            const price =
-            await getLivePrice(
-                coin
-            );
-
-            if(
-                !structure ||
-                !price
-            ){
-
-                continue;
-
-            }
-
-            const now =
-            Date.now();
-
-            if(
-                !LAST_ALERT_TIME[coin]
-            ){
-
-                LAST_ALERT_TIME[coin] =
-                0;
-
-            }
-
-            const pressure =
-            structure.buyVolume /
-            structure.sellVolume;
-
-            const nearBreakout =
-            price >=
-            structure.resistance * 0.995;
-
-            const nearBreakdown =
-            price <=
-            structure.support * 1.005;
-
-            // =====================================
-            // BREAKOUT
-            // =====================================
-
-            if(
-
-                pressure > 2
-
-                &&
-                nearBreakout
-
-            ){
-
-                if(
-                    !LAST_BREAKOUT_STATE[
-                        coin
-                    ]
-                ){
-
-                    LAST_BREAKOUT_STATE[
-                        coin
-                    ] = 1;
-
-                }else{
-
-                    LAST_BREAKOUT_STATE[
-                        coin
-                    ]++;
-
-                }
-
-                if(
-
-                    LAST_BREAKOUT_STATE[
-                        coin
-                    ] >=
-                    BREAKOUT_CONFIRMATIONS
-
-                    &&
-
-                    now -
-                    LAST_ALERT_TIME[
-                        coin
-                    ] >
-                    ALERT_COOLDOWN
-
-                ){
-
-                    LAST_ALERT_TIME[
-                        coin
-                    ] = now;
-
-                    LAST_BREAKOUT_STATE[
-                        coin
-                    ] = 0;
-
-                    await sendTelegram(
-
-`🚀 BREAKOUT CONFIRMED
-
-🪙 ${coin}
-
-RM${formatPrice(
-coin,
-price
-)}
-
-🟢 Support
-RM${formatPrice(
-coin,
-structure.support
-)}
-
-🔴 Resistance
-RM${formatPrice(
-coin,
-structure.resistance
-)}
-
-📈 Resistance naik ke:
-RM${formatPrice(
-coin,
-price * 1.03
-)}`
-
-                    );
-
-                }
-
-            }else{
-
-                LAST_BREAKOUT_STATE[
-                    coin
-                ] = 0;
-
-            }
-
-            // =====================================
-            // BREAKDOWN
-            // =====================================
-
-            if(
-
-                pressure < 0.6
-
-                &&
-                nearBreakdown
-
-            ){
-
-                if(
-                    !LAST_BREAKDOWN_STATE[
-                        coin
-                    ]
-                ){
-
-                    LAST_BREAKDOWN_STATE[
-                        coin
-                    ] = 1;
-
-                }else{
-
-                    LAST_BREAKDOWN_STATE[
-                        coin
-                    ]++;
-
-                }
-
-                if(
-
-                    LAST_BREAKDOWN_STATE[
-                        coin
-                    ] >= 2
-
-                    &&
-
-                    now -
-                    LAST_ALERT_TIME[
-                        coin
-                    ] >
-                    ALERT_COOLDOWN
-
-                ){
-
-                    LAST_ALERT_TIME[
-                        coin
-                    ] = now;
-
-                    LAST_BREAKDOWN_STATE[
-                        coin
-                    ] = 0;
-
-                    await sendTelegram(
-
-`🔴 BREAKDOWN
-
-🪙 ${coin}
-
-RM${formatPrice(
-coin,
-price
-)}
-
-⚠️ Support pecah
-
-🟢 Support
-RM${formatPrice(
-coin,
-structure.support
-)}
-
-🔴 Resistance
-RM${formatPrice(
-coin,
-structure.resistance
-)}
-
-📉 Seller kuat
-
-📉 Support turun ke:
-RM${formatPrice(
-coin,
-structure.support * 0.98
-)}`
-
-                    );
-
-                }
-
-            }else{
-
-                LAST_BREAKDOWN_STATE[
-                    coin
-                ] = 0;
-
-            }
-
-        }
-
-    }catch(err){
-
-        console.log(
-            "AUTO SCANNER FAILED"
-        );
-
-    }
-
-}
-
-// =====================================
-// COMMAND LIST
-// =====================================
-
-async function sendCommandList(){
-
-    await sendTelegram(
-
-`📋 COMMAND LIST
-
-/price
-/market
-/entry
-/news
-/scanner
-/status
-/help`
-
-    );
-
-}
-
-// =====================================
-// TELEGRAM COMMAND HANDLER
+// TELEGRAM COMMANDS
 // =====================================
 
 let LAST_UPDATE_ID = 0;
@@ -1378,7 +1127,7 @@ async function checkTelegramCommands(){
         const response =
         await axios.get(
 
-            `${TELEGRAM_API}/getUpdates?offset=${LAST_UPDATE_ID + 1}`
+`${TELEGRAM_API}/getUpdates?offset=${LAST_UPDATE_ID + 1}`
 
         );
 
@@ -1402,11 +1151,6 @@ async function checkTelegramCommands(){
             const text =
             update.message.text
             .toLowerCase();
-
-            console.log(
-                "COMMAND:",
-                text
-            );
 
             if(text === "/price"){
 
@@ -1432,14 +1176,6 @@ async function checkTelegramCommands(){
 
             }
 
-            else if(text === "/scanner"){
-
-                await sendTelegram(
-                    "🔍 SCANNER ACTIVE"
-                );
-
-            }
-
             else if(text === "/status"){
 
                 await sendTelegram(
@@ -1448,19 +1184,12 @@ async function checkTelegramCommands(){
 
             }
 
-            else if(text === "/help"){
-
-                await sendCommandList();
-
-            }
-
         }
 
     }catch(err){
 
         console.log(
-            "COMMAND ERROR",
-            err.message
+            "COMMAND ERROR"
         );
 
     }
@@ -1468,13 +1197,13 @@ async function checkTelegramCommands(){
 }
 
 // =====================================
-// START SERVER
+// SERVER
 // =====================================
 
 app.listen(PORT, ()=>{
 
     console.log(
-        "SERVER RUNNING ON PORT",
+        "SERVER RUNNING",
         PORT
     );
 
@@ -1502,16 +1231,6 @@ setTimeout(async ()=>{
 
     );
 
-    // AUTO SCANNER
-
-    setInterval(
-
-        runAutoScanner,
-
-        30000
-
-    );
-
     // PRICE UPDATE
 
     setInterval(
@@ -1529,6 +1248,16 @@ setTimeout(async ()=>{
         sendMarketCommand,
 
         900000
+
+    );
+
+    // ENTRY UPDATE
+
+    setInterval(
+
+        sendEntryCommand,
+
+        1200000
 
     );
 
