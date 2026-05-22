@@ -12,7 +12,6 @@ const TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
 const SERVICE_ID = process.env.SERVICE_ID || "APM3";
 
-// Pastikan Token ada sebelum mulakan bot
 if (!TOKEN || !CHAT_ID) {
     console.error("FATAL ERROR: BOT_TOKEN atau CHAT_ID tidak dijumpai di Environment Variables!");
     process.exit(1);
@@ -20,135 +19,100 @@ if (!TOKEN || !CHAT_ID) {
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 
-const COINS = { 'BTC': 'BTC/MYR', 'GRT': 'GRT/MYR' };
+// FIX: Guna simbol Luno yang betul (XBTMYR, bukan BTC/MYR)
+const COINS = { 
+    'BTC': 'XBTMYR', 
+    'GRT': 'GRTMYR' 
+};
+
 let ACTIVE_TRADES = {};
 let USER_ENTRY_FLOW = {};
 
 async function sendTelegram(msg, options = {}) {
     try {
-        await bot.sendMessage(CHAT_ID, msg, { ...options, parse_mode: 'HTML' });
+        await bot.sendMessage(CHAT_ID, `[${SERVICE_ID}]\n\n${msg}`, { ...options, parse_mode: 'HTML' });
     } catch (e) { console.error("Error Telegram:", e); }
-}
-
-function isAuthorized(msg) {
-    if (msg.chat.id.toString() !== CHAT_ID.toString()) {
-        bot.sendMessage(msg.chat.id, "❌ Akses ditolak.");
-        return false;
-    }
-    return true;
-}
-
-async function onStart() {
-    await sendTelegram(`🚀 <b>DEPLOY BERJAYA!</b>\nService ID: <code>${SERVICE_ID}</code>\nStatus: Bot Sudah Aktif.`);
 }
 
 async function getMarketStructure(coin) {
     try {
-        const response = await axios.get(`https://api.luno.com/api/1/orderbook?pair=${COINS[coin]}`);
-        const data = response.data;
-        const currentPrice = parseFloat(data.bids[0].price);
-        let buyVolume = 0;
-        data.bids.forEach(b => { if (parseFloat(b.price) > currentPrice * 0.995) buyVolume += parseFloat(b.volume); });
-        let sellVolume = 0;
-        data.asks.forEach(a => { if (parseFloat(a.price) < currentPrice * 1.005) sellVolume += parseFloat(a.volume); });
-        return { currentPrice, buyVolume, sellVolume, majorSupport: buyVolume > (sellVolume * 2), support: currentPrice };
-    } catch (e) { return null; }
+        const pair = COINS[coin];
+        const response = await axios.get(`https://api.luno.com/api/1/orderbook?pair=${pair}`);
+        const ticker = await axios.get(`https://api.luno.com/api/1/ticker?pair=${pair}`);
+        
+        return {
+            currentPrice: parseFloat(ticker.data.last_trade),
+            buyVolume: response.data.bids.reduce((sum, b) => sum + parseFloat(b.volume), 0),
+            sellVolume: response.data.asks.reduce((sum, a) => sum + parseFloat(a.volume), 0),
+            support: parseFloat(response.data.bids[0].price)
+        };
+    } catch (e) { 
+        console.error(`Error fetching data for ${coin}:`, e.message);
+        return null; 
+    }
 }
 
-async function autoPriceUpdate() {
-    try {
-        for (const coin of Object.keys(COINS)) {
-            const structure = await getMarketStructure(coin);
-            if (structure) await sendTelegram(`📊 [${SERVICE_ID}] ${coin}: ${structure.currentPrice}`);
-        }
-    } catch (e) { console.error("Error AutoPrice:", e); }
-}
-
-async function sendMarketStructure() {
-    try {
-        for (const coin of Object.keys(COINS)) {
-            const structure = await getMarketStructure(coin);
-            if (structure) await sendTelegram(`📈 [${SERVICE_ID}] ${coin} Support: ${structure.support}`);
-        }
-    } catch (e) { console.error("Error MarketStructure:", e); }
-}
-
-async function sendEntryUpdate(specificCoin = null) {
-    try {
-        const coinsToScan = specificCoin ? [specificCoin] : Object.keys(COINS);
-        for (const coin of coinsToScan) {
-            const structure = await getMarketStructure(coin);
-            if (!structure) continue;
-            const pressure = structure.buyVolume / structure.sellVolume;
-            if (pressure > 2 && structure.majorSupport) {
-                await sendTelegram(`🎯 HIGH CONFIDENCE: ${coin}\nPressure: ${pressure.toFixed(2)}`, { reply_markup: { inline_keyboard: [[{ text: "✅ CONFIRM", callback_data: `confirm_${coin}_${structure.currentPrice}_${structure.support}` }]] } });
-            } else if (pressure > 1.3) {
-                await new Promise(r => setTimeout(r, 5000));
-                const reCheck = await getMarketStructure(coin);
-                if (reCheck && (reCheck.buyVolume / reCheck.sellVolume) > 1.3) {
-                    await sendTelegram(`⚡ SCALPING ALERT: ${coin}\nPressure: ${(reCheck.buyVolume / reCheck.sellVolume).toFixed(2)}`, { reply_markup: { inline_keyboard: [[{ text: "✅ CONFIRM", callback_data: `confirm_${coin}_${reCheck.currentPrice}_${reCheck.support}` }]] } });
+async function sendEntryUpdate() {
+    for (const coin of Object.keys(COINS)) {
+        const structure = await getMarketStructure(coin);
+        if (!structure) continue;
+        
+        if (structure.buyVolume > structure.sellVolume) {
+            await sendTelegram(`🚀 <b>Entry Signal</b>\nCoin: ${coin}\nPrice: RM${structure.currentPrice}\n\n<i>Buyer kuat, sila periksa setup!</i>`, {
+                reply_markup: {
+                    inline_keyboard: [[{ text: "✅ Confirm Entry", callback_data: `confirm_${coin}_${structure.currentPrice}_${structure.support}` }]]
                 }
-            }
+            });
         }
-    } catch (e) { console.error("Error EntryUpdate:", e); }
+    }
 }
 
 bot.on('callback_query', async (query) => {
-    if (!isAuthorized(query)) return;
     const data = query.data;
     const userId = query.from.id;
+
     if (data.startsWith('confirm_')) {
-        const [_, coin, entry, support] = data.split('_');
-        USER_ENTRY_FLOW[userId] = { step: 'WAIT_UNIT', coin, entry, support };
-        await sendTelegram(`Masukkan jumlah unit untuk ${coin}:`);
+        const parts = data.split('_');
+        USER_ENTRY_FLOW[userId] = { coin: parts[1], entry: parts[2], support: parts[3] };
+        await bot.sendMessage(userId, "Masukkan jumlah unit:");
     }
 });
 
 bot.on('message', async (msg) => {
-    if (!isAuthorized(msg)) return;
-    const text = msg.text;
     const userId = msg.from.id;
-    if (text.startsWith('/test')) {
-        const coinSymbol = text.split(" ")[1]?.toUpperCase();
-        if (COINS[coinSymbol]) await sendEntryUpdate(coinSymbol);
-        else await sendTelegram("⚠️ Coin tidak valid.");
-        return;
-    }
-    if (USER_ENTRY_FLOW[userId]) {
+    if (USER_ENTRY_FLOW[userId] && !isNaN(msg.text)) {
         const flow = USER_ENTRY_FLOW[userId];
-        if (flow.step === 'WAIT_UNIT') {
-            flow.unit = Number(text); flow.step = 'WAIT_PROFIT';
-            await sendTelegram("Masukkan target profit (RM):");
-        } else if (flow.step === 'WAIT_PROFIT') {
-            const targetProfit = Number(text);
-            const netBuy = flow.unit * 0.994;
-            const tpPrice = ((netBuy * flow.entry) + targetProfit) / netBuy;
-            ACTIVE_TRADES[userId] = { coin: flow.coin, entry: flow.entry, support: flow.support, netSellAmount: netBuy * 0.995, tpPrice: tpPrice };
-            delete USER_ENTRY_FLOW[userId];
-            await sendTelegram(`✅ Trade Aktif!\nTarget Price: ${tpPrice.toFixed(2)}`);
-        }
+        const unit = parseFloat(msg.text);
+        const tpPrice = (parseFloat(flow.entry) * 1.02);
+
+        ACTIVE_TRADES[userId] = { 
+            coin: flow.coin, 
+            entry: flow.entry, 
+            support: flow.support, 
+            netSellAmount: unit * 0.995, 
+            tpPrice: tpPrice 
+        };
+        
+        delete USER_ENTRY_FLOW[userId];
+        await sendTelegram(`✅ <b>Trade Aktif!</b>\nCoin: ${flow.coin}\nTarget Price: RM${tpPrice.toFixed(2)}`);
     }
 });
 
 async function monitorTrades() {
-    try {
-        for (const userId in ACTIVE_TRADES) {
-            const trade = ACTIVE_TRADES[userId];
-            const structure = await getMarketStructure(trade.coin);
-            if (!structure) continue;
-            if (structure.currentPrice >= trade.tpPrice) {
-                await sendTelegram(`🚀 SELL NOW\nCoin: ${trade.coin}\nAmount: ${trade.netSellAmount.toFixed(4)}`);
-                delete ACTIVE_TRADES[userId];
-            } else if (structure.currentPrice <= (trade.support * 0.995)) {
-                await sendTelegram(`🛑 CUT LOSS NOW\nCoin: ${trade.coin}\nAmount: ${trade.netSellAmount.toFixed(4)}`);
-                delete ACTIVE_TRADES[userId];
-            }
+    for (const userId in ACTIVE_TRADES) {
+        const trade = ACTIVE_TRADES[userId];
+        const structure = await getMarketStructure(trade.coin);
+        if (!structure) continue;
+
+        if (structure.currentPrice >= trade.tpPrice) {
+            await sendTelegram(`🚀 <b>SELL NOW</b>\nCoin: ${trade.coin}\nAmount: ${trade.netSellAmount.toFixed(4)}`);
+            delete ACTIVE_TRADES[userId];
+        } else if (structure.currentPrice <= (trade.support * 0.99)) {
+            await sendTelegram(`🛑 <b>CUT LOSS NOW</b>\nCoin: ${trade.coin}\nAmount: ${trade.netSellAmount.toFixed(4)}`);
+            delete ACTIVE_TRADES[userId];
         }
-    } catch (e) { console.error("Error MonitorTrades:", e); }
+    }
 }
 
-onStart();
-setInterval(() => sendEntryUpdate().catch(console.error), 60000);
-setInterval(() => monitorTrades().catch(console.error), 10000);
-setInterval(() => autoPriceUpdate().catch(console.error), 300000);
-setInterval(() => sendMarketStructure().catch(console.error), 900000);
+setInterval(monitorTrades, 15000);
+setInterval(sendEntryUpdate, 60000);
