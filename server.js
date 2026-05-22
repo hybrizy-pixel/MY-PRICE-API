@@ -548,8 +548,6 @@ async function autoPriceUpdate(){
         let btcMessage = "";
         let grtMessage = "";
 
-        // BTC
-
         if(
             LAST_PRICE.BTC
         ){
@@ -584,8 +582,6 @@ btc
 )}`;
 
         }
-
-        // GRT
 
         if(
             LAST_PRICE.GRT
@@ -845,9 +841,7 @@ tp
 RM${formatPrice(
 "GRT",
 sl
-)}
-
-🔥 Momentum Breakout Incoming`,
+)}`,
 
                 {
 
@@ -883,6 +877,125 @@ callback_data:"START_SCALP_GRT"
 }
 
 // =====================================
+// ACTIVE TRADE MONITOR
+// =====================================
+
+async function monitorTrades(){
+
+    try{
+
+        for(
+            const chatId in ACTIVE_TRADES
+        ){
+
+            const trade =
+            ACTIVE_TRADES[
+                chatId
+            ];
+
+            if(
+                trade.closed
+            ){
+
+                continue;
+
+            }
+
+            const currentPrice =
+            await getLivePrice(
+                trade.coin
+            );
+
+            if(
+                !currentPrice
+            ){
+
+                continue;
+
+            }
+
+            // =====================================
+            // TP HIT
+            // =====================================
+
+            if(
+                currentPrice >=
+                trade.tp
+            ){
+
+                const estimatedProfit =
+
+                    (
+                        currentPrice -
+                        trade.buyPrice
+                    )
+
+                    *
+
+                    trade.quantity;
+
+                await bot.sendMessage(
+
+                    chatId,
+
+`🚀 SELL NOW
+
+🟢 ${trade.coin}
+
+📈 TP Hit:
+RM${formatPrice(
+trade.coin,
+trade.tp
+)}
+
+⚠️ Current Price:
+RM${formatPrice(
+trade.coin,
+currentPrice
+)}
+
+💰 Estimated Profit:
+RM${estimatedProfit.toFixed(2)}`,
+
+                    {
+
+reply_markup:{
+
+inline_keyboard:[
+
+[
+{
+text:"✅ CONFIRM SELL",
+callback_data:"CONFIRM_SELL"
+}
+]
+
+]
+
+}
+
+}
+
+                );
+
+                trade.waitingSell =
+                true;
+
+            }
+
+        }
+
+    }catch(err){
+
+        console.log(
+            err.message
+        );
+
+    }
+
+}
+
+// =====================================
 // CALLBACK
 // =====================================
 
@@ -895,6 +1008,10 @@ bot.on(
 
         const chatId =
         query.message.chat.id;
+
+        // =====================================
+        // START ENTRY
+        // =====================================
 
         if(
             data ===
@@ -914,6 +1031,57 @@ bot.on(
                 chatId,
 
 "💸 PROFIT TARGET RM?"
+
+            );
+
+        }
+
+        // =====================================
+        // CONFIRM ENTRY
+        // =====================================
+
+        if(
+            data ===
+            "CONFIRM_ENTRY"
+        ){
+
+            USER_STATE[
+                chatId
+            ].mode =
+            "WAIT_BUY_PRICE";
+
+            await bot.sendMessage(
+
+                chatId,
+
+"📌 Matched Buy Price?"
+
+            );
+
+        }
+
+        // =====================================
+        // CONFIRM SELL
+        // =====================================
+
+        if(
+            data ===
+            "CONFIRM_SELL"
+        ){
+
+            USER_STATE[
+                chatId
+            ] = {
+
+                mode:"WAIT_SELL_PRICE"
+
+            };
+
+            await bot.sendMessage(
+
+                chatId,
+
+"💵 Matched Sell Price?"
 
             );
 
@@ -947,6 +1115,10 @@ bot.on(
         USER_STATE[
             chatId
         ];
+
+        // =====================================
+        // TARGET INPUT
+        // =====================================
 
         if(
             state.mode ===
@@ -1048,6 +1220,156 @@ callback_data:"CANCEL_ENTRY"
 
         }
 
+        // =====================================
+        // BUY PRICE INPUT
+        // =====================================
+
+        else if(
+            state.mode ===
+            "WAIT_BUY_PRICE"
+        ){
+
+            const buyPrice =
+            parseFloat(
+                msg.text
+            );
+
+            const quantity =
+            USER_STATE[
+                chatId
+            ].quantity;
+
+            const tp =
+            USER_STATE[
+                chatId
+            ].tp;
+
+            const sl =
+            USER_STATE[
+                chatId
+            ].sl;
+
+            const netQuantity =
+
+                quantity *
+                (1 - BUY_FEE);
+
+            const netValue =
+
+                netQuantity *
+                buyPrice;
+
+            ACTIVE_TRADES[
+                chatId
+            ] = {
+
+                coin:"GRT",
+
+                quantity:
+                netQuantity,
+
+                buyPrice,
+
+                tp,
+                sl,
+
+                closed:false
+
+            };
+
+            delete USER_STATE[
+                chatId
+            ];
+
+            await bot.sendMessage(
+
+                chatId,
+
+`✅ TRADE CONFIRMED
+
+🪙 Net Buy Unit
+${netQuantity.toFixed(0)} GRT
+
+💰 Net Buy Value
+RM${netValue.toFixed(2)}
+
+📈 TP
+RM${tp.toFixed(4)}
+
+🛑 SL
+RM${sl.toFixed(4)}
+
+🔥 Live Monitoring Started`
+
+            );
+
+        }
+
+        // =====================================
+        // SELL PRICE INPUT
+        // =====================================
+
+        else if(
+            state.mode ===
+            "WAIT_SELL_PRICE"
+        ){
+
+            const sellPrice =
+            parseFloat(
+                msg.text
+            );
+
+            const trade =
+            ACTIVE_TRADES[
+                chatId
+            ];
+
+            const sellValue =
+
+                trade.quantity *
+                sellPrice;
+
+            const finalSell =
+
+                sellValue *
+                (1 - SELL_FEE);
+
+            const buyCost =
+
+                trade.quantity *
+                trade.buyPrice;
+
+            const profit =
+
+                finalSell -
+                buyCost;
+
+            trade.closed =
+            true;
+
+            delete USER_STATE[
+                chatId
+            ];
+
+            await bot.sendMessage(
+
+                chatId,
+
+`✅ CONFIRM SOLD
+
+🪙 Sold:
+${trade.quantity.toFixed(0)} GRT
+
+💵 Matched Sell:
+RM${sellPrice.toFixed(4)}
+
+💰 Final Profit:
+RM${profit.toFixed(2)}`
+
+            );
+
+        }
+
     }
 );
 
@@ -1119,6 +1441,15 @@ setTimeout(async ()=>{
         scanScalpingEntry,
 
         30000
+
+    );
+
+    // ACTIVE TRADE MONITOR
+    setInterval(
+
+        monitorTrades,
+
+        10000
 
     );
 
