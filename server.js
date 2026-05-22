@@ -189,20 +189,13 @@ async function sendTelegram(
 
     try{
 
-        const timestamp =
-        new Date()
-        .toLocaleTimeString(
-            "en-MY",
-            {
-                hour12:false
-            }
-        );
+
 
         await bot.sendMessage(
 
             CHAT_ID,
 
-`${SERVER_CODE} [${timestamp}]
+`${SERVER_CODE} 
 
 ${message}`
 
@@ -1024,7 +1017,7 @@ setTimeout(async ()=>{
 
         sendMarketCommand,
 
-        90000
+        900000
 
     );
 
