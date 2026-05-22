@@ -809,7 +809,7 @@ RM${formatPrice(
     data.displayPrice
 )}
 
-⚡ Live Market
+⚡ Unmatch Buyer Price 
 RM${formatPrice(
     coin,
     data.marketPrice
@@ -894,7 +894,7 @@ setTimeout(
 
     setInterval(
         sendMarketStructure,
-        60000
+        900000
     );
 
 },5000);
