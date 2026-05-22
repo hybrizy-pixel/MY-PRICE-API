@@ -84,6 +84,8 @@ const USER_ENTRY_FLOW = {};
 
 const ACTIVE_TRADES = {};
 
+const LAST_SIGNAL = {};
+
 // =====================================
 // FORMAT PRICE
 // =====================================
@@ -287,9 +289,7 @@ async function getMarketStructure(coin){
         if(
             !data ||
             !data.bids ||
-            !data.asks ||
-            data.bids.length === 0 ||
-            data.asks.length === 0
+            !data.asks
         ){
 
             return null;
@@ -452,7 +452,6 @@ async function getMarketStructure(coin){
     }catch(err){
 
         console.log(
-            "MARKET STRUCTURE ERROR:",
             err.message
         );
 
@@ -463,16 +462,12 @@ async function getMarketStructure(coin){
 }
 
 // =====================================
-// AUTO PRICE ALERT
+// PRICE ALERT
 // =====================================
 
 async function autoPriceUpdate(){
 
     try{
-
-        console.log(
-            "RUNNING PRICE ALERT..."
-        );
 
         const btc =
         await getLivePrice(
@@ -486,18 +481,12 @@ async function autoPriceUpdate(){
 
         if(!btc || !grt){
 
-            console.log(
-                "PRICE FETCH FAILED"
-            );
-
             return;
 
         }
 
         let btcMessage = "";
         let grtMessage = "";
-
-        // BTC
 
         if(
             LAST_PRICE_MEMORY.BTC
@@ -542,8 +531,6 @@ btc
 )}`;
 
         }
-
-        // GRT
 
         if(
             LAST_PRICE_MEMORY.GRT
@@ -605,14 +592,9 @@ ${grtMessage}`
 
         );
 
-        console.log(
-            "PRICE ALERT SENT"
-        );
-
     }catch(err){
 
         console.log(
-            "PRICE ALERT ERROR:",
             err.message
         );
 
@@ -621,7 +603,7 @@ ${grtMessage}`
 }
 
 // =====================================
-// MARKET STRUCTURE
+// MARKET STRUCTURE ALERT
 // =====================================
 
 async function sendMarketStructure(){
@@ -644,6 +626,30 @@ async function sendMarketStructure(){
 
         }
 
+        const btcPressure =
+        btc.buyVolume >
+        btc.sellVolume
+
+        ?
+
+        "🔥 Buyer control"
+
+        :
+
+        "⚠️ Seller kuat";
+
+        const grtPressure =
+        grt.buyVolume >
+        grt.sellVolume
+
+        ?
+
+        "🔥 Buyer control"
+
+        :
+
+        "⚠️ Seller kuat";
+
         await sendTelegram(
 
 `📊 MARKET STRUCTURE
@@ -654,6 +660,8 @@ RM${formatPrice(
 "BTC",
 btc.currentPrice
 )}
+
+${btcPressure}
 
 🟢 Support
 RM${formatPrice(
@@ -681,6 +689,8 @@ RM${formatPrice(
 "GRT",
 grt.currentPrice
 )}
+
+${grtPressure}
 
 🟢 Support
 RM${formatPrice(
@@ -713,22 +723,853 @@ grt.resistanceVolume
 }
 
 // =====================================
-// TEST COMMAND
+// ENTRY DETECTION
+// =====================================
+
+async function sendEntryUpdate(){
+
+    try{
+
+        let found =
+        false;
+
+        for(const coin of Object.keys(COINS)){
+
+            const structure =
+            await getMarketStructure(
+                coin
+            );
+
+            if(!structure){
+
+                continue;
+
+            }
+
+            const pressure =
+
+            structure.buyVolume /
+            structure.sellVolume;
+
+            const resistanceDistance =
+            (
+                structure.resistance -
+                structure.currentPrice
+            ) / structure.currentPrice;
+
+            const now =
+            Date.now();
+
+            if(
+                LAST_SIGNAL[coin]
+                &&
+                now -
+                LAST_SIGNAL[coin]
+                <
+                900000
+            ){
+
+                continue;
+
+            }
+
+            // =====================================
+            // NORMAL ENTRY
+            // =====================================
+
+            if(
+
+                pressure > 1.15
+
+                &&
+
+                resistanceDistance < 0.005
+
+            ){
+
+                found = true;
+
+                LAST_SIGNAL[coin] =
+                now;
+
+                await sendTelegram(
+
+`🚀 NORMAL ENTRY
+
+🟢 ${coin}
+
+RM${formatPrice(
+coin,
+structure.currentPrice
+)}
+
+🔥 Breakout pressure detected
+
+🟢 Support
+RM${formatPrice(
+coin,
+structure.support
+)} (${formatVolume(
+coin,
+structure.supportVolume
+)})
+
+🔴 Resistance
+RM${formatPrice(
+coin,
+structure.resistance
+)} (${formatVolume(
+coin,
+structure.resistanceVolume
+)})
+
+⚡ 86% Setup`,
+
+{
+
+reply_markup: {
+
+inline_keyboard: [
+
+[
+{
+text:
+"✅ CONFIRM ENTRY",
+
+callback_data:
+`confirm_${coin}_${structure.currentPrice}_${structure.support}`
+}
+]
+
+]
+
+}
+
+}
+
+                );
+
+            }
+
+            // =====================================
+            // SCALPING ENTRY
+            // =====================================
+
+            if(
+
+                pressure > 0.9
+
+                &&
+
+                pressure < 1.15
+
+            ){
+
+                found = true;
+
+                LAST_SIGNAL[coin] =
+                now;
+
+                await sendTelegram(
+
+`🔄 SCALPING ENTRY
+
+🟢 ${coin}
+
+RM${formatPrice(
+coin,
+structure.currentPrice
+)}
+
+🔥 Quick scalp momentum
+
+📈 Scalping Target
+RM${formatPrice(
+coin,
+structure.currentPrice * 1.01
+)}
+
+⚡ 72% Setup`,
+
+{
+
+reply_markup: {
+
+inline_keyboard: [
+
+[
+{
+text:
+"✅ CONFIRM ENTRY",
+
+callback_data:
+`confirm_${coin}_${structure.currentPrice}_${structure.support}`
+}
+]
+
+]
+
+}
+
+}
+
+                );
+
+            }
+
+        }
+
+        if(!found){
+
+            await sendTelegram(
+
+`⏳ ENTRY UPDATE
+
+No Best Entry Now`
+
+            );
+
+        }
+
+    }catch(err){
+
+        console.log(
+            err.message
+        );
+
+    }
+
+}
+
+// =====================================
+// TEST COMMANDS
 // =====================================
 
 bot.onText(
 
-/\/test/,
+/\/testentry/,
 
 async ()=>{
 
     await sendTelegram(
-        "✅ TEST MESSAGE"
+
+`🚀 NORMAL ENTRY
+
+🟢 XLM
+
+RM0.5123
+
+🔥 Breakout pressure detected`,
+
+{
+
+reply_markup: {
+
+inline_keyboard: [
+
+[
+{
+text:
+"✅ CONFIRM ENTRY",
+
+callback_data:
+"confirm_XLM_0.5123_0.5010"
+}
+]
+
+]
+
+}
+
+}
+
     );
 
 }
 
 );
+
+bot.onText(
+
+/\/testscalp/,
+
+async ()=>{
+
+    await sendTelegram(
+
+`🔄 SCALPING ENTRY
+
+🟢 GRT
+
+RM0.1001
+
+🔥 Quick scalp momentum`,
+
+{
+
+reply_markup: {
+
+inline_keyboard: [
+
+[
+{
+text:
+"✅ CONFIRM ENTRY",
+
+callback_data:
+"confirm_GRT_0.1001_0.0998"
+}
+]
+
+]
+
+}
+
+}
+
+    );
+
+}
+
+);
+
+// =====================================
+// CALLBACK QUERY
+// =====================================
+
+bot.on(
+"callback_query",
+
+async query=>{
+
+    const data =
+    query.data;
+
+    const userId =
+    query.from.id;
+
+    // =====================================
+    // CONFIRM ENTRY
+    // =====================================
+
+    if(
+        data.startsWith(
+            "confirm_"
+        )
+    ){
+
+        const split =
+        data.split("_");
+
+        USER_ENTRY_FLOW[
+            userId
+        ] = {
+
+            step:
+            "WAIT_UNIT",
+
+            coin:
+            split[1],
+
+            entry:
+            Number(split[2]),
+
+            support:
+            Number(split[3])
+
+        };
+
+        await sendTelegram(
+
+`🪙 Masukkan jumlah unit`
+
+        );
+
+    }
+
+    // =====================================
+    // DONE SELL
+    // =====================================
+
+    if(
+        data.startsWith(
+            "done_sell_"
+        )
+    ){
+
+        const coin =
+        data.split("_")[2];
+
+        delete ACTIVE_TRADES[
+            userId
+        ];
+
+        await sendTelegram(
+
+`✅ DONE SELL
+
+${coin}
+
+🛑 Monitoring stopped`
+
+        );
+
+    }
+
+    // =====================================
+    // DONE CUTLOSS
+    // =====================================
+
+    if(
+        data.startsWith(
+            "done_cut_"
+        )
+    ){
+
+        const coin =
+        data.split("_")[2];
+
+        delete ACTIVE_TRADES[
+            userId
+        ];
+
+        await sendTelegram(
+
+`🛑 DONE CUTLOSS
+
+${coin}
+
+🛑 Monitoring stopped`
+
+        );
+
+    }
+
+}
+
+);
+
+// =====================================
+// MESSAGE FLOW
+// =====================================
+
+bot.on(
+"message",
+
+async msg=>{
+
+    const userId =
+    msg.from.id;
+
+    const text =
+    msg.text;
+
+    if(
+        !USER_ENTRY_FLOW[userId]
+    ){
+
+        return;
+
+    }
+
+    const flow =
+    USER_ENTRY_FLOW[userId];
+
+    // =====================================
+    // WAIT UNIT
+    // =====================================
+
+    if(
+        flow.step ===
+        "WAIT_UNIT"
+    ){
+
+        flow.unit =
+        Number(text);
+
+        flow.step =
+        "WAIT_PROFIT";
+
+        await sendTelegram(
+
+`💸 Nak profit berapa RM?`
+
+        );
+
+        return;
+
+    }
+
+    // =====================================
+    // WAIT PROFIT
+    // =====================================
+
+    if(
+        flow.step ===
+        "WAIT_PROFIT"
+    ){
+
+        const targetProfit =
+        Number(text);
+
+        const netBuy =
+        flow.unit * 0.994;
+
+        const netBuyValue =
+        netBuy * flow.entry;
+
+        const tpPrice =
+        (
+            netBuyValue +
+            targetProfit
+        ) / netBuy;
+
+        const sl =
+        flow.support * 0.995;
+
+        ACTIVE_TRADES[
+            userId
+        ] = {
+
+            coin:
+            flow.coin,
+
+            tpPrice,
+
+            sl,
+
+            targetProfit,
+
+            netBuy,
+
+            netBuyValue,
+
+            highestProfit:
+            0,
+
+            sellTriggered:
+            false,
+
+            extendedAlert:
+            false,
+
+            createdAt:
+            Date.now()
+
+        };
+
+        await sendTelegram(
+
+`✅ ENTRY CONFIRMED
+
+🟢 ${flow.coin}
+
+🪙 Net Buy
+${netBuy.toFixed(2)} ${flow.coin}
+
+💰 Net Buy Value
+RM${netBuyValue.toFixed(2)}
+
+💸 Target Profit
+RM${targetProfit}
+
+📈 TP
+RM${formatPrice(
+flow.coin,
+tpPrice
+)}
+
+🛑 SL
+RM${formatPrice(
+flow.coin,
+sl
+)}
+
+👀 Live monitoring activated`
+
+        );
+
+        delete USER_ENTRY_FLOW[
+            userId
+        ];
+
+    }
+
+}
+
+);
+
+// =====================================
+// MONITOR TRADES
+// =====================================
+
+async function monitorTrades(){
+
+    try{
+
+        for(const userId in ACTIVE_TRADES){
+
+            const trade =
+            ACTIVE_TRADES[userId];
+
+            const livePrice =
+            await getLivePrice(
+                trade.coin
+            );
+
+            if(!livePrice){
+
+                continue;
+
+            }
+
+            const sellValue =
+            trade.netBuy *
+            livePrice;
+
+            const profit =
+            sellValue -
+            trade.netBuyValue;
+
+            // =====================================
+            // TRACK HIGHEST PROFIT
+            // =====================================
+
+            if(
+                profit >
+                trade.highestProfit
+            ){
+
+                trade.highestProfit =
+                profit;
+
+            }
+
+            // =====================================
+            // SELL NOW
+            // =====================================
+
+            if(
+
+                profit >=
+                trade.targetProfit
+
+                &&
+
+                !trade.sellTriggered
+
+            ){
+
+                trade.sellTriggered =
+                true;
+
+                trade.sellAlertTime =
+                Date.now();
+
+                await sendTelegram(
+
+`🚀 SELL NOW
+
+🟢 ${trade.coin}
+
+💰 Value After Sales
+RM${sellValue.toFixed(2)}
+
+💸 Estimated Profit
+RM${profit.toFixed(2)}
+
+📈 Current Price
+RM${formatPrice(
+trade.coin,
+livePrice
+)}`,
+
+{
+
+reply_markup: {
+
+inline_keyboard: [
+
+[
+{
+text:
+"✅ DONE SELL",
+
+callback_data:
+`done_sell_${trade.coin}`
+}
+]
+
+]
+
+}
+
+}
+
+                );
+
+            }
+
+            // =====================================
+            // EXTENDED PROFIT
+            // =====================================
+
+            if(
+
+                profit >=
+                trade.targetProfit * 1.1
+
+                &&
+
+                !trade.extendedAlert
+
+            ){
+
+                trade.extendedAlert =
+                true;
+
+                await sendTelegram(
+
+`🔥 PROFIT EXTENDED SELL NOW
+
+🟢 ${trade.coin}
+
+💸 Extended Profit
+RM${profit.toFixed(2)}`,
+
+{
+
+reply_markup: {
+
+inline_keyboard: [
+
+[
+{
+text:
+"✅ DONE SELL",
+
+callback_data:
+`done_sell_${trade.coin}`
+}
+]
+
+]
+
+}
+
+}
+
+                );
+
+            }
+
+            // =====================================
+            // SWITCH SELL → CUTLOSS
+            // =====================================
+
+            if(
+
+                trade.sellTriggered
+
+                &&
+
+                livePrice <=
+                trade.sl
+
+            ){
+
+                await sendTelegram(
+
+`🛑 CUTLOSS NOW
+
+🔴 ${trade.coin}
+
+⚠️ Price reverse after SELL alert
+
+📈 Current Price
+RM${formatPrice(
+trade.coin,
+livePrice
+)}`,
+
+{
+
+reply_markup: {
+
+inline_keyboard: [
+
+[
+{
+text:
+"✅ DONE CUTLOSS",
+
+callback_data:
+`done_cut_${trade.coin}`
+}
+]
+
+]
+
+}
+
+}
+
+                );
+
+                delete ACTIVE_TRADES[
+                    userId
+                ];
+
+                continue;
+
+            }
+
+            // =====================================
+            // TRADE MONITOR OFF
+            // =====================================
+
+            if(
+
+                trade.sellTriggered
+
+                &&
+
+                Date.now() -
+                trade.sellAlertTime
+
+                >
+
+                900000
+
+            ){
+
+                await sendTelegram(
+
+`⏳ TRADE MONITOR OFF
+
+${trade.coin}
+
+⚠️ No action detected after SELL alert`
+
+                );
+
+                delete ACTIVE_TRADES[
+                    userId
+                ];
+
+            }
+
+        }
+
+    }catch(err){
+
+        console.log(
+            err.message
+        );
+
+    }
+
+}
 
 // =====================================
 // ROUTE
@@ -770,16 +1611,21 @@ setTimeout(async ()=>{
         "SYSTEM STARTED"
     );
 
+    // BOT ONLINE
     await sendTelegram(
         "✅ BOT ONLINE"
     );
 
+    // TEMBAK TERUS
     await autoPriceUpdate();
 
     await sendMarketStructure();
 
+    await sendEntryUpdate();
+
     // =====================================
     // PRICE ALERT
+    // 5 MINIT
     // =====================================
 
     setInterval(
@@ -792,6 +1638,7 @@ setTimeout(async ()=>{
 
     // =====================================
     // MARKET STRUCTURE
+    // 15 MINIT
     // =====================================
 
     setInterval(
@@ -799,6 +1646,32 @@ setTimeout(async ()=>{
         sendMarketStructure,
 
         900000
+
+    );
+
+    // =====================================
+    // ENTRY DETECTION
+    // 20 MINIT
+    // =====================================
+
+    setInterval(
+
+        sendEntryUpdate,
+
+        1200000
+
+    );
+
+    // =====================================
+    // TRADE MONITOR
+    // 10 SAAT
+    // =====================================
+
+    setInterval(
+
+        monitorTrades,
+
+        10000
 
     );
 
