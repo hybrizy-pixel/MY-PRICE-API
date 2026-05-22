@@ -10,14 +10,14 @@ const app = express();
 // RANDOM DEPLOYMENT CODE
 // =====================================
 
-function generateServerCode() {
+function generateServerCode(){
 
     const chars =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
     let result = "";
 
-    for(let i = 0; i < 4; i++){
+    for(let i=0;i<4;i++){
 
         result += chars.charAt(
             Math.floor(
@@ -81,6 +81,24 @@ const COINS = {
 
 const BUY_FEE = 0.005;
 const SELL_FEE = 0.005;
+
+// =====================================
+// ALERT COOLDOWN
+// =====================================
+
+const ALERT_COOLDOWN = {
+
+    breakout:900000,
+    breakdown:900000,
+
+    whale:1800000,
+    rejection:1800000,
+    liquidity:1800000,
+
+    scalp:1200000,
+    normal:1200000
+
+};
 
 // =====================================
 // MEMORY
@@ -296,6 +314,84 @@ async function getOrderbook(coin){
 }
 
 // =====================================
+// STRONGEST WALL DETECTION
+// =====================================
+
+function getStrongestSupport(bids){
+
+    let strongest =
+    bids[0];
+
+    for(const bid of bids){
+
+        if(
+            parseFloat(bid.volume)
+            >
+            parseFloat(
+                strongest.volume
+            )
+        ){
+
+            strongest = bid;
+
+        }
+
+    }
+
+    return {
+
+        price:
+        parseFloat(
+            strongest.price
+        ),
+
+        volume:
+        parseFloat(
+            strongest.volume
+        )
+
+    };
+
+}
+
+function getStrongestResistance(asks){
+
+    let strongest =
+    asks[0];
+
+    for(const ask of asks){
+
+        if(
+            parseFloat(ask.volume)
+            >
+            parseFloat(
+                strongest.volume
+            )
+        ){
+
+            strongest = ask;
+
+        }
+
+    }
+
+    return {
+
+        price:
+        parseFloat(
+            strongest.price
+        ),
+
+        volume:
+        parseFloat(
+            strongest.volume
+        )
+
+    };
+
+}
+
+// =====================================
 // MARKET STRUCTURE
 // =====================================
 
@@ -330,17 +426,15 @@ async function getMarketStructure(coin){
     const bestAsk =
     asks[0];
 
-    const support =
-    bids[5];
-
-    const resistance =
-    asks[5];
-
     const currentPrice =
-    parseFloat(bestBid.price);
+    parseFloat(
+        bestBid.price
+    );
 
     const askPrice =
-    parseFloat(bestAsk.price);
+    parseFloat(
+        bestAsk.price
+    );
 
     const spread =
     askPrice -
@@ -369,6 +463,20 @@ async function getMarketStructure(coin){
     sellVolume;
 
     // =====================================
+    // STRONGEST WALLS
+    // =====================================
+
+    const strongestSupport =
+    getStrongestSupport(
+        bids.slice(0,15)
+    );
+
+    const strongestResistance =
+    getStrongestResistance(
+        asks.slice(0,15)
+    );
+
+    // =====================================
     // RESISTANCE LAYERS
     // =====================================
 
@@ -384,16 +492,17 @@ async function getMarketStructure(coin){
         asks[0].price
     );
 
-    for(let i=0;i<3;i++){
+    for(let i=0;i<5;i++){
 
         const layer =
         asks[i];
 
-        if(
-            parseFloat(
-                layer.volume
-            ) < 30000
-        ){
+        const volume =
+        parseFloat(
+            layer.volume
+        );
+
+        if(volume < 10000){
 
             consumedResistance++;
 
@@ -422,16 +531,17 @@ async function getMarketStructure(coin){
         bids[0].price
     );
 
-    for(let i=0;i<3;i++){
+    for(let i=0;i<5;i++){
 
         const layer =
         bids[i];
 
-        if(
-            parseFloat(
-                layer.volume
-            ) < 30000
-        ){
+        const volume =
+        parseFloat(
+            layer.volume
+        );
+
+        if(volume < 10000){
 
             collapsedSupport++;
 
@@ -441,6 +551,33 @@ async function getMarketStructure(coin){
             );
 
         }
+
+    }
+
+    // =====================================
+    // TREND DETECTION
+    // =====================================
+
+    let trend =
+    "SIDEWAYS";
+
+    if(
+        pressure > 1.2
+        &&
+        spreadPercent < 0.0012
+    ){
+
+        trend = "BULLISH";
+
+    }
+
+    if(
+        pressure < 0.85
+        &&
+        spreadPercent > 0.0015
+    ){
+
+        trend = "BEARISH";
 
     }
 
@@ -460,24 +597,16 @@ async function getMarketStructure(coin){
         ),
 
         supportPrice:
-        parseFloat(
-            support.price
-        ),
-
-        resistancePrice:
-        parseFloat(
-            resistance.price
-        ),
+        strongestSupport.price,
 
         supportVolume:
-        parseFloat(
-            support.volume
-        ),
+        strongestSupport.volume,
+
+        resistancePrice:
+        strongestResistance.price,
 
         resistanceVolume:
-        parseFloat(
-            resistance.volume
-        ),
+        strongestResistance.volume,
 
         buyVolume,
         sellVolume,
@@ -486,6 +615,8 @@ async function getMarketStructure(coin){
         spreadPercent,
 
         pressure,
+
+        trend,
 
         consumedResistance,
         oldResistance,
@@ -567,7 +698,7 @@ RM${formatPrice(
 }
 
 // =====================================
-// MARKET STRUCTURE ALERT
+// MARKET STRUCTURE
 // =====================================
 
 async function sendMarketStructure(){
@@ -587,11 +718,15 @@ async function sendMarketStructure(){
         }
 
         const pressureText =
-        data.pressure > 1
+        data.trend === "BULLISH"
         ?
         "🔥 Buyer control"
         :
-        "⚠️ Seller control";
+        data.trend === "BEARISH"
+        ?
+        "⚠️ Seller control"
+        :
+        "➖ Sideways market";
 
         await sendTelegram(
 `
@@ -606,7 +741,7 @@ RM${formatPrice(
 
 ${pressureText}
 
-🟢 Support
+🟢 Strong Support
 RM${formatPrice(
     coin,
     data.supportPrice
@@ -617,7 +752,7 @@ RM${formatPrice(
     data.supportVolume
 )})
 
-🔴 Resistance
+🔴 Strong Resistance
 RM${formatPrice(
     coin,
     data.resistancePrice
@@ -778,16 +913,24 @@ async function smartSignalEngine(){
             continue;
         }
 
+        // =====================================
         // BREAKOUT
+        // =====================================
 
         if(
-            data.pressure > 1.35
+            data.trend === "BULLISH"
+            &&
+            data.pressure > 1.25
             &&
             data.consumedResistance >= 2
             &&
+            data.newResistance !==
+            data.oldResistance
+            &&
             cooldownPassed(
                 ALERTS.breakout,
-                coin
+                coin,
+                ALERT_COOLDOWN.breakout
             )
         ){
 
@@ -817,21 +960,43 @@ RM${formatPrice(
 
 ⚠️ Seller wall semakin menipis.
 Buyer semakin mudah naikkan harga.
+
+🟢 Strong Resistance Wall
+RM${formatPrice(
+    coin,
+    data.resistancePrice
+)}
+
+(${formatUnit(
+    coin,
+    data.resistanceVolume
+)})
 `
             );
 
         }
 
+        // =====================================
         // BREAKDOWN
+        // =====================================
 
         if(
+            data.trend === "BEARISH"
+            &&
             data.pressure < 0.75
             &&
             data.collapsedSupport >= 2
             &&
+            data.newSupport !==
+            data.oldSupport
+            &&
+            data.currentPrice <
+            data.supportPrice
+            &&
             cooldownPassed(
                 ALERTS.breakdown,
-                coin
+                coin,
+                ALERT_COOLDOWN.breakdown
             )
         ){
 
@@ -861,19 +1026,33 @@ RM${formatPrice(
 
 💧 Buyer wall semakin lemah.
 Seller semakin mudah tekan harga turun.
+
+🔴 Strong Support Failed
+RM${formatPrice(
+    coin,
+    data.supportPrice
+)}
+
+(${formatUnit(
+    coin,
+    data.supportVolume
+)})
 `
             );
 
         }
 
+        // =====================================
         // WHALE INFLOW
+        // =====================================
 
         if(
             data.supportVolume > 100000
             &&
             cooldownPassed(
                 ALERTS.whale,
-                coin
+                coin,
+                ALERT_COOLDOWN.whale
             )
         ){
 
@@ -894,13 +1073,28 @@ Seller semakin mudah tekan harga turun.
 ${formatUnit(
     coin,
     data.supportVolume
+)} ${coin}
+
+🟢 Accumulation Zone
+RM${formatPrice(
+    coin,
+    data.supportPrice
 )}
+→
+RM${formatPrice(
+    coin,
+    data.supportPrice * 1.002
+)}
+
+⚠️ Buyer support semakin kuat.
 `
             );
 
         }
 
+        // =====================================
         // REJECTION ALERT
+        // =====================================
 
         if(
             data.pressure > 0.9
@@ -909,7 +1103,8 @@ ${formatUnit(
             &&
             cooldownPassed(
                 ALERTS.rejection,
-                coin
+                coin,
+                ALERT_COOLDOWN.rejection
             )
         ){
 
@@ -934,14 +1129,17 @@ ${formatUnit(
 
         }
 
+        // =====================================
         // LIQUIDITY ALERT
+        // =====================================
 
         if(
             data.spreadPercent > 0.0015
             &&
             cooldownPassed(
                 ALERTS.liquidity,
-                coin
+                coin,
+                ALERT_COOLDOWN.liquidity
             )
         ){
 
@@ -954,7 +1152,13 @@ ${formatUnit(
 `
 💧 LIQUIDITY ALERT
 
-⚠️ Seller wall semakin menipis.
+🟢 ${coin}
+
+⚠️ Seller wall menipis di
+RM${formatPrice(
+    coin,
+    data.resistancePrice
+)}
 
 📉 Spread semakin melebar.
 
@@ -964,10 +1168,14 @@ ${formatUnit(
 
         }
 
+        // =====================================
         // SCALPING ENTRY
+        // =====================================
 
         if(
-            data.pressure > 1.15
+            data.trend === "BULLISH"
+            &&
+            data.pressure > 1.1
             &&
             data.pressure < 1.35
             &&
@@ -975,7 +1183,8 @@ ${formatUnit(
             &&
             cooldownPassed(
                 ALERTS.scalp,
-                coin
+                coin,
+                ALERT_COOLDOWN.scalp
             )
         ){
 
@@ -991,16 +1200,21 @@ ${formatUnit(
 
         }
 
+        // =====================================
         // NORMAL ENTRY
+        // =====================================
 
         if(
+            data.trend === "BULLISH"
+            &&
             data.pressure >= 1.35
             &&
             data.supportVolume > 50000
             &&
             cooldownPassed(
                 ALERTS.normal,
-                coin
+                coin,
+                ALERT_COOLDOWN.normal
             )
         ){
 
@@ -1034,7 +1248,9 @@ bot.on(
     const userId =
     query.from.id;
 
+    // =====================================
     // START ENTRY
+    // =====================================
 
     if(
         data.startsWith(
@@ -1098,7 +1314,9 @@ bot.on(
 
     }
 
+    // =====================================
     // CONFIRM ENTRY
+    // =====================================
 
     if(
         data ===
@@ -1117,7 +1335,9 @@ bot.on(
 
     }
 
+    // =====================================
     // CANCEL ENTRY
+    // =====================================
 
     if(
         data ===
@@ -1134,7 +1354,9 @@ bot.on(
 
     }
 
+    // =====================================
     // CANCEL ACTIVE TRADE
+    // =====================================
 
     if(
         data.startsWith(
@@ -1148,6 +1370,21 @@ bot.on(
             ""
         );
 
+        TRADE_HISTORY[
+            tradeId
+        ] = {
+
+            ...ACTIVE_TRADES[
+                tradeId
+            ],
+
+            cancelled:true,
+
+            cancelledAt:
+            now()
+
+        };
+
         delete ACTIVE_TRADES[
             tradeId
         ];
@@ -1160,7 +1397,9 @@ bot.on(
 
     }
 
+    // =====================================
     // CONFIRM SELL
+    // =====================================
 
     if(
         data.startsWith(
@@ -1191,7 +1430,9 @@ bot.on(
 
     }
 
+    // =====================================
     // CONFIRM CUTLOSS
+    // =====================================
 
     if(
         data.startsWith(
@@ -1247,7 +1488,9 @@ bot.on(
     const flow =
     USER_FLOW[userId];
 
+    // =====================================
     // WAIT PROFIT
+    // =====================================
 
     if(
         flow.step ===
@@ -1290,9 +1533,6 @@ bot.on(
             "⚠️ Profit estimate mungkin lebih rendah jika matched pada best ask semasa.";
 
         }
-
-        flow.step =
-        "WAIT_CONFIRM_ENTRY";
 
         await sendTelegram(
 `
@@ -1351,7 +1591,9 @@ callback_data:
 
     }
 
+    // =====================================
     // WAIT MATCHED BUY
+    // =====================================
 
     if(
         flow.step ===
@@ -1475,7 +1717,9 @@ RM${formatPrice(
 
     }
 
+    // =====================================
     // WAIT MATCHED SELL
+    // =====================================
 
     if(
         flow.step ===
@@ -1586,7 +1830,9 @@ ${profitComment}
 
     }
 
+    // =====================================
     // WAIT MATCHED CUTLOSS
+    // =====================================
 
     if(
         flow.step ===
@@ -1701,16 +1947,15 @@ async function monitorTrades(){
             continue;
         }
 
-        const liveAsk =
-        data.bestAskPrice;
-
         const liveBid =
         data.bestBidPrice;
 
+        // =====================================
         // REVERSAL DETECTION
+        // =====================================
 
         if(
-            data.pressure < 0.85
+            data.trend === "BEARISH"
             &&
             !trade.reversalAlerted
         ){
@@ -1732,7 +1977,9 @@ Buyer momentum semakin lemah.
 
         }
 
+        // =====================================
         // SELL NOW
+        // =====================================
 
         if(
             liveBid >= trade.tp
@@ -1787,7 +2034,7 @@ RM${formatPrice(
     trade.tp
 )}
 
-⚠️ Asking Price
+⚠️ Best Bid Price
 RM${formatPrice(
     trade.coin,
     liveBid
@@ -1839,7 +2086,9 @@ callback_data:
 
         }
 
+        // =====================================
         // CUTLOSS NOW
+        // =====================================
 
         if(
             liveBid <= trade.sl
@@ -1881,7 +2130,7 @@ RM${formatPrice(
     trade.sl
 )}
 
-⚠️ Asking Price
+⚠️ Best Bid Price
 RM${formatPrice(
     trade.coin,
     liveBid
@@ -1933,7 +2182,9 @@ callback_data:
 
         }
 
+        // =====================================
         // SELL TIMEOUT
+        // =====================================
 
         if(
             trade.sellTriggered
@@ -1957,7 +2208,9 @@ callback_data:
 
         }
 
+        // =====================================
         // CUTLOSS TIMEOUT
+        // =====================================
 
         if(
             trade.cutlossTriggered
