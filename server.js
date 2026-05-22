@@ -241,7 +241,7 @@ async function sendTelegram(
 
         await bot.sendMessage(
             CHAT_ID,
-            `${SERVER_CODE} [${timestamp}] ${message}`,
+            `${SERVER_CODE} ${message}`,
             {
                 parse_mode:"HTML",
                 ...options
