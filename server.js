@@ -102,10 +102,6 @@ const COINS = {
 
 const LAST_PRICE = {};
 
-const LAST_BREAKOUT = {};
-
-const LAST_BREAKDOWN = {};
-
 const LAST_EVENT = {};
 
 // =====================================
@@ -606,6 +602,10 @@ async function autoPriceUpdate(){
 
         }
 
+        // =====================================
+        // NO CHANGE FILTER
+        // =====================================
+
         if(
 
             LAST_PRICE.BTC === btc
@@ -1020,14 +1020,6 @@ setTimeout(async ()=>{
 🚀 SMART TERMINAL ACTIVE`
 
     );
-
-    // =====================================
-    // FIRST RUN
-    // =====================================
-
-    await autoPriceUpdate();
-
-    await sendMarketCommand();
 
     // =====================================
     // PRICE ALERT
