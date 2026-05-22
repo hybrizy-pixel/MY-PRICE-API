@@ -24,7 +24,14 @@ const CHAT_ID =
 process.env.CHAT_ID;
 
 // =====================================
-// RANDOM INSTANCE CODE
+// FEES
+// =====================================
+
+const BUY_FEE = 0.005;
+const SELL_FEE = 0.005;
+
+// =====================================
+// SERVER CODE
 // =====================================
 
 function generateServerCode(){
@@ -86,13 +93,7 @@ new TelegramBot(
 const COINS = {
 
     BTC:"XBTMYR",
-    GRT:"GRTMYR",
-
-    XRP:"XRPMYR",
-    XLM:"XLMMYR",
-
-    AAVE:"AAVEMYR",
-    CRV:"CRVMYR"
+    GRT:"GRTMYR"
 
 };
 
@@ -104,6 +105,10 @@ const LAST_PRICE = {};
 
 const LAST_EVENT = {};
 
+const USER_STATE = {};
+
+const ACTIVE_TRADES = {};
+
 // =====================================
 // HELPERS
 // =====================================
@@ -113,18 +118,12 @@ function formatPrice(
     value
 ){
 
-    if(
-        !value
-    ){
+    if(!value){
         return "0";
     }
 
     if(
-
-        coin === "BTC" ||
-        coin === "AAVE" ||
-        coin === "XRP"
-
+        coin === "BTC"
     ){
 
         return Number(
@@ -205,38 +204,27 @@ function setCooldown(key){
 // =====================================
 
 async function sendTelegram(
-    message
+    message,
+    options = {}
 ){
 
     try{
-
-        const timestamp =
-        new Date()
-        .toLocaleTimeString(
-            "en-MY",
-            {
-                hour12:false
-            }
-        );
 
         await bot.sendMessage(
 
             CHAT_ID,
 
-`${SERVER_CODE} [${timestamp}]
+`${SERVER_CODE}
 
-${message}`
+${message}`,
 
-        );
+            options
 
-        console.log(
-            "✅ TELEGRAM SENT"
         );
 
     }catch(err){
 
         console.log(
-            "❌ TELEGRAM ERROR",
             err.message
         );
 
@@ -245,7 +233,7 @@ ${message}`
 }
 
 // =====================================
-// GET LIVE PRICE
+// LIVE PRICE
 // =====================================
 
 async function getLivePrice(
@@ -254,17 +242,10 @@ async function getLivePrice(
 
     try{
 
-        const pair =
-        COINS[coin];
-
         const response =
         await axios.get(
 
-            `https://api.luno.com/api/1/ticker?pair=${pair}`,
-
-            {
-                timeout:5000
-            }
+            `https://api.luno.com/api/1/ticker?pair=${COINS[coin]}`
 
         );
 
@@ -274,11 +255,6 @@ async function getLivePrice(
 
     }catch(err){
 
-        console.log(
-            "PRICE ERROR",
-            err.message
-        );
-
         return null;
 
     }
@@ -286,7 +262,7 @@ async function getLivePrice(
 }
 
 // =====================================
-// GET ORDERBOOK
+// ORDERBOOK
 // =====================================
 
 async function getOrderbook(
@@ -295,28 +271,16 @@ async function getOrderbook(
 
     try{
 
-        const pair =
-        COINS[coin];
-
         const response =
         await axios.get(
 
-            `https://api.luno.com/api/1/orderbook?pair=${pair}`,
-
-            {
-                timeout:5000
-            }
+            `https://api.luno.com/api/1/orderbook?pair=${COINS[coin]}`
 
         );
 
         return response.data;
 
     }catch(err){
-
-        console.log(
-            "ORDERBOOK ERROR",
-            err.message
-        );
 
         return null;
 
@@ -325,38 +289,7 @@ async function getOrderbook(
 }
 
 // =====================================
-// MARKET COMMENT
-// =====================================
-
-function getMarketComment(
-    buyVolume,
-    sellVolume
-){
-
-    if(
-        buyVolume >
-        sellVolume * 2
-    ){
-
-        return "🔥 Buyer kuat";
-
-    }
-
-    if(
-        sellVolume >
-        buyVolume * 1.5
-    ){
-
-        return "⚠️ Seller kuat";
-
-    }
-
-    return "⚖️ Market neutral";
-
-}
-
-// =====================================
-// GET MARKET STRUCTURE
+// MARKET STRUCTURE
 // =====================================
 
 async function getMarketStructure(
@@ -385,10 +318,6 @@ async function getMarketStructure(
 
         }
 
-        // =====================================
-        // SUPPORT
-        // =====================================
-
         const supports =
         orderbook.bids.filter(b=>{
 
@@ -410,10 +339,6 @@ async function getMarketStructure(
             );
 
         });
-
-        // =====================================
-        // RESISTANCE
-        // =====================================
 
         const resistances =
         orderbook.asks.filter(a=>{
@@ -446,10 +371,6 @@ async function getMarketStructure(
 
         }
 
-        // =====================================
-        // SUPPORT
-        // =====================================
-
         let support =
         supports[0];
 
@@ -474,10 +395,6 @@ async function getMarketStructure(
             }
 
         }
-
-        // =====================================
-        // RESISTANCE
-        // =====================================
 
         let resistance =
         resistances[0];
@@ -504,10 +421,6 @@ async function getMarketStructure(
 
         }
 
-        // =====================================
-        // TOTAL VOLUME
-        // =====================================
-
         const buyVolume =
         orderbook.bids.reduce(
 
@@ -532,9 +445,30 @@ async function getMarketStructure(
 
         ,0);
 
+        const bestAsk =
+        parseFloat(
+            orderbook.asks[0].price
+        );
+
+        const bestBid =
+        parseFloat(
+            orderbook.bids[0].price
+        );
+
+        const spread =
+        bestAsk - bestBid;
+
+        const spreadPercent =
+        spread / currentPrice;
+
         return {
 
             currentPrice,
+
+            bestAsk,
+            bestBid,
+
+            spreadPercent,
 
             support:
             parseFloat(
@@ -563,11 +497,6 @@ async function getMarketStructure(
 
     }catch(err){
 
-        console.log(
-            "MARKET STRUCTURE ERROR",
-            err.message
-        );
-
         return null;
 
     }
@@ -575,7 +504,7 @@ async function getMarketStructure(
 }
 
 // =====================================
-// AUTO PRICE UPDATE
+// AUTO PRICE ALERT
 // =====================================
 
 async function autoPriceUpdate(){
@@ -602,10 +531,6 @@ async function autoPriceUpdate(){
 
         }
 
-        // =====================================
-        // NO CHANGE FILTER
-        // =====================================
-
         if(
 
             LAST_PRICE.BTC === btc
@@ -616,10 +541,6 @@ async function autoPriceUpdate(){
 
         ){
 
-            console.log(
-                "NO PRICE CHANGE"
-            );
-
             return;
 
         }
@@ -627,32 +548,24 @@ async function autoPriceUpdate(){
         let btcMessage = "";
         let grtMessage = "";
 
-        // =====================================
         // BTC
-        // =====================================
 
         if(
             LAST_PRICE.BTC
         ){
 
-            const old =
-            LAST_PRICE.BTC;
-
             const percent =
             (
                 (
-                    btc - old
-                ) / old
+                    btc -
+                    LAST_PRICE.BTC
+                ) /
+                LAST_PRICE.BTC
             ) * 100;
-
-            const emoji =
-            getPriceEmoji(
-                percent
-            );
 
             btcMessage =
 
-`${emoji} BTC
+`${getPriceEmoji(percent)} BTC
 RM${formatPrice(
 "BTC",
 btc
@@ -672,32 +585,24 @@ btc
 
         }
 
-        // =====================================
         // GRT
-        // =====================================
 
         if(
             LAST_PRICE.GRT
         ){
 
-            const old =
-            LAST_PRICE.GRT;
-
             const percent =
             (
                 (
-                    grt - old
-                ) / old
+                    grt -
+                    LAST_PRICE.GRT
+                ) /
+                LAST_PRICE.GRT
             ) * 100;
-
-            const emoji =
-            getPriceEmoji(
-                percent
-            );
 
             grtMessage =
 
-`${emoji} GRT
+`${getPriceEmoji(percent)} GRT
 RM${formatPrice(
 "GRT",
 grt
@@ -734,7 +639,6 @@ ${grtMessage}`
     }catch(err){
 
         console.log(
-            "PRICE UPDATE ERROR",
             err.message
         );
 
@@ -743,7 +647,7 @@ ${grtMessage}`
 }
 
 // =====================================
-// MARKET STRUCTURE ALERT
+// MARKET STRUCTURE
 // =====================================
 
 async function sendMarketCommand(){
@@ -781,22 +685,17 @@ RM${formatPrice(
 btc.currentPrice
 )}
 
-${getMarketComment(
-btc.buyVolume,
-btc.sellVolume
-)}
-
 🟢 Support
 RM${formatPrice(
 "BTC",
 btc.support
-)} (${btc.supportVolume.toFixed(2)} BTC)
+)}
 
 🔴 Resistance
 RM${formatPrice(
 "BTC",
 btc.resistance
-)} (${btc.resistanceVolume.toFixed(2)} BTC)
+)}
 
 ──────────────
 
@@ -807,29 +706,23 @@ RM${formatPrice(
 grt.currentPrice
 )}
 
-${getMarketComment(
-grt.buyVolume,
-grt.sellVolume
-)}
-
 🟢 Support
 RM${formatPrice(
 "GRT",
 grt.support
-)} (${grt.supportVolume.toFixed(0)} GRT)
+)}
 
 🔴 Resistance
 RM${formatPrice(
 "GRT",
 grt.resistance
-)} (${grt.resistanceVolume.toFixed(0)} GRT)`
+)}`
 
         );
 
     }catch(err){
 
         console.log(
-            "MARKET ERROR",
             err.message
         );
 
@@ -838,140 +731,325 @@ grt.resistance
 }
 
 // =====================================
-// BREAKOUT SCAN
+// SCALPING ENTRY
 // =====================================
 
-async function scanBreakout(){
+async function scanScalpingEntry(){
 
     try{
 
-        for(
-            const coin of
-            ["BTC","GRT"]
+        const structure =
+        await getMarketStructure(
+            "GRT"
+        );
+
+        if(
+            !structure
         ){
 
-            const structure =
-            await getMarketStructure(
-                coin
+            return;
+
+        }
+
+        const {
+
+            currentPrice,
+            resistance,
+            support,
+            buyVolume,
+            sellVolume,
+            supportVolume,
+            resistanceVolume,
+            bestAsk
+
+        } = structure;
+
+        const buyerPressure =
+
+            buyVolume >
+            sellVolume * 1.8;
+
+        const nearBreakout =
+
+            (
+                resistance -
+                currentPrice
+            ) <
+            currentPrice * 0.003;
+
+        const strongSupport =
+
+            supportVolume >
+            resistanceVolume;
+
+        const healthySpread =
+
+            structure.spreadPercent <
+            0.002;
+
+        if(
+
+            buyerPressure &&
+            nearBreakout &&
+            strongSupport &&
+            healthySpread
+
+        ){
+
+            if(
+                !cooldownPassed(
+                    "SCALP_GRT",
+                    900000
+                )
+            ){
+
+                return;
+
+            }
+
+            setCooldown(
+                "SCALP_GRT"
             );
 
-            if(
-                !structure
-            ){
+            const tp =
+            currentPrice * 1.007;
 
-                continue;
+            const sl =
+            support * 0.997;
 
-            }
+            await sendTelegram(
 
-            const price =
-            structure.currentPrice;
+`⚡ SCALPING ENTRY
 
-            // =====================================
-            // BREAKOUT
-            // =====================================
+🟢 GRT
 
-            if(
-                price >
-                structure.resistance
-            ){
-
-                if(
-                    !cooldownPassed(
-                        `${coin}_BREAKOUT`,
-                        900000
-                    )
-                ){
-
-                    continue;
-
-                }
-
-                setCooldown(
-                    `${coin}_BREAKOUT`
-                );
-
-                await sendTelegram(
-
-`🚀 BREAKOUT
-
-🟢 ${coin}
-
+📌 Entry Signal:
 RM${formatPrice(
-coin,
-price
+"GRT",
+currentPrice
 )}
 
-🔥 Resistance Break
+⚠️ Best Ask:
 RM${formatPrice(
-coin,
-structure.resistance
+"GRT",
+bestAsk
 )}
 
-📈 BUYER AGRESIF MEMBELI`
-
-                );
-
-            }
-
-            // =====================================
-            // BREAKDOWN
-            // =====================================
-
-            if(
-                price <
-                structure.support
-            ){
-
-                if(
-                    !cooldownPassed(
-                        `${coin}_BREAKDOWN`,
-                        900000
-                    )
-                ){
-
-                    continue;
-
-                }
-
-                setCooldown(
-                    `${coin}_BREAKDOWN`
-                );
-
-                await sendTelegram(
-
-`🔴 BREAKDOWN
-
-🔴 ${coin}
-
+📈 TP:
 RM${formatPrice(
-coin,
-price
+"GRT",
+tp
 )}
 
-⚠️ Support Break
+🛑 SL:
 RM${formatPrice(
-coin,
-structure.support
+"GRT",
+sl
 )}
 
-📉 SELLER AGRESIF MENJUAL`
+🔥 Momentum Breakout Incoming`,
 
-                );
+                {
 
-            }
+reply_markup:{
+
+inline_keyboard:[
+
+[
+{
+text:"✅ START ENTRY",
+callback_data:"START_SCALP_GRT"
+}
+]
+
+]
+
+}
+
+}
+
+            );
 
         }
 
     }catch(err){
 
         console.log(
-            "SCAN ERROR",
             err.message
         );
 
     }
 
 }
+
+// =====================================
+// CALLBACK
+// =====================================
+
+bot.on(
+    "callback_query",
+    async query=>{
+
+        const data =
+        query.data;
+
+        const chatId =
+        query.message.chat.id;
+
+        if(
+            data ===
+            "START_SCALP_GRT"
+        ){
+
+            USER_STATE[
+                chatId
+            ] = {
+
+                mode:"WAIT_TARGET"
+
+            };
+
+            await bot.sendMessage(
+
+                chatId,
+
+"💸 PROFIT TARGET RM?"
+
+            );
+
+        }
+
+    }
+);
+
+// =====================================
+// USER INPUT
+// =====================================
+
+bot.on(
+    "message",
+    async msg=>{
+
+        const chatId =
+        msg.chat.id;
+
+        if(
+            !USER_STATE[
+                chatId
+            ]
+        ){
+
+            return;
+
+        }
+
+        const state =
+        USER_STATE[
+            chatId
+        ];
+
+        if(
+            state.mode ===
+            "WAIT_TARGET"
+        ){
+
+            const targetProfit =
+            parseFloat(
+                msg.text
+            );
+
+            const structure =
+            await getMarketStructure(
+                "GRT"
+            );
+
+            if(
+                !structure
+            ){
+
+                return;
+
+            }
+
+            const entry =
+            structure.bestAsk;
+
+            const tp =
+            structure.currentPrice * 1.007;
+
+            const sl =
+            structure.support * 0.997;
+
+            const expectedProfitPerUnit =
+            tp - entry;
+
+            const quantity =
+            targetProfit /
+            expectedProfitPerUnit;
+
+            const buyValue =
+            quantity * entry;
+
+            USER_STATE[
+                chatId
+            ] = {
+
+                mode:"WAIT_CONFIRM",
+
+                quantity,
+                buyValue,
+                tp,
+                sl,
+                entry
+
+            };
+
+            await bot.sendMessage(
+
+                chatId,
+
+`🪙 Suggested Quantity
+
+${quantity.toFixed(0)} GRT
+
+💰 Estimated Buy Value
+RM${buyValue.toFixed(2)}
+
+📈 TP
+RM${tp.toFixed(4)}
+
+🛑 SL
+RM${sl.toFixed(4)}`,
+
+                {
+
+reply_markup:{
+
+inline_keyboard:[
+
+[
+{
+text:"✅ CONFIRM ENTRY",
+callback_data:"CONFIRM_ENTRY"
+},
+{
+text:"❌ CANCEL",
+callback_data:"CANCEL_ENTRY"
+}
+]
+
+]
+
+}
+
+}
+
+            );
+
+        }
+
+    }
+);
 
 // =====================================
 // EXPRESS
@@ -1009,10 +1087,6 @@ app.listen(PORT,()=>{
 
 setTimeout(async ()=>{
 
-    console.log(
-        "🚀 SYSTEM STARTED"
-    );
-
     await sendTelegram(
 
 `✅ BOT ONLINE
@@ -1021,10 +1095,7 @@ setTimeout(async ()=>{
 
     );
 
-    // =====================================
     // PRICE ALERT
-    // =====================================
-
     setInterval(
 
         autoPriceUpdate,
@@ -1033,10 +1104,7 @@ setTimeout(async ()=>{
 
     );
 
-    // =====================================
     // MARKET STRUCTURE
-    // =====================================
-
     setInterval(
 
         sendMarketCommand,
@@ -1045,13 +1113,10 @@ setTimeout(async ()=>{
 
     );
 
-    // =====================================
-    // BREAKOUT SCAN
-    // =====================================
-
+    // SCALPING ENTRY
     setInterval(
 
-        scanBreakout,
+        scanScalpingEntry,
 
         30000
 
