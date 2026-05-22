@@ -231,9 +231,17 @@ async function sendTelegram(
 
     try{
 
+        const timestamp =
+        new Date().toLocaleTimeString(
+            "en-MY",
+            {
+                hour12:false
+            }
+        );
+
         await bot.sendMessage(
             CHAT_ID,
-            `${SERVER_CODE} ${message}`,
+            `${SERVER_CODE} [${timestamp}] ${message}`,
             {
                 parse_mode:"HTML",
                 ...options
@@ -262,7 +270,10 @@ async function getTicker(
 
         const response =
         await axios.get(
-            `https://api.luno.com/api/1/ticker?pair=${COINS[coin]}`
+            `https://api.luno.com/api/1/ticker?pair=${COINS[coin]}`,
+            {
+                timeout:5000
+            }
         );
 
         return response.data;
@@ -283,7 +294,10 @@ async function getOrderbook(
 
         const response =
         await axios.get(
-            `https://api.luno.com/api/1/orderbook?pair=${COINS[coin]}`
+            `https://api.luno.com/api/1/orderbook?pair=${COINS[coin]}`,
+            {
+                timeout:5000
+            }
         );
 
         return response.data;
@@ -366,15 +380,13 @@ async function getMarketStructure(
 
     try{
 
-        const orderbook =
-        await getOrderbook(
-            coin
-        );
-
-        const ticker =
-        await getTicker(
-            coin
-        );
+        const [
+            orderbook,
+            ticker
+        ] = await Promise.all([
+            getOrderbook(coin),
+            getTicker(coin)
+        ]);
 
         if(
             !orderbook ||
@@ -389,11 +401,18 @@ async function getMarketStructure(
         const asks =
         orderbook.asks;
 
+        if(
+            !bids.length ||
+            !asks.length
+        ){
+            return null;
+        }
+
         // =====================================
-        // LIVE MARKET PRICE
+        // DISPLAY PRICE (LUNO UI)
         // =====================================
 
-        const currentPrice =
+        const displayPrice =
         parseFloat(
             ticker.last_trade
         );
@@ -411,6 +430,27 @@ async function getMarketStructure(
         parseFloat(
             asks[0].price
         );
+
+        // =====================================
+        // LIVE MARKET PRICE
+        // =====================================
+
+        const marketPrice =
+        (
+            bestBidPrice +
+            bestAskPrice
+        ) / 2;
+
+        // =====================================
+        // MAIN ENGINE PRICE
+        // =====================================
+
+        const currentPrice =
+        marketPrice;
+
+        // =====================================
+        // SPREAD
+        // =====================================
 
         const spread =
         bestAskPrice -
@@ -514,6 +554,10 @@ async function getMarketStructure(
 
         );
 
+        // =====================================
+        // BUY PRESSURE
+        // =====================================
+
         let buyVolume = 0;
 
         for(
@@ -535,6 +579,10 @@ async function getMarketStructure(
             }
 
         }
+
+        // =====================================
+        // SELL PRESSURE
+        // =====================================
 
         let sellVolume = 0;
 
@@ -558,9 +606,17 @@ async function getMarketStructure(
 
         }
 
+        // =====================================
+        // PRESSURE
+        // =====================================
+
         const pressure =
         buyVolume /
         sellVolume;
+
+        // =====================================
+        // TREND
+        // =====================================
 
         let trend =
         "SIDEWAYS";
@@ -589,7 +645,11 @@ async function getMarketStructure(
 
         return {
 
+            displayPrice,
+
             currentPrice,
+
+            marketPrice,
 
             bestBidPrice,
             bestAskPrice,
@@ -616,11 +676,16 @@ async function getMarketStructure(
 
             pressure,
             trend,
+            spread,
             spreadPercent
 
         };
 
     }catch(err){
+
+        console.log(
+            err.message
+        );
 
         return null;
 
@@ -738,9 +803,23 @@ async function sendMarketStructure(){
 
 🪙 ${coin}
 
+💵 Luno Price
 RM${formatPrice(
     coin,
-    data.currentPrice
+    data.displayPrice
+)}
+
+⚡ Live Market
+RM${formatPrice(
+    coin,
+    data.marketPrice
+)}
+
+📊 Spread
+${data.spread.toFixed(
+    coin === "BTC"
+    ? 2
+    : 4
 )}
 
 ${trendText}
@@ -767,950 +846,7 @@ RM${formatPrice(
 }
 
 // =====================================
-// SCALPING ENTRY
-// =====================================
-
-async function sendScalpEntry(
-    coin,
-    data
-){
-
-    const tp =
-    coin === "BTC"
-    ?
-    data.currentPrice * 1.004
-    :
-    data.currentPrice * 1.006;
-
-    const sl =
-    coin === "BTC"
-    ?
-    data.supportPrice * 0.997
-    :
-    data.supportPrice * 0.995;
-
-    await sendTelegram(
-`
-🔄 SCALPING ENTRY
-
-🟢 ${coin}
-
-📌 Entry Signal:
-RM${formatPrice(
-    coin,
-    data.currentPrice
-)}
-
-⚠️ Best Ask:
-RM${formatPrice(
-    coin,
-    data.bestAskPrice
-)}
-
-📈 TP:
-RM${formatPrice(
-    coin,
-    tp
-)}
-
-🛑 SL:
-RM${formatPrice(
-    coin,
-    sl
-)}
-
-⚡ Fast momentum detected.
-`,
-{
-reply_markup:{
-inline_keyboard:[
-[
-{
-text:"✅ START ENTRY",
-callback_data:
-`start_scalp_${coin}_${data.currentPrice}_${data.bestAskPrice}_${tp}_${sl}`
-}
-]
-]
-}
-}
-    );
-
-}
-
-// =====================================
-// NORMAL ENTRY
-// =====================================
-
-async function sendNormalEntry(
-    coin,
-    data
-){
-
-    const tp =
-
-    coin === "BTC"
-
-    ?
-
-    data.currentPrice * 1.008
-
-    :
-
-    data.currentPrice * 1.01;
-
-    const sl =
-
-    coin === "BTC"
-
-    ?
-
-    data.supportPrice * 0.996
-
-    :
-
-    data.supportPrice * 0.995;
-
-    await sendTelegram(
-`
-🚀 NORMAL ENTRY
-
-🟢 ${coin}
-
-📌 Entry Signal:
-RM${formatPrice(
-    coin,
-    data.currentPrice
-)}
-
-⚠️ Best Ask:
-RM${formatPrice(
-    coin,
-    data.bestAskPrice
-)}
-
-📈 TP:
-RM${formatPrice(
-    coin,
-    tp
-)}
-
-🛑 SL:
-RM${formatPrice(
-    coin,
-    sl
-)}
-
-🔥 Strong bullish continuation.
-`,
-{
-reply_markup:{
-inline_keyboard:[
-[
-{
-text:"✅ START ENTRY",
-callback_data:
-`start_normal_${coin}_${data.currentPrice}_${data.bestAskPrice}_${tp}_${sl}`
-}
-]
-]
-}
-}
-    );
-
-}
-
-// =====================================
-// SMART SIGNAL ENGINE
-// =====================================
-
-async function smartSignalEngine(){
-
-    for(
-        const coin of
-        Object.keys(COINS)
-    ){
-
-        const data =
-        await getMarketStructure(
-            coin
-        );
-
-        if(!data){
-            continue;
-        }
-
-        // =====================================
-        // ENTRY ANTI SPAM
-        // =====================================
-
-        if(
-
-            ALERTS.lastEntryPrice[coin]
-
-            &&
-
-            Math.abs(
-
-                (
-                    data.currentPrice -
-                    ALERTS.lastEntryPrice[coin]
-                )
-
-                /
-
-                data.currentPrice
-
-            ) < 0.003
-
-        ){
-
-            continue;
-
-        }
-
-        // =====================================
-        // BREAKOUT
-        // =====================================
-
-        if(
-            data.trend === "BULLISH"
-            &&
-            data.pressure > 1.35
-            &&
-            cooldownPassed(
-                ALERTS.breakout,
-                coin,
-                ALERT_COOLDOWN.breakout
-            )
-        ){
-
-            setCooldown(
-                ALERTS.breakout,
-                coin
-            );
-
-            await sendTelegram(
-`
-🚀 BREAKOUT DETECTED
-
-🟢 ${coin}
-
-📈 Breakout:
-RM${formatPrice(
-    coin,
-    data.currentPrice * 0.998
-)}
-→
-RM${formatPrice(
-    coin,
-    data.resistancePrice
-)}
-
-🔥 Buyer momentum semakin kuat.
-`
-            );
-
-        }
-
-        // =====================================
-        // NORMAL ENTRY
-        // =====================================
-
-        if(
-            data.trend === "BULLISH"
-            &&
-            data.pressure > 1.35
-            &&
-            cooldownPassed(
-                ALERTS.normal,
-                coin,
-                ALERT_COOLDOWN.normal
-            )
-        ){
-
-            setCooldown(
-                ALERTS.normal,
-                coin
-            );
-
-            ALERTS.lastEntryPrice[coin] =
-            data.currentPrice;
-
-            await sendNormalEntry(
-                coin,
-                data
-            );
-
-        }
-
-        // =====================================
-        // SCALPING ENTRY
-        // =====================================
-
-        if(
-            data.trend === "BULLISH"
-            &&
-            data.pressure > 1.1
-            &&
-            data.pressure < 1.35
-            &&
-            data.spreadPercent < 0.0012
-            &&
-            cooldownPassed(
-                ALERTS.scalp,
-                coin,
-                ALERT_COOLDOWN.scalp
-            )
-        ){
-
-            setCooldown(
-                ALERTS.scalp,
-                coin
-            );
-
-            ALERTS.lastEntryPrice[coin] =
-            data.currentPrice;
-
-            await sendScalpEntry(
-                coin,
-                data
-            );
-
-        }
-
-        // =====================================
-        // BREAKDOWN
-        // =====================================
-
-        if(
-            data.trend === "BEARISH"
-            &&
-            data.pressure < 0.75
-            &&
-            cooldownPassed(
-                ALERTS.breakdown,
-                coin,
-                ALERT_COOLDOWN.breakdown
-            )
-        ){
-
-            setCooldown(
-                ALERTS.breakdown,
-                coin
-            );
-
-            await sendTelegram(
-`
-🛑 BREAKDOWN ALERT
-
-🔴 ${coin}
-
-📉 Breakdown:
-RM${formatPrice(
-    coin,
-    data.supportPrice * 1.002
-)}
-→
-RM${formatPrice(
-    coin,
-    data.supportPrice
-)}
-
-⚠️ Seller pressure semakin kuat.
-`
-            );
-
-        }
-
-        // =====================================
-        // WHALE
-        // =====================================
-
-        if(
-            data.supportVolume > 100000
-            &&
-            cooldownPassed(
-                ALERTS.whale,
-                coin,
-                ALERT_COOLDOWN.whale
-            )
-        ){
-
-            setCooldown(
-                ALERTS.whale,
-                coin
-            );
-
-            await sendTelegram(
-`
-🐋 WHALE INFLOW
-
-🟢 ${coin}
-
-🪙 Buy wall:
-RM${formatPrice(
-    coin,
-    data.supportPrice
-)}
-
-⚠️ Whale nampak tengah collect.
-`
-            );
-
-        }
-
-        // =====================================
-        // REJECTION
-        // =====================================
-
-        if(
-            data.pressure > 0.9
-            &&
-            data.pressure < 1
-            &&
-            data.spreadPercent > 0.0008
-            &&
-            cooldownPassed(
-                ALERTS.rejection,
-                coin,
-                ALERT_COOLDOWN.rejection
-            )
-        ){
-
-            setCooldown(
-                ALERTS.rejection,
-                coin
-            );
-
-            await sendTelegram(
-`
-❌ REJECTION ALERT
-
-🔴 ${coin}
-
-📉 Reject:
-RM${formatPrice(
-    coin,
-    data.currentPrice
-)}
-→
-RM${formatPrice(
-    coin,
-    data.resistancePrice
-)}
-
-⚠️ Seller masih kuat defend atas.
-`
-            );
-
-        }
-
-    }
-
-}
-
-// =====================================
-// CALLBACK QUERY
-// =====================================
-
-bot.on(
-    "callback_query",
-    async query=>{
-
-    const data =
-    query.data;
-
-    const userId =
-    query.from.id;
-
-    // =====================================
-    // START ENTRY
-    // =====================================
-
-    if(
-        data.startsWith(
-            "start_"
-        )
-    ){
-
-        const split =
-        data.split("_");
-
-        USER_FLOW[userId] = {
-
-            step:"WAIT_PROFIT",
-
-            entryType:
-            split[1],
-
-            coin:
-            split[2],
-
-            entryPrice:
-            Number(split[3]),
-
-            bestAsk:
-            Number(split[4]),
-
-            tp:
-            Number(split[5]),
-
-            sl:
-            Number(split[6])
-
-        };
-
-        await sendTelegram(
-            "💸 PROFIT TARGET RM?"
-        );
-
-    }
-
-    // =====================================
-    // CONFIRM ENTRY
-    // =====================================
-
-    if(
-        data ===
-        "confirm_entry"
-    ){
-
-        USER_FLOW[userId].step =
-        "WAIT_MATCHED_PRICE";
-
-        await sendTelegram(
-            "📌 Matched Buy Price?"
-        );
-
-    }
-
-    // =====================================
-    // CONFIRM SELL
-    // =====================================
-
-    if(
-        data.startsWith(
-            "confirm_sell_"
-        )
-    ){
-
-        const tradeId =
-        data.replace(
-            "confirm_sell_",
-            ""
-        );
-
-        USER_FLOW[userId] = {
-
-            step:"WAIT_MATCHED_SELL",
-
-            tradeId
-
-        };
-
-        await sendTelegram(
-            "💵 Matched Sell Price?"
-        );
-
-    }
-
-});
-
-// =====================================
-// MESSAGE FLOW
-// =====================================
-
-bot.on(
-    "message",
-    async msg=>{
-
-    const userId =
-    msg.from.id;
-
-    const text =
-    msg.text;
-
-    if(
-        !USER_FLOW[userId]
-    ){
-        return;
-    }
-
-    const flow =
-    USER_FLOW[userId];
-
-    // =====================================
-    // WAIT PROFIT
-    // =====================================
-
-    if(
-        flow.step ===
-        "WAIT_PROFIT"
-    ){
-
-        flow.targetProfit =
-        Number(text);
-
-        const adjustedDiff =
-
-        (
-            flow.tp *
-            (1 - SELL_FEE)
-        )
-
-        -
-
-        (
-            flow.bestAsk *
-            (1 + BUY_FEE)
-        );
-
-        const quantity =
-        flow.targetProfit /
-        adjustedDiff;
-
-        flow.quantity =
-        quantity;
-
-        flow.step =
-        "WAIT_CONFIRM";
-
-        const estimatedBuyValue =
-        quantity *
-        flow.bestAsk;
-
-        await sendTelegram(
-`
-🪙 Suggested Quantity
-
-${formatUnit(
-    flow.coin,
-    quantity
-)} ${flow.coin}
-
-💰 Estimated Buy Value
-RM${estimatedBuyValue.toFixed(2)}
-
-📌 Entry Signal
-RM${formatPrice(
-    flow.coin,
-    flow.entryPrice
-)}
-
-⚠️ Best Ask
-RM${formatPrice(
-    flow.coin,
-    flow.bestAsk
-)}
-
-📈 TP
-RM${formatPrice(
-    flow.coin,
-    flow.tp
-)}
-
-🛑 SL
-RM${formatPrice(
-    flow.coin,
-    flow.sl
-)}
-
-❓ Confirm Entry?
-`,
-{
-reply_markup:{
-inline_keyboard:[
-[
-{
-text:"✅ CONFIRM ENTRY",
-callback_data:"confirm_entry"
-}
-]
-]
-}
-}
-        );
-
-    }
-
-    // =====================================
-    // WAIT MATCHED BUY
-    // =====================================
-
-    if(
-        flow.step ===
-        "WAIT_MATCHED_PRICE"
-    ){
-
-        const matchedPrice =
-        Number(text);
-
-        const buyFeeUnit =
-        flow.quantity *
-        BUY_FEE;
-
-        const netBuyUnit =
-        flow.quantity -
-        buyFeeUnit;
-
-        const netBuyValue =
-        netBuyUnit *
-        matchedPrice;
-
-        const tradeId =
-        createTradeId();
-
-        ACTIVE_TRADES[
-            tradeId
-        ] = {
-
-            tradeId,
-
-            coin:
-            flow.coin,
-
-            tp:
-            flow.tp,
-
-            sl:
-            flow.sl,
-
-            matchedPrice,
-
-            netBuyUnit,
-
-            netBuyValue,
-
-            sellTriggered:false
-
-        };
-
-        await sendTelegram(
-`
-✅ TRADE CONFIRMED
-
-🟢 ${flow.coin}
-
-🪙 Net Buy Unit
-${formatUnit(
-    flow.coin,
-    netBuyUnit
-)} ${flow.coin}
-
-💰 Net Buy Value
-RM${netBuyValue.toFixed(2)}
-
-📈 TP
-RM${formatPrice(
-    flow.coin,
-    flow.tp
-)}
-
-🛑 SL
-RM${formatPrice(
-    flow.coin,
-    flow.sl
-)}
-
-👀 Live monitoring activated
-`
-        );
-
-        delete USER_FLOW[
-            userId
-        ];
-
-    }
-
-    // =====================================
-    // WAIT MATCHED SELL
-    // =====================================
-
-    if(
-        flow.step ===
-        "WAIT_MATCHED_SELL"
-    ){
-
-        const trade =
-        ACTIVE_TRADES[
-            flow.tradeId
-        ];
-
-        const matchedSell =
-        Number(text);
-
-        const sellFeeUnit =
-        trade.netBuyUnit *
-        SELL_FEE;
-
-        const netSellUnit =
-        trade.netBuyUnit -
-        sellFeeUnit;
-
-        const finalSale =
-        netSellUnit *
-        matchedSell;
-
-        const finalProfit =
-        finalSale -
-        trade.netBuyValue;
-
-        await sendTelegram(
-`
-✅ CONFIRM SOLD
-
-🟢 ${trade.coin}
-
-🪙 Sold:
-${formatUnit(
-    trade.coin,
-    netSellUnit
-)} ${trade.coin}
-
-💵 Matched Sell:
-RM${formatPrice(
-    trade.coin,
-    matchedSell
-)}
-
-💰 Final Profit:
-RM${finalProfit.toFixed(2)}
-
-⚠️ Profit mungkin berubah ikut matched sell price sebenar.
-`
-        );
-
-        delete ACTIVE_TRADES[
-            flow.tradeId
-        ];
-
-        delete USER_FLOW[
-            userId
-        ];
-
-    }
-
-});
-
-// =====================================
-// MONITOR TRADES
-// =====================================
-
-async function monitorTrades(){
-
-    for(
-        const tradeId in
-        ACTIVE_TRADES
-    ){
-
-        const trade =
-        ACTIVE_TRADES[
-            tradeId
-        ];
-
-        const data =
-        await getMarketStructure(
-            trade.coin
-        );
-
-        if(!data){
-            continue;
-        }
-
-        // =====================================
-        // SELL NOW
-        // =====================================
-
-        if(
-            data.currentPrice >=
-            trade.tp
-            &&
-            !trade.sellTriggered
-        ){
-
-            trade.sellTriggered =
-            true;
-
-            const estimatedSale =
-            trade.netBuyUnit *
-            data.bestBidPrice;
-
-            const estimatedProfit =
-            estimatedSale -
-            trade.netBuyValue;
-
-            await sendTelegram(
-`
-🚀 SELL NOW
-
-🟢 ${trade.coin}
-
-📈 TP Hit:
-RM${formatPrice(
-    trade.coin,
-    trade.tp
-)}
-
-⚠️ Best Bid:
-RM${formatPrice(
-    trade.coin,
-    data.bestBidPrice
-)}
-
-💰 Estimated Profit:
-RM${estimatedProfit.toFixed(2)}
-`,
-{
-reply_markup:{
-inline_keyboard:[
-[
-{
-text:"✅ CONFIRM SELL",
-callback_data:
-`confirm_sell_${tradeId}`
-}
-]
-]
-}
-}
-            );
-
-        }
-
-        // =====================================
-        // CUTLOSS
-        // =====================================
-
-        if(
-            data.currentPrice <=
-            trade.sl
-        ){
-
-            await sendTelegram(
-`
-🛑 CUTLOSS NOW
-
-🔴 ${trade.coin}
-
-📉 Support pecah:
-RM${formatPrice(
-    trade.coin,
-    trade.sl
-)}
-
-⚠️ Selling pressure semakin kuat.
-`
-            );
-
-        }
-
-    }
-
-}
-
-// =====================================
-// EXPRESS
+// START SERVER
 // =====================================
 
 app.get("/",(req,res)=>{
@@ -1723,10 +859,6 @@ app.get("/",(req,res)=>{
     });
 
 });
-
-// =====================================
-// START SERVER
-// =====================================
 
 app.listen(PORT,()=>{
 
@@ -1755,8 +887,6 @@ setTimeout(
 
     await sendMarketStructure();
 
-    await smartSignalEngine();
-
     setInterval(
         sendPriceAlert,
         300000
@@ -1765,16 +895,6 @@ setTimeout(
     setInterval(
         sendMarketStructure,
         900000
-    );
-
-    setInterval(
-        smartSignalEngine,
-        120000
-    );
-
-    setInterval(
-        monitorTrades,
-        10000
     );
 
 },5000);
