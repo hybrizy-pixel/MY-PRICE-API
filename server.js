@@ -106,11 +106,7 @@ const LAST_BREAKOUT = {};
 
 const LAST_BREAKDOWN = {};
 
-// =====================================
-// REQUEST LOCK
-// =====================================
-
-let FETCHING_PRICE = false;
+const LAST_EVENT = {};
 
 // =====================================
 // HELPERS
@@ -176,6 +172,35 @@ function getPriceEmoji(percent){
     }
 
     return "🔴";
+
+}
+
+function cooldownPassed(
+    key,
+    cooldown
+){
+
+    if(
+        !LAST_EVENT[key]
+    ){
+
+        return true;
+
+    }
+
+    return (
+
+        Date.now() -
+        LAST_EVENT[key]
+
+    ) > cooldown;
+
+}
+
+function setCooldown(key){
+
+    LAST_EVENT[key] =
+    Date.now();
 
 }
 
@@ -559,17 +584,6 @@ async function getMarketStructure(
 
 async function autoPriceUpdate(){
 
-    if(
-        FETCHING_PRICE
-    ){
-
-        return;
-
-    }
-
-    FETCHING_PRICE =
-    true;
-
     try{
 
         const [
@@ -587,6 +601,24 @@ async function autoPriceUpdate(){
             !btc ||
             !grt
         ){
+
+            return;
+
+        }
+
+        if(
+
+            LAST_PRICE.BTC === btc
+
+            &&
+
+            LAST_PRICE.GRT === grt
+
+        ){
+
+            console.log(
+                "NO PRICE CHANGE"
+            );
 
             return;
 
@@ -706,11 +738,6 @@ ${grtMessage}`
             err.message
         );
 
-    }finally{
-
-        FETCHING_PRICE =
-        false;
-
     }
 
 }
@@ -763,13 +790,13 @@ btc.sellVolume
 RM${formatPrice(
 "BTC",
 btc.support
-)}
+)} (${btc.supportVolume.toFixed(2)} BTC)
 
 🔴 Resistance
 RM${formatPrice(
 "BTC",
 btc.resistance
-)}
+)} (${btc.resistanceVolume.toFixed(2)} BTC)
 
 ──────────────
 
@@ -789,13 +816,13 @@ grt.sellVolume
 RM${formatPrice(
 "GRT",
 grt.support
-)}
+)} (${grt.supportVolume.toFixed(0)} GRT)
 
 🔴 Resistance
 RM${formatPrice(
 "GRT",
 grt.resistance
-)}`
+)} (${grt.resistanceVolume.toFixed(0)} GRT)`
 
         );
 
@@ -849,18 +876,19 @@ async function scanBreakout(){
             ){
 
                 if(
-                    LAST_BREAKOUT[
-                        coin
-                    ]
+                    !cooldownPassed(
+                        `${coin}_BREAKOUT`,
+                        900000
+                    )
                 ){
 
                     continue;
 
                 }
 
-                LAST_BREAKOUT[
-                    coin
-                ] = true;
+                setCooldown(
+                    `${coin}_BREAKOUT`
+                );
 
                 await sendTelegram(
 
@@ -877,15 +905,11 @@ price
 RM${formatPrice(
 coin,
 structure.resistance
-)}`
+)}
+
+📈 BUYER AGRESIF MEMBELI`
 
                 );
-
-            }else{
-
-                LAST_BREAKOUT[
-                    coin
-                ] = false;
 
             }
 
@@ -899,18 +923,19 @@ structure.resistance
             ){
 
                 if(
-                    LAST_BREAKDOWN[
-                        coin
-                    ]
+                    !cooldownPassed(
+                        `${coin}_BREAKDOWN`,
+                        900000
+                    )
                 ){
 
                     continue;
 
                 }
 
-                LAST_BREAKDOWN[
-                    coin
-                ] = true;
+                setCooldown(
+                    `${coin}_BREAKDOWN`
+                );
 
                 await sendTelegram(
 
@@ -927,15 +952,11 @@ price
 RM${formatPrice(
 coin,
 structure.support
-)}`
+)}
+
+📉 SELLER AGRESIF MENJUAL`
 
                 );
-
-            }else{
-
-                LAST_BREAKDOWN[
-                    coin
-                ] = false;
 
             }
 
@@ -1009,14 +1030,14 @@ setTimeout(async ()=>{
     await sendMarketCommand();
 
     // =====================================
-    // FAST PRICE REFRESH
+    // PRICE ALERT
     // =====================================
 
     setInterval(
 
         autoPriceUpdate,
 
-        10000
+        300000
 
     );
 
@@ -1028,7 +1049,7 @@ setTimeout(async ()=>{
 
         sendMarketCommand,
 
-        300000
+        900000
 
     );
 
