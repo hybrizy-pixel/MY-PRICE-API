@@ -14,7 +14,7 @@ const PORT =
 process.env.PORT || 3000;
 
 // =====================================
-// RANDOM SERVER CODE
+// SERVER CODE
 // =====================================
 
 function generateServerCode(){
@@ -92,7 +92,7 @@ const BUY_FEE = 0.005;
 const SELL_FEE = 0.005;
 
 // =====================================
-// EXPIRY
+// SIGNAL SETTINGS
 // =====================================
 
 const SIGNAL_EXPIRY =
@@ -255,11 +255,15 @@ async function sendTelegram(
             }
         );
 
+        return true;
+
     }catch(err){
 
         console.log(
             err.message
         );
+
+        return false;
 
     }
 
@@ -365,48 +369,119 @@ async function getMarketStructure(
         spread /
         currentPrice;
 
+        // =====================================
+        // NEAREST SUPPORT
+        // =====================================
+
+        const nearbyBids =
+        bids.filter(
+            bid => {
+
+                const price =
+                parseFloat(
+                    bid.price
+                );
+
+                return (
+                    price <
+                    currentPrice
+                    &&
+                    price >
+                    currentPrice * 0.98
+                );
+
+            }
+        );
+
+        // =====================================
+        // NEAREST RESISTANCE
+        // =====================================
+
+        const nearbyAsks =
+        asks.filter(
+            ask => {
+
+                const price =
+                parseFloat(
+                    ask.price
+                );
+
+                return (
+                    price >
+                    currentPrice
+                    &&
+                    price <
+                    currentPrice * 1.02
+                );
+
+            }
+        );
+
+        nearbyBids.sort(
+            (a,b)=>
+            parseFloat(b.price)
+            -
+            parseFloat(a.price)
+        );
+
+        nearbyAsks.sort(
+            (a,b)=>
+            parseFloat(a.price)
+            -
+            parseFloat(b.price)
+        );
+
+        const strongestSupport =
+        nearbyBids.find(
+            bid =>
+            parseFloat(
+                bid.volume
+            ) > 0
+        );
+
+        const strongestResistance =
+        nearbyAsks.find(
+            ask =>
+            parseFloat(
+                ask.volume
+            ) > 0
+        );
+
+        if(
+            !strongestSupport ||
+            !strongestResistance
+        ){
+
+            return null;
+
+        }
+
+        // =====================================
+        // PRESSURE
+        // =====================================
+
         let buyVolume = 0;
         let sellVolume = 0;
 
         for(
-            const bid of bids
+            const bid of nearbyBids
         ){
 
-            if(
-                parseFloat(
-                    bid.price
-                )
-                >=
-                currentPrice * 0.995
-            ){
-
-                buyVolume +=
-                parseFloat(
-                    bid.volume
-                );
-
-            }
+            buyVolume +=
+            parseFloat(
+                bid.volume
+            );
 
         }
 
         for(
-            const ask of asks
+            const ask of nearbyAsks
         ){
 
-            if(
-                parseFloat(
-                    ask.price
-                )
-                <=
-                currentPrice * 1.005
-            ){
-
-                sellVolume +=
-                parseFloat(
-                    ask.volume
-                );
-
-            }
+            sellVolume +=
+            parseFloat(
+                ask.volume
+            );
 
         }
 
@@ -436,24 +511,6 @@ async function getMarketStructure(
             "BEARISH";
 
         }
-
-        const strongestSupport =
-        bids.reduce(
-            (a,b)=>
-            parseFloat(a.volume)
-            >
-            parseFloat(b.volume)
-            ? a : b
-        );
-
-        const strongestResistance =
-        asks.reduce(
-            (a,b)=>
-            parseFloat(a.volume)
-            >
-            parseFloat(b.volume)
-            ? a : b
-        );
 
         return {
 
@@ -491,6 +548,10 @@ async function getMarketStructure(
         };
 
     }catch(err){
+
+        console.log(
+            err.message
+        );
 
         return null;
 
@@ -571,7 +632,7 @@ RM${formatPrice(
 }
 
 // =====================================
-// MARKET STRUCTURE ALERT
+// MARKET STRUCTURE
 // =====================================
 
 async function sendMarketStructure(){
@@ -665,7 +726,7 @@ async function marketEventEngine(){
             data.currentPrice >
             data.resistancePrice
             &&
-            data.pressure > 1.20
+            data.pressure > 1.15
             &&
             cooldownPassed(
                 ALERTS.breakout,
@@ -685,15 +746,18 @@ async function marketEventEngine(){
 
 🟢 ${coin}
 
-📈 Resistance breakout
+📈 Breakout
+RM${formatPrice(
+    coin,
+    data.currentPrice
+)}
+→
 RM${formatPrice(
     coin,
     data.resistancePrice
 )}
 
 🔥 Buyer momentum increasing
-
-⚠️ Seller wall semakin menipis
 `
             );
 
@@ -727,11 +791,18 @@ RM${formatPrice(
 
 🔴 ${coin}
 
-📉 Support breakdown
+📉 Breakdown
+RM${formatPrice(
+    coin,
+    data.currentPrice
+)}
+→
+RM${formatPrice(
+    coin,
+    data.supportPrice
+)}
 
 ⚠️ Seller pressure increasing
-
-💧 Buyer wall weakening
 `
             );
 
@@ -765,16 +836,25 @@ RM${formatPrice(
 
 🔴 ${coin}
 
-📉 Resistance rejection detected
+📉 Reject
+RM${formatPrice(
+    coin,
+    data.currentPrice
+)}
+→
+RM${formatPrice(
+    coin,
+    data.resistancePrice
+)}
 
-⚠️ Strong seller wall defended
+⚠️ Seller wall defended
 `
             );
 
         }
 
         // =====================================
-        // WHALE INFLOW
+        // WHALE
         // =====================================
 
         if(
@@ -798,13 +878,13 @@ RM${formatPrice(
 
 🟢 ${coin}
 
-🪙 Buy wall:
+🪙 Buy Wall
 ${formatUnit(
     coin,
     data.supportVolume
 )} ${coin}
 
-⚠️ Whale nampak tengah collect.
+⚠️ Whale accumulation detected
 `
             );
 
@@ -835,7 +915,7 @@ ${formatUnit(
 
 🟡 ${coin}
 
-📉 Spread semakin besar
+📉 Spread terlalu besar
 
 ⚠️ Risiko slippage meningkat
 `
@@ -893,6 +973,10 @@ async function sendScalpEntry(
     /
     data.currentPrice;
 
+    // =====================================
+    // LOW QUALITY FILTER
+    // =====================================
+
     if(
         tpDistance < 0.015
     ){
@@ -900,6 +984,10 @@ async function sendScalpEntry(
         return;
 
     }
+
+    // =====================================
+    // RESISTANCE FILTER
+    // =====================================
 
     if(
         data.resistancePrice <
@@ -913,22 +1001,7 @@ async function sendScalpEntry(
     const signalId =
     createSignalId();
 
-    PENDING_SIGNALS[
-        signalId
-    ] = {
-
-        signalId,
-        coin,
-
-        type:"ENTRY",
-
-        createdAt:
-        now(),
-
-        expired:false
-
-    };
-
+    const sent =
     await sendTelegram(
 `
 🔄 SCALPING ENTRY
@@ -978,6 +1051,26 @@ callback_data:
 }
     );
 
+    if(sent){
+
+        PENDING_SIGNALS[
+            signalId
+        ] = {
+
+            signalId,
+            coin,
+
+            createdAt:
+            now(),
+
+            expired:false,
+
+            sent:true
+
+        };
+
+    }
+
 }
 
 // =====================================
@@ -1000,22 +1093,7 @@ async function sendNormalEntry(
     const signalId =
     createSignalId();
 
-    PENDING_SIGNALS[
-        signalId
-    ] = {
-
-        signalId,
-        coin,
-
-        type:"ENTRY",
-
-        createdAt:
-        now(),
-
-        expired:false
-
-    };
-
+    const sent =
     await sendTelegram(
 `
 🚀 NORMAL ENTRY
@@ -1065,6 +1143,26 @@ callback_data:
 }
     );
 
+    if(sent){
+
+        PENDING_SIGNALS[
+            signalId
+        ] = {
+
+            signalId,
+            coin,
+
+            createdAt:
+            now(),
+
+            expired:false,
+
+            sent:true
+
+        };
+
+    }
+
 }
 
 // =====================================
@@ -1088,7 +1186,7 @@ async function smartSignalEngine(){
         }
 
         // =====================================
-        // SCALPING
+        // SCALP
         // =====================================
 
         if(
@@ -1161,6 +1259,10 @@ bot.on(
     const userId =
     query.from.id;
 
+    // =====================================
+    // START ENTRY
+    // =====================================
+
     if(
         data.startsWith(
             "start_"
@@ -1187,7 +1289,7 @@ bot.on(
 `
 ⌛ ENTRY CANCELLED
 
-⚠️ Entry signal expired.
+⚠️ Signal expired.
 `
             );
 
@@ -1225,13 +1327,15 @@ bot.on(
 
         await sendTelegram(
 `
-💸 PROFIT TARGET RM?
+💸 TARGET PROFIT RM?
 `
         );
 
-        return;
-
     }
+
+    // =====================================
+    // YES ENTRY
+    // =====================================
 
     if(
         data ===
@@ -1250,9 +1354,11 @@ Contoh:
 `
         );
 
-        return;
-
     }
+
+    // =====================================
+    // NO ENTRY
+    // =====================================
 
     if(
         data ===
@@ -1270,8 +1376,6 @@ Contoh:
 🟡 Trade dibatalkan user.
 `
         );
-
-        return;
 
     }
 
@@ -1299,6 +1403,10 @@ bot.on(
 
     const flow =
     USER_FLOW[userId];
+
+    // =====================================
+    // WAIT PROFIT
+    // =====================================
 
     if(
         flow.step ===
@@ -1453,6 +1561,10 @@ callback_data:"no_entry"
 
     }
 
+    // =====================================
+    // WAIT MATCHED BUY
+    // =====================================
+
     if(
         flow.step ===
         "WAIT_MATCHED_PRICE"
@@ -1589,6 +1701,10 @@ async function monitorTrades(){
             continue;
         }
 
+        // =====================================
+        // TAKE PROFIT
+        // =====================================
+
         if(
             data.currentPrice >=
             trade.tp
@@ -1621,7 +1737,7 @@ async function monitorTrades(){
 
 🟢 ${trade.coin}
 
-📈 TP Hit
+📈 TP HIT
 RM${formatPrice(
     trade.coin,
     trade.tp
@@ -1648,6 +1764,10 @@ RM${estimatedProfit.toFixed(2)}
             );
 
         }
+
+        // =====================================
+        // CUT LOSS
+        // =====================================
 
         if(
             data.currentPrice <=
@@ -1681,7 +1801,7 @@ RM${estimatedProfit.toFixed(2)}
 
 🔴 ${trade.coin}
 
-📉 SL Hit
+📉 SL HIT
 RM${formatPrice(
     trade.coin,
     trade.sl
@@ -1714,7 +1834,7 @@ RM${estimatedLoss.toFixed(2)}
 }
 
 // =====================================
-// EXPIRED SIGNAL
+// SIGNAL EXPIRY
 // =====================================
 
 async function monitorExpiredSignals(){
@@ -1728,6 +1848,12 @@ async function monitorExpiredSignals(){
         PENDING_SIGNALS[
             signalId
         ];
+
+        if(
+            !signal.sent
+        ){
+            continue;
+        }
 
         if(
             signal.expired
@@ -1768,33 +1894,6 @@ async function monitorExpiredSignals(){
 }
 
 // =====================================
-// EXPRESS
-// =====================================
-
-app.get(
-    "/",
-    (req,res)=>{
-
-    res.json({
-
-        status:"BOT ACTIVE",
-        server:SERVER_CODE
-
-    });
-
-});
-
-app.listen(
-    PORT,
-    ()=>{
-
-    console.log(
-        `SERVER RUNNING ${PORT}`
-    );
-
-});
-
-// =====================================
 // STARTUP
 // =====================================
 
@@ -1816,6 +1915,10 @@ setTimeout(
     await marketEventEngine();
 
     await smartSignalEngine();
+
+    // =====================================
+    // INTERVALS
+    // =====================================
 
     setInterval(
         sendPriceAlert,
@@ -1848,3 +1951,30 @@ setTimeout(
     );
 
 },5000);
+
+// =====================================
+// EXPRESS
+// =====================================
+
+app.get(
+    "/",
+    (req,res)=>{
+
+    res.json({
+
+        status:"BOT ACTIVE",
+        server:SERVER_CODE
+
+    });
+
+});
+
+app.listen(
+    PORT,
+    ()=>{
+
+    console.log(
+        `SERVER RUNNING ${PORT}`
+    );
+
+});
