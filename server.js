@@ -72,15 +72,10 @@ const MIN_SCORE = 75;
 // =====================================
 
 const PENDING_SIGNALS = {};
-
 const ACTIVE_TRADES = {};
-
 const USER_FLOW = {};
-
 const TRADE_JOURNAL = [];
-
 const LAST_PRICE = {};
-
 const CANDLE_MEMORY = {};
 
 const BREAKOUT_MEMORY = {};
@@ -107,12 +102,10 @@ function safeNumber(value) {
 }
 
 function signalId() {
-
   return `SIG_${Date.now()}`;
 }
 
 function tradeId() {
-
   return `TRD_${Date.now()}`;
 }
 
@@ -373,14 +366,12 @@ async function getMarketData(
     let sellVolume = 0;
 
     for (const bid of supportZone) {
-
       buyVolume += safeNumber(
         bid.volume
       );
     }
 
     for (const ask of resistanceZone) {
-
       sellVolume += safeNumber(
         ask.volume
       );
@@ -550,11 +541,8 @@ function rsiFilter(
       prices[i - 1];
 
     if (diff > 0) {
-
       gains += diff;
-
     } else {
-
       losses += Math.abs(
         diff
       );
@@ -628,7 +616,6 @@ function microTrendFilter(
       prices[i] >
       prices[i - 1]
     ) {
-
       bullish++;
     }
   }
@@ -673,7 +660,189 @@ function candleConfirmation(
 }
 
 // =====================================
-// BREAKOUT / BREAKDOWN ENGINE
+// MARKET REGIME
+// =====================================
+
+function detectMarketRegime(
+  data
+) {
+
+  if (
+    data.spreadPercent >
+    0.004
+  ) {
+    return "VOLATILE";
+  }
+
+  if (
+    data.pressure > 1.2
+  ) {
+    return "TRENDING";
+  }
+
+  return "RANGING";
+}
+
+// =====================================
+// MARKET STRUCTURE
+// =====================================
+
+function detectStructure(
+  coin
+) {
+
+  const prices =
+    CANDLE_MEMORY[coin];
+
+  if (
+    !prices ||
+    prices.length < 10
+  ) {
+    return null;
+  }
+
+  const recent =
+    prices.slice(-10);
+
+  const first =
+    recent[0];
+
+  const last =
+    recent[
+      recent.length - 1
+    ];
+
+  const move =
+    (last - first) /
+    first;
+
+  let structure =
+    "RANGING";
+
+  if (move > 0.015) {
+    structure = "BULLISH";
+  }
+
+  if (move < -0.015) {
+    structure = "BEARISH";
+  }
+
+  return {
+    structure,
+    momentum:
+      Math.abs(move),
+  };
+}
+
+// =====================================
+// SETUP TYPE
+// =====================================
+
+function getSetup(
+  score
+) {
+
+  if (score >= 90) {
+    return "🔥 ELITE SETUP";
+  }
+
+  if (score >= 80) {
+    return "✅ STRONG SETUP";
+  }
+
+  return "⚠️ MODERATE SETUP";
+}
+
+// =====================================
+// AI SCORE
+// =====================================
+
+async function validateSignal(
+  coin,
+  data
+) {
+
+  let score = 0;
+
+  if (data.pressure > 1.1) {
+    score += 15;
+  }
+
+  if (data.pressure > 1.3) {
+    score += 15;
+  }
+
+  if (
+    data.spreadPercent <
+    0.0015
+  ) {
+    score += 10;
+  }
+
+  if (
+    data.supportVolume >
+    data.resistanceVolume
+  ) {
+    score += 15;
+  }
+
+  if (
+    candleConfirmation(
+      data
+    )
+  ) {
+    score += 10;
+  }
+
+  if (
+    momentumFilter(
+      coin
+    )
+  ) {
+    score += 10;
+  }
+
+  if (
+    microTrendFilter(
+      coin
+    )
+  ) {
+    score += 10;
+  }
+
+  if (
+    volumeSpikeFilter(
+      data
+    )
+  ) {
+    score += 10;
+  }
+
+  if (
+    retestFilter(
+      data
+    )
+  ) {
+    score += 10;
+  }
+
+  if (
+    emaFilter(coin)
+  ) {
+    score += 10;
+  }
+
+  if (
+    rsiFilter(coin)
+  ) {
+    score += 10;
+  }
+
+  return score;
+}
+
+// =====================================
+// BREAKOUT / BREAKDOWN
 // =====================================
 
 async function detectBreakoutBreakdown(
@@ -792,3 +961,1269 @@ Bearish Expansion
     }
   }
 }
+
+// =====================================
+// LIVE PRICE ALERT
+// =====================================
+
+async function sendPriceAlert() {
+
+  let message =
+`📡 <b>LIVE MARKET UPDATE</b>`;
+
+  for (const coin of Object.keys(
+    COINS
+  )) {
+
+    const ticker =
+      await getTicker(
+        coin
+      );
+
+    if (!ticker) {
+      continue;
+    }
+
+    const price =
+      safeNumber(
+        ticker.last_trade
+      );
+
+    let emoji = "➖";
+
+    if (
+      LAST_PRICE[coin]
+    ) {
+
+      if (
+        price >
+        LAST_PRICE[coin]
+      ) {
+        emoji = "🟢";
+      }
+
+      if (
+        price <
+        LAST_PRICE[coin]
+      ) {
+        emoji = "🔴";
+      }
+    }
+
+    LAST_PRICE[coin] =
+      price;
+
+    message += `
+
+${emoji} ${coin}
+
+💵 Price
+RM${formatPrice(
+      coin,
+      price
+    )}`;
+  }
+
+  await sendTelegram(
+    message
+  );
+}
+
+// =====================================
+// MARKET STRUCTURE ALERT
+// =====================================
+
+async function sendMarketStructure() {
+
+  let message =
+`📡 <b>MARKET STRUCTURE</b>`;
+
+  for (const coin of Object.keys(
+    COINS
+  )) {
+
+    const data =
+      await getMarketData(
+        coin
+      );
+
+    if (!data) {
+      continue;
+    }
+
+    const structure =
+      detectStructure(
+        coin
+      );
+
+    if (!structure) {
+      continue;
+    }
+
+    const regime =
+      detectMarketRegime(
+        data
+      );
+
+    message += `
+
+🪙 ${coin}
+
+📊 ${structure.structure}
+• ${regime}
+
+💵 RM${formatPrice(
+      coin,
+      data.currentPrice
+    )}
+
+🟢 Support
+RM${formatPrice(
+      coin,
+      data.supportPrice
+    )}
+
+🔴 Resistance
+RM${formatPrice(
+      coin,
+      data.resistancePrice
+    )}
+
+${data.pressure > 1
+  ? "📈 Buyer Dominance"
+  : "📉 Seller Dominance"}
+
+━━━━━━━━━━━━━━`;
+  }
+
+  await sendTelegram(
+    message
+  );
+}
+
+// =====================================
+// SCALPING SIGNAL
+// =====================================
+
+async function sendScalpSignal(
+  coin,
+  data
+) {
+
+  const score =
+    await validateSignal(
+      coin,
+      data
+    );
+
+  if (
+    score < MIN_SCORE
+  ) {
+    return;
+  }
+
+  const regime =
+    detectMarketRegime(
+      data
+    );
+
+  const tpMultiplier =
+    score >= 90
+      ? 1.05
+      : score >= 80
+      ? 1.03
+      : 1.02;
+
+  const tp =
+    data.currentPrice *
+    tpMultiplier;
+
+  const sl =
+    data.supportPrice *
+    0.995;
+
+  const id = signalId();
+
+  PENDING_SIGNALS[id] = {
+
+    id,
+
+    coin,
+
+    entry:
+      data.bestAsk,
+
+    bestAsk:
+      data.bestAsk,
+
+    bestBid:
+      data.bestBid,
+
+    tp,
+
+    sl,
+
+    used: false,
+
+    createdAt:
+      now(),
+  };
+
+  await sendTelegram(
+`
+🔄 <b>SCALPING ENTRY</b>
+
+🪙 ${coin}
+
+💵 Current Price
+RM${formatPrice(
+  coin,
+  data.currentPrice
+)}
+
+📌 Suggested Entry
+RM${formatPrice(
+  coin,
+  data.bestAsk
+)}
+
+📌 Best Ask
+RM${formatPrice(
+  coin,
+  data.bestAsk
+)}
+
+📈 Take Profit
+RM${formatPrice(
+  coin,
+  tp
+)}
+
+🛑 Stop Loss
+RM${formatPrice(
+  coin,
+  sl
+)}
+
+🟢 Strong Support
+RM${formatPrice(
+  coin,
+  data.supportPrice
+)}
+
+🔴 Resistance
+RM${formatPrice(
+  coin,
+  data.resistancePrice
+)}
+
+🧠 AI Score
+${score}%
+
+${getSetup(score)}
+
+📡 Market Regime
+${regime}
+
+⌛ Signal Expiry
+30 Minutes
+`,
+{
+  reply_markup: {
+    inline_keyboard: [
+      [
+        {
+          text:
+            "✅ START ENTRY",
+
+          callback_data:
+            `entry_${id}`,
+        },
+      ],
+    ],
+  },
+}
+  );
+}
+
+// =====================================
+// SMART SIGNAL ENGINE
+// =====================================
+
+async function smartSignalEngine() {
+
+  for (const coin of Object.keys(
+    COINS
+  )) {
+
+    const hasActiveTrade =
+      Object.values(
+        ACTIVE_TRADES
+      ).some(
+        (trade) =>
+          trade.coin ===
+            coin &&
+          (
+            trade.status ===
+              "ACTIVE" ||
+            trade.status ===
+              "PENDING" ||
+            trade.status ===
+              "WAIT_EXIT"
+          )
+      );
+
+    if (hasActiveTrade) {
+      continue;
+    }
+
+    const data =
+      await getMarketData(
+        coin
+      );
+
+    if (!data) {
+      continue;
+    }
+
+    await detectBreakoutBreakdown(
+      coin,
+      data
+    );
+
+    if (
+      data.trend ===
+      "BULLISH"
+    ) {
+
+      await sendScalpSignal(
+        coin,
+        data
+      );
+    }
+  }
+}
+
+// =====================================
+// CALLBACK FLOW
+// =====================================
+
+bot.on(
+  "callback_query",
+  async (query) => {
+
+    const data =
+      query.data;
+
+    const userId =
+      query.from.id;
+
+    // START ENTRY
+
+    if (
+      data.startsWith(
+        "entry_"
+      )
+    ) {
+
+      const id =
+        data.substring(
+          data.indexOf(
+            "_"
+          ) + 1
+        );
+
+      const signal =
+        PENDING_SIGNALS[
+          id
+        ];
+
+      if (!signal) {
+
+        await sendTelegram(
+          "❌ Signal expired"
+        );
+
+        return;
+      }
+
+      if (signal.used) {
+
+        await sendTelegram(
+          "⚠️ Signal already used"
+        );
+
+        return;
+      }
+
+      signal.used = true;
+
+      USER_FLOW[userId] =
+        {
+          step:
+            "WAIT_TARGET",
+
+          signal,
+        };
+
+      await sendTelegram(
+        "💸 Enter target profit RM:"
+      );
+    }
+
+    // BUY
+
+    else if (
+      data.startsWith(
+        "buy_"
+      )
+    ) {
+
+      const id =
+        data.substring(
+          data.indexOf(
+            "_"
+          ) + 1
+        );
+
+      USER_FLOW[userId] =
+        {
+          step:
+            "WAIT_MATCHED_BUY",
+
+          tradeId: id,
+        };
+
+      await sendTelegram(
+        "📌 Enter matched buy price:"
+      );
+    }
+
+    // CANCEL
+
+    else if (
+      data.startsWith(
+        "cancel_"
+      )
+    ) {
+
+      const id =
+        data.substring(
+          data.indexOf(
+            "_"
+          ) + 1
+        );
+
+      delete ACTIVE_TRADES[
+        id
+      ];
+
+      delete USER_FLOW[
+        userId
+      ];
+
+      await sendTelegram(`
+❌ TRADE CANCELLED
+
+🛑 Monitoring stopped.
+`);
+    }
+
+    // SELL
+
+    else if (
+      data.startsWith(
+        "sell_"
+      )
+    ) {
+
+      const id =
+        data.substring(
+          data.indexOf(
+            "_"
+          ) + 1
+        );
+
+      USER_FLOW[userId] =
+        {
+          step:
+            "WAIT_MATCHED_SELL",
+
+          tradeId: id,
+        };
+
+      await sendTelegram(
+        "📌 Enter matched sell price:"
+      );
+    }
+
+    // HOLD
+
+    else if (
+      data.startsWith(
+        "hold_"
+      )
+    ) {
+
+      const id =
+        data.substring(
+          data.indexOf(
+            "_"
+          ) + 1
+        );
+
+      const trade =
+        ACTIVE_TRADES[
+          id
+        ];
+
+      if (!trade) {
+        return;
+      }
+
+      trade.status =
+        "ACTIVE";
+
+      trade.exitTriggeredAt =
+        null;
+
+      await sendTelegram(`
+🟢 HOLD ACTIVE
+
+🪙 ${trade.coin}
+
+📡 Monitoring resumed.
+`);
+    }
+  }
+);
+
+// =====================================
+// MESSAGE FLOW
+// =====================================
+
+bot.on(
+  "message",
+  async (msg) => {
+
+    const userId =
+      msg.from.id;
+
+    const text =
+      msg.text;
+
+    if (
+      !USER_FLOW[userId]
+    ) {
+      return;
+    }
+
+    const flow =
+      USER_FLOW[userId];
+
+    // TARGET PROFIT
+
+    if (
+      flow.step ===
+      "WAIT_TARGET"
+    ) {
+
+      const targetProfit =
+        safeNumber(text);
+
+      if (
+        targetProfit <= 0
+      ) {
+        return;
+      }
+
+      const signal =
+        flow.signal;
+
+      const diff =
+        signal.tp -
+        signal.entry;
+
+      const feeAdjustedDiff =
+      (
+        diff -
+        (
+          signal.entry *
+          BUY_FEE
+        ) -
+        (
+          signal.tp *
+          SELL_FEE
+        )
+      );
+
+      let quantity =
+        targetProfit /
+        feeAdjustedDiff;
+
+      const estimatedBuy =
+        quantity *
+        signal.entry;
+
+      const estimatedSell =
+        quantity *
+        signal.tp;
+
+      const pnl =
+        estimatedSell -
+        estimatedBuy -
+        estimatedBuy *
+          BUY_FEE -
+        estimatedSell *
+          SELL_FEE;
+
+      const id =
+        tradeId();
+
+      ACTIVE_TRADES[id] = {
+
+        id,
+
+        coin:
+          signal.coin,
+
+        quantity,
+
+        entryPrice:
+          signal.entry,
+
+        tp:
+          signal.tp,
+
+        sl:
+          signal.sl,
+
+        status:
+          "PENDING",
+
+        partialTaken:
+          false,
+
+        createdAt:
+          now(),
+      };
+
+      await bot.sendMessage(
+        CHAT_ID,
+
+`
+${SERVICE_CODE}
+
+📊 <b>SUGGESTED BUY</b>
+
+🪙 ${signal.coin}
+
+📦 Min Quantity
+${formatUnit(
+  signal.coin,
+  quantity
+)}
+
+📌 Entry Price
+RM${formatPrice(
+  signal.coin,
+  signal.entry
+)}
+
+📌 Best Ask
+RM${formatPrice(
+  signal.coin,
+  signal.bestAsk
+)}
+
+📈 TP
+RM${formatPrice(
+  signal.coin,
+  signal.tp
+)}
+
+🔥 Estimated Profit
+RM${pnl.toFixed(2)}
+`,
+
+{
+  parse_mode:
+    "HTML",
+
+  reply_markup: {
+    inline_keyboard:
+      [
+        [
+          {
+            text:
+              "✅ BUY",
+
+            callback_data:
+              `buy_${id}`,
+          },
+
+          {
+            text:
+              "❌ NO",
+
+            callback_data:
+              `cancel_${id}`,
+          },
+        ],
+      ],
+  },
+}
+
+      );
+
+      delete USER_FLOW[
+        userId
+      ];
+    }
+
+    // MATCHED BUY
+
+    else if (
+      flow.step ===
+      "WAIT_MATCHED_BUY"
+    ) {
+
+      const trade =
+        ACTIVE_TRADES[
+          flow.tradeId
+        ];
+
+      if (!trade) {
+        return;
+      }
+
+      trade.entryPrice =
+        safeNumber(text);
+
+      trade.tp =
+        trade.entryPrice *
+        1.03;
+
+      trade.sl =
+        trade.entryPrice *
+        0.994;
+
+      trade.status =
+        "ACTIVE";
+
+      await sendTelegram(`
+✅ <b>TRADE ACTIVE</b>
+
+🪙 ${trade.coin}
+
+📌 Matched Price
+RM${formatPrice(
+        trade.coin,
+        trade.entryPrice
+      )}
+
+📈 TP
+RM${formatPrice(
+        trade.coin,
+        trade.tp
+      )}
+
+🛑 SL
+RM${formatPrice(
+        trade.coin,
+        trade.sl
+      )}
+
+📦 Net Buy Unit
+${formatUnit(
+  trade.coin,
+  trade.quantity
+)}
+
+💰 Net Buy Value
+RM${(
+  trade.entryPrice *
+  trade.quantity
+).toFixed(2)}
+`);
+
+      delete USER_FLOW[
+        userId
+      ];
+    }
+
+    // MATCHED SELL
+
+    else if (
+      flow.step ===
+      "WAIT_MATCHED_SELL"
+    ) {
+
+      const trade =
+        ACTIVE_TRADES[
+          flow.tradeId
+        ];
+
+      if (!trade) {
+        return;
+      }
+
+      const sellPrice =
+        safeNumber(text);
+
+      const saleValue =
+        sellPrice *
+        trade.quantity;
+
+      const buyValue =
+        trade.entryPrice *
+        trade.quantity;
+
+      const pnl =
+        saleValue -
+        buyValue -
+        buyValue *
+          BUY_FEE -
+        saleValue *
+          SELL_FEE;
+
+      TRADE_JOURNAL.push({
+
+        coin:
+          trade.coin,
+
+        pnl,
+
+        createdAt:
+          new Date(),
+      });
+
+      await sendTelegram(`
+✅ <b>TRADE CLOSED</b>
+
+🪙 ${trade.coin}
+
+💰 Sale Value
+RM${saleValue.toFixed(
+        2
+      )}
+
+🔥 Final PNL
+RM${pnl.toFixed(2)}
+`);
+
+      delete ACTIVE_TRADES[
+        flow.tradeId
+      ];
+
+      delete USER_FLOW[
+        userId
+      ];
+    }
+  }
+);
+
+// =====================================
+// TRADE MONITOR
+// =====================================
+
+async function monitorTrades() {
+
+  for (const id of Object.keys(
+    ACTIVE_TRADES
+  )) {
+
+    const trade =
+      ACTIVE_TRADES[id];
+
+    if (
+      trade.status !==
+      "ACTIVE"
+    ) {
+      continue;
+    }
+
+    const ticker =
+      await getTicker(
+        trade.coin
+      );
+
+    if (!ticker) {
+      continue;
+    }
+
+    const currentPrice =
+      safeNumber(
+        ticker.last_trade
+      );
+
+    // TRAILING STOP
+
+    const move =
+      (
+        currentPrice -
+        trade.entryPrice
+      ) /
+      trade.entryPrice;
+
+    if (move > 0.03) {
+
+      const newSL =
+        currentPrice *
+        0.985;
+
+      if (
+        newSL > trade.sl
+      ) {
+
+        trade.sl =
+          newSL;
+
+        await sendTelegram(`
+📈 TRAILING STOP UPDATED
+
+🪙 ${trade.coin}
+
+🛑 New SL
+RM${formatPrice(
+          trade.coin,
+          newSL
+        )}
+`);
+      }
+    }
+
+    // PARTIAL TP
+
+    if (
+      !trade.partialTaken &&
+      currentPrice >=
+        trade.entryPrice *
+          1.03
+    ) {
+
+      trade.partialTaken =
+        true;
+
+      await sendTelegram(`
+💰 PARTIAL TAKE PROFIT
+
+🪙 ${trade.coin}
+
+50% secured.
+`);
+    }
+
+    // SELL NOW
+
+    if (
+      currentPrice >=
+      trade.tp
+    ) {
+
+      trade.status =
+        "WAIT_EXIT";
+
+      trade.exitTriggeredAt =
+        now();
+
+      await sendTelegram(
+`
+🚀 <b>SELL NOW</b>
+
+🪙 ${trade.coin}
+
+💵 Current Price
+RM${formatPrice(
+  trade.coin,
+  currentPrice
+)}
+
+📌 Best Bid
+RM${formatPrice(
+  trade.coin,
+  ticker.bid
+)}
+
+📦 Quantity Must Sell
+${formatUnit(
+  trade.coin,
+  trade.quantity * 0.995
+)}
+
+📈 TP Reached
+`,
+{
+  reply_markup: {
+    inline_keyboard:
+      [
+        [
+          {
+            text:
+              "✅ CONFIRM SELL",
+
+            callback_data:
+              `sell_${id}`,
+          },
+
+          {
+            text:
+              "❌ HOLD",
+
+            callback_data:
+              `hold_${id}`,
+          },
+        ],
+      ],
+  },
+}
+      );
+    }
+
+    // STOP LOSS
+
+    if (
+      currentPrice <=
+      trade.sl
+    ) {
+
+      trade.status =
+        "WAIT_EXIT";
+
+      trade.exitTriggeredAt =
+        now();
+
+      await sendTelegram(
+`
+🛑 <b>CUTLOSS NOW</b>
+
+🪙 ${trade.coin}
+
+💵 Current Price
+RM${formatPrice(
+  trade.coin,
+  currentPrice
+)}
+
+📌 Best Bid
+RM${formatPrice(
+  trade.coin,
+  ticker.bid
+)}
+
+📦 Quantity Must Sell
+${formatUnit(
+  trade.coin,
+  trade.quantity * 0.995
+)}
+
+⚠️ Stop loss triggered.
+`,
+{
+  reply_markup: {
+    inline_keyboard:
+      [
+        [
+          {
+            text:
+              "✅ CONFIRM CUTLOSS",
+
+            callback_data:
+              `sell_${id}`,
+          },
+
+          {
+            text:
+              "❌ HOLD",
+
+            callback_data:
+              `hold_${id}`,
+          },
+        ],
+      ],
+  },
+}
+      );
+    }
+  }
+}
+
+// =====================================
+// CLEANUP
+// =====================================
+
+function cleanup() {
+
+  for (const id of Object.keys(
+    PENDING_SIGNALS
+  )) {
+
+    const signal =
+      PENDING_SIGNALS[id];
+
+    if (
+      now() -
+        signal.createdAt >
+      SIGNAL_EXPIRY
+    ) {
+
+      delete PENDING_SIGNALS[
+        id
+      ];
+    }
+  }
+
+  for (const id of Object.keys(
+    ACTIVE_TRADES
+  )) {
+
+    const trade =
+      ACTIVE_TRADES[id];
+
+    if (
+      trade.status ===
+        "WAIT_EXIT" &&
+      trade.exitTriggeredAt &&
+      now() -
+        trade.exitTriggeredAt >
+        EXIT_EXPIRY
+    ) {
+
+      trade.status =
+        "ACTIVE";
+
+      trade.exitTriggeredAt =
+        null;
+    }
+  }
+}
+
+// =====================================
+// DAILY REPORT
+// =====================================
+
+async function sendDailyReport() {
+
+  let pnl = 0;
+  let wins = 0;
+  let losses = 0;
+
+  for (const trade of TRADE_JOURNAL) {
+
+    pnl += trade.pnl;
+
+    if (trade.pnl > 0) {
+      wins++;
+    } else {
+      losses++;
+    }
+  }
+
+  await sendTelegram(`
+📊 <b>DAILY REPORT</b>
+
+📦 Trades
+${TRADE_JOURNAL.length}
+
+✅ Wins
+${wins}
+
+❌ Losses
+${losses}
+
+💰 Total PNL
+RM${pnl.toFixed(2)}
+`);
+}
+
+// =====================================
+// EXPRESS
+// =====================================
+
+app.get(
+  "/",
+  (req, res) => {
+
+    res.json({
+
+      status:
+        "ACTIVE",
+
+      service:
+        SERVICE_CODE,
+
+      activeTrades:
+        Object.keys(
+          ACTIVE_TRADES
+        ).length,
+    });
+  }
+);
+
+// =====================================
+// START SERVER
+// =====================================
+
+app.listen(
+  PORT,
+
+  async () => {
+
+    console.log(
+      `SERVER RUNNING ${PORT}`
+    );
+
+    console.log(
+      `SERVICE ${SERVICE_CODE}`
+    );
+
+    await sendTelegram(`
+✅ BOT ONLINE
+
+🚀 FINAL ADVANCED AI SCALPING TERMINAL ACTIVE
+`);
+
+    await sendPriceAlert();
+
+    // LIVE PRICE ALERT
+    setInterval(
+      sendPriceAlert,
+      300000
+    );
+
+    // SMART SIGNAL ENGINE
+    setInterval(
+      smartSignalEngine,
+      120000
+    );
+
+    // TRADE MONITOR
+    setInterval(
+      monitorTrades,
+      MONITOR_INTERVAL
+    );
+
+    // CLEANUP
+    setInterval(
+      cleanup,
+      60000
+    );
+
+    // DAILY REPORT
+    setInterval(
+      sendDailyReport,
+      24 *
+        60 *
+        60 *
+        1000
+    );
+
+    // MARKET STRUCTURE
+    setInterval(
+      sendMarketStructure,
+      15 *
+        60 *
+        1000
+    );
+  }
+);
