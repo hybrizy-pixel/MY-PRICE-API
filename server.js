@@ -29,13 +29,20 @@ const TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
 
 if (!TOKEN || !CHAT_ID) {
-  console.log("Missing BOT_TOKEN / CHAT_ID");
+
+  console.log(
+    "Missing BOT_TOKEN / CHAT_ID"
+  );
+
   process.exit(1);
 }
 
-const bot = new TelegramBot(TOKEN, {
-  polling: true,
-});
+const bot = new TelegramBot(
+  TOKEN,
+  {
+    polling: true,
+  }
+);
 
 // =====================================
 // CONFIG
@@ -65,11 +72,13 @@ const MIN_SCORE = 75;
 // =====================================
 
 const PENDING_SIGNALS = {};
+
 const ACTIVE_TRADES = {};
+
 const USER_FLOW = {};
+
 const TRADE_JOURNAL = [];
 
-const LAST_ALERT = {};
 const LAST_PRICE = {};
 
 const CANDLE_MEMORY = {};
@@ -83,6 +92,7 @@ function now() {
 }
 
 function safeNumber(value) {
+
   if (
     isNaN(value) ||
     !isFinite(value)
@@ -94,10 +104,12 @@ function safeNumber(value) {
 }
 
 function signalId() {
+
   return `SIG_${Date.now()}`;
 }
 
 function tradeId() {
+
   return `TRD_${Date.now()}`;
 }
 
@@ -105,53 +117,43 @@ function formatPrice(
   coin,
   value
 ) {
+
   if (coin === "BTC") {
-    return safeNumber(value)
-      .toFixed(2);
+
+    return safeNumber(
+      value
+    ).toFixed(2);
   }
 
-  return safeNumber(value)
-    .toFixed(4);
+  return safeNumber(
+    value
+  ).toFixed(4);
 }
 
 function formatUnit(
   coin,
   value
 ) {
+
   if (coin === "BTC") {
-    return safeNumber(value)
-      .toFixed(6);
+
+    return safeNumber(
+      value
+    ).toFixed(6);
   }
 
-  return safeNumber(value)
-    .toFixed(0);
-}
-
-function cooldown(
-  key,
-  seconds
-) {
-  if (!LAST_ALERT[key]) {
-    LAST_ALERT[key] = now();
-    return true;
-  }
-
-  if (
-    now() - LAST_ALERT[key] >
-    seconds * 1000
-  ) {
-    LAST_ALERT[key] = now();
-    return true;
-  }
-
-  return false;
+  return safeNumber(
+    value
+  ).toFixed(0);
 }
 
 async function sendTelegram(
   message,
   options = {}
 ) {
+
   try {
+
     await bot.sendMessage(
       CHAT_ID,
 
@@ -164,8 +166,12 @@ ${message}`,
         ...options,
       }
     );
+
   } catch (err) {
-    console.log(err.message);
+
+    console.log(
+      err.message
+    );
   }
 }
 
@@ -176,14 +182,18 @@ ${message}`,
 async function getTicker(
   coin
 ) {
+
   try {
+
     const response =
       await axios.get(
         `https://api.luno.com/api/1/ticker?pair=${COINS[coin]}`
       );
 
     return response.data;
+
   } catch (err) {
+
     return null;
   }
 }
@@ -191,14 +201,18 @@ async function getTicker(
 async function getOrderbook(
   coin
 ) {
+
   try {
+
     const response =
       await axios.get(
         `https://api.luno.com/api/1/orderbook?pair=${COINS[coin]}`
       );
 
     return response.data;
+
   } catch (err) {
+
     return null;
   }
 }
@@ -210,12 +224,16 @@ async function getOrderbook(
 async function getMarketData(
   coin
 ) {
+
   try {
-    const [ticker, orderbook] =
-      await Promise.all([
-        getTicker(coin),
-        getOrderbook(coin),
-      ]);
+
+    const [
+      ticker,
+      orderbook,
+    ] = await Promise.all([
+      getTicker(coin),
+      getOrderbook(coin),
+    ]);
 
     if (
       !ticker ||
@@ -232,18 +250,20 @@ async function getMarketData(
     if (
       !CANDLE_MEMORY[coin]
     ) {
+
       CANDLE_MEMORY[coin] = [];
     }
 
-    CANDLE_MEMORY[coin].push(
-      currentPrice
-    );
+    CANDLE_MEMORY[coin]
+      .push(currentPrice);
 
     if (
       CANDLE_MEMORY[coin]
         .length > 50
     ) {
-      CANDLE_MEMORY[coin].shift();
+
+      CANDLE_MEMORY[coin]
+        .shift();
     }
 
     const bids =
@@ -277,6 +297,7 @@ async function getMarketData(
 
     const supportZone =
       bids.filter((bid) => {
+
         const price =
           safeNumber(
             bid.price
@@ -293,6 +314,7 @@ async function getMarketData(
 
     const resistanceZone =
       asks.filter((ask) => {
+
         const price =
           safeNumber(
             ask.price
@@ -317,6 +339,7 @@ async function getMarketData(
     const strongestSupport =
       supportZone.reduce(
         (a, b) => {
+
           return safeNumber(
             a.volume
           ) >
@@ -331,6 +354,7 @@ async function getMarketData(
     const strongestResistance =
       resistanceZone.reduce(
         (a, b) => {
+
           return safeNumber(
             a.volume
           ) >
@@ -346,12 +370,14 @@ async function getMarketData(
     let sellVolume = 0;
 
     for (const bid of supportZone) {
+
       buyVolume += safeNumber(
         bid.volume
       );
     }
 
     for (const ask of resistanceZone) {
+
       sellVolume += safeNumber(
         ask.volume
       );
@@ -373,12 +399,19 @@ async function getMarketData(
     }
 
     return {
+
       currentPrice,
+
       bestBid,
+
       bestAsk,
+
       spread,
+
       spreadPercent,
+
       pressure,
+
       trend,
 
       supportPrice:
@@ -401,18 +434,21 @@ async function getMarketData(
           strongestResistance.volume
         ),
     };
+
   } catch (err) {
+
     return null;
   }
 }
 
 // =====================================
-// ADVANCED FILTERS
+// FILTERS
 // =====================================
 
 function emaFilter(
   coin
 ) {
+
   const prices =
     CANDLE_MEMORY[coin];
 
@@ -445,6 +481,7 @@ function emaFilter(
 function rsiFilter(
   coin
 ) {
+
   const prices =
     CANDLE_MEMORY[coin];
 
@@ -463,13 +500,17 @@ function rsiFilter(
     i < prices.length;
     i++
   ) {
+
     const diff =
       prices[i] -
       prices[i - 1];
 
     if (diff > 0) {
+
       gains += diff;
+
     } else {
+
       losses += Math.abs(
         diff
       );
@@ -496,6 +537,7 @@ function rsiFilter(
 function momentumFilter(
   coin
 ) {
+
   const prices =
     CANDLE_MEMORY[coin];
 
@@ -519,6 +561,7 @@ function momentumFilter(
 function microTrendFilter(
   coin
 ) {
+
   const prices =
     CANDLE_MEMORY[coin];
 
@@ -536,10 +579,12 @@ function microTrendFilter(
     i < prices.length;
     i++
   ) {
+
     if (
       prices[i] >
       prices[i - 1]
     ) {
+
       bullish++;
     }
   }
@@ -550,6 +595,7 @@ function microTrendFilter(
 function volumeSpikeFilter(
   data
 ) {
+
   return (
     data.supportVolume >
     data.resistanceVolume *
@@ -560,6 +606,7 @@ function volumeSpikeFilter(
 function retestFilter(
   data
 ) {
+
   const distance =
     Math.abs(
       data.currentPrice -
@@ -573,6 +620,7 @@ function retestFilter(
 function candleConfirmation(
   data
 ) {
+
   return (
     data.pressure > 1.1 &&
     data.spreadPercent <
@@ -587,6 +635,7 @@ function candleConfirmation(
 function detectMarketRegime(
   data
 ) {
+
   if (
     data.spreadPercent >
     0.004
@@ -594,7 +643,9 @@ function detectMarketRegime(
     return "VOLATILE";
   }
 
-  if (data.pressure > 1.2) {
+  if (
+    data.pressure > 1.2
+  ) {
     return "TRENDING";
   }
 
@@ -608,6 +659,7 @@ function detectMarketRegime(
 function detectStructure(
   coin
 ) {
+
   const prices =
     CANDLE_MEMORY[coin];
 
@@ -630,19 +682,18 @@ function detectStructure(
     ];
 
   const move =
-    (last - first) / first;
+    (last - first) /
+    first;
 
   let structure =
     "RANGING";
 
   if (move > 0.015) {
-    structure =
-      "BULLISH";
+    structure = "BULLISH";
   }
 
   if (move < -0.015) {
-    structure =
-      "BEARISH";
+    structure = "BEARISH";
   }
 
   return {
@@ -653,13 +704,33 @@ function detectStructure(
 }
 
 // =====================================
-// AI SCORE ENGINE
+// SETUP TYPE
+// =====================================
+
+function getSetup(
+  score
+) {
+
+  if (score >= 90) {
+    return "🔥 ELITE SETUP";
+  }
+
+  if (score >= 80) {
+    return "✅ STRONG SETUP";
+  }
+
+  return "⚠️ MODERATE SETUP";
+}
+
+// =====================================
+// AI SCORE
 // =====================================
 
 async function validateSignal(
   coin,
   data
 ) {
+
   let score = 0;
 
   if (data.pressure > 1.1) {
@@ -717,7 +788,9 @@ async function validateSignal(
   }
 
   if (
-    retestFilter(data)
+    retestFilter(
+      data
+    )
   ) {
     score += 10;
   }
@@ -746,10 +819,14 @@ async function sendPriceAlert() {
   let message =
 `📡 <b>LIVE MARKET UPDATE</b>`;
 
-  for (const coin of Object.keys(COINS)) {
+  for (const coin of Object.keys(
+    COINS
+  )) {
 
     const ticker =
-      await getTicker(coin);
+      await getTicker(
+        coin
+      );
 
     if (!ticker) {
       continue;
@@ -762,7 +839,9 @@ async function sendPriceAlert() {
 
     let emoji = "➖";
 
-    if (LAST_PRICE[coin]) {
+    if (
+      LAST_PRICE[coin]
+    ) {
 
       if (
         price >
@@ -777,7 +856,6 @@ async function sendPriceAlert() {
       ) {
         emoji = "🔴";
       }
-
     }
 
     LAST_PRICE[coin] =
@@ -800,12 +878,17 @@ RM${formatPrice(
 }
 
 // =====================================
-// LIVE MARKET STRUCTURE
+// MARKET STRUCTURE ALERT
 // =====================================
 
 async function sendMarketStructure() {
 
-  for (const coin of Object.keys(COINS)) {
+  let message =
+`📡 <b>MARKET STRUCTURE</b>`;
+
+  for (const coin of Object.keys(
+    COINS
+  )) {
 
     const data =
       await getMarketData(
@@ -830,35 +913,14 @@ async function sendMarketStructure() {
         data
       );
 
-    await sendTelegram(`
-📡 <b>LIVE MARKET STRUCTURE</b>
+    message += `
 
 🪙 ${coin}
 
-📊 Structure
-${structure.structure}
+📊 ${structure.structure}
+• ${regime}
 
-⚡ Momentum
-${(
-      structure.momentum *
-      100
-    ).toFixed(2)}%
-
-📡 Market Regime
-${regime}
-
-📈 EMA Trend
-${emaFilter(coin)
-        ? "BULLISH"
-        : "WEAK"}
-
-📉 RSI Condition
-${rsiFilter(coin)
-        ? "HEALTHY"
-        : "EXTREME"}
-
-💵 Current Price
-RM${formatPrice(
+💵 RM${formatPrice(
       coin,
       data.currentPrice
     )}
@@ -875,29 +937,22 @@ RM${formatPrice(
       data.resistancePrice
     )}
 
-📊 Pressure
-${data.pressure.toFixed(
-      2
-    )}
-`);
+${data.pressure > 1
+  ? "📈 Buyer Dominance"
+  : "📉 Seller Dominance"}
+
+━━━━━━━━━━━━━━`;
   }
+
+  await sendTelegram(
+    message
+  );
 }
 
 // =====================================
 // SCALPING SIGNAL
 // =====================================
-function getSetup(score) {
 
-  if (score >= 90) {
-    return "🔥 ELITE SETUP";
-  }
-
-  if (score >= 80) {
-    return "✅ STRONG SETUP";
-  }
-
-  return "⚠️ MODERATE SETUP";
-}
 async function sendScalpSignal(
   coin,
   data
@@ -938,13 +993,28 @@ async function sendScalpSignal(
   const id = signalId();
 
   PENDING_SIGNALS[id] = {
+
     id,
+
     coin,
-    entry: data.bestAsk,
+
+    entry:
+      data.bestAsk,
+
+    bestAsk:
+      data.bestAsk,
+
+    bestBid:
+      data.bestBid,
+
     tp,
+
     sl,
+
     used: false,
-    createdAt: now(),
+
+    createdAt:
+      now(),
   };
 
   await sendTelegram(
@@ -960,6 +1030,12 @@ RM${formatPrice(
 )}
 
 📌 Suggested Entry
+RM${formatPrice(
+  coin,
+  data.bestAsk
+)}
+
+📌 Best Ask
 RM${formatPrice(
   coin,
   data.bestAsk
@@ -987,11 +1063,6 @@ RM${formatPrice(
 RM${formatPrice(
   coin,
   data.resistancePrice
-)}
-
-📊 Buy Pressure
-${data.pressure.toFixed(
-  2
 )}
 
 🧠 AI Score
@@ -1029,7 +1100,9 @@ ${regime}
 
 async function smartSignalEngine() {
 
-  for (const coin of Object.keys(COINS)) {
+  for (const coin of Object.keys(
+    COINS
+  )) {
 
     const hasActiveTrade =
       Object.values(
@@ -1065,6 +1138,7 @@ async function smartSignalEngine() {
       data.trend ===
       "BULLISH"
     ) {
+
       await sendScalpSignal(
         coin,
         data
@@ -1290,7 +1364,7 @@ bot.on(
     const flow =
       USER_FLOW[userId];
 
-    // TARGET
+    // TARGET PROFIT
 
     if (
       flow.step ===
@@ -1378,23 +1452,31 @@ ${SERVICE_CODE}
 
 🪙 ${signal.coin}
 
-📦 Quantity
+📦 Min Quantity
 ${formatUnit(
   signal.coin,
   quantity
 )}
 
-💰 Estimated Buy
-RM${estimatedBuy.toFixed(
-  2
+📌 Entry Price
+RM${formatPrice(
+  signal.coin,
+  signal.entry
 )}
 
-💵 Estimated Sell
-RM${estimatedSell.toFixed(
-  2
+📌 Best Ask
+RM${formatPrice(
+  signal.coin,
+  signal.bestAsk
 )}
 
-🔥 Estimated PNL
+📈 TP
+RM${formatPrice(
+  signal.coin,
+  signal.tp
+)}
+
+🔥 Estimated Profit
 RM${pnl.toFixed(2)}
 `,
 
@@ -1452,6 +1534,21 @@ RM${pnl.toFixed(2)}
       trade.entryPrice =
         safeNumber(text);
 
+      // RECALCULATE TP/SL
+
+      trade.tp =
+        trade.entryPrice *
+        (
+          trade.tp >
+          trade.entryPrice
+            ? 1.03
+            : 1.02
+        );
+
+      trade.sl =
+        trade.entryPrice *
+        0.994;
+
       trade.status =
         "ACTIVE";
 
@@ -1460,7 +1557,7 @@ RM${pnl.toFixed(2)}
 
 🪙 ${trade.coin}
 
-📌 Entry
+📌 Matched Price
 RM${formatPrice(
         trade.coin,
         trade.entryPrice
@@ -1477,6 +1574,18 @@ RM${formatPrice(
         trade.coin,
         trade.sl
       )}
+
+📦 Net Buy Unit
+${formatUnit(
+  trade.coin,
+  trade.quantity
+)}
+
+💰 Net Buy Value
+RM${(
+  trade.entryPrice *
+  trade.quantity
+).toFixed(2)}
 `);
 
       delete USER_FLOW[
@@ -1592,8 +1701,10 @@ async function monitorTrades() {
     // TRAILING STOP
 
     const move =
-      (currentPrice -
-        trade.entryPrice) /
+      (
+        currentPrice -
+        trade.entryPrice
+      ) /
       trade.entryPrice;
 
     if (move > 0.03) {
@@ -1606,7 +1717,8 @@ async function monitorTrades() {
         newSL > trade.sl
       ) {
 
-        trade.sl = newSL;
+        trade.sl =
+          newSL;
 
         await sendTelegram(`
 📈 TRAILING STOP UPDATED
@@ -1643,7 +1755,7 @@ RM${formatPrice(
 `);
     }
 
-    // TP
+    // SELL NOW
 
     if (
       currentPrice >=
@@ -1666,6 +1778,18 @@ RM${formatPrice(
 RM${formatPrice(
   trade.coin,
   currentPrice
+)}
+
+📌 Best Bid
+RM${formatPrice(
+  trade.coin,
+  ticker.bid
+)}
+
+📦 Quantity Must Sell
+${formatUnit(
+  trade.coin,
+  trade.quantity * 0.995
 )}
 
 📈 TP Reached
@@ -1697,7 +1821,7 @@ RM${formatPrice(
       );
     }
 
-    // SL
+    // STOP LOSS
 
     if (
       currentPrice <=
@@ -1720,6 +1844,18 @@ RM${formatPrice(
 RM${formatPrice(
   trade.coin,
   currentPrice
+)}
+
+📌 Best Bid
+RM${formatPrice(
+  trade.coin,
+  ticker.bid
+)}
+
+📦 Quantity Must Sell
+${formatUnit(
+  trade.coin,
+  trade.quantity * 0.995
 )}
 
 ⚠️ Stop loss triggered.
@@ -1818,8 +1954,11 @@ async function sendDailyReport() {
     pnl += trade.pnl;
 
     if (trade.pnl > 0) {
+
       wins++;
+
     } else {
+
       losses++;
     }
   }
@@ -1845,77 +1984,84 @@ RM${pnl.toFixed(2)}
 // EXPRESS
 // =====================================
 
-app.get("/", (req, res) => {
+app.get(
+  "/",
+  (req, res) => {
 
-  res.json({
+    res.json({
 
-    status:
-      "ACTIVE",
+      status:
+        "ACTIVE",
 
-    service:
-      SERVICE_CODE,
+      service:
+        SERVICE_CODE,
 
-    activeTrades:
-      Object.keys(
-        ACTIVE_TRADES
-      ).length,
-  });
-});
+      activeTrades:
+        Object.keys(
+          ACTIVE_TRADES
+        ).length,
+    });
+  }
+);
 
 // =====================================
 // START SERVER
 // =====================================
 
-app.listen(PORT, async () => {
+app.listen(
+  PORT,
 
-  console.log(
-    `SERVER RUNNING ${PORT}`
-  );
+  async () => {
 
-  console.log(
-    `SERVICE ${SERVICE_CODE}`
-  );
+    console.log(
+      `SERVER RUNNING ${PORT}`
+    );
 
-  await sendTelegram(`
+    console.log(
+      `SERVICE ${SERVICE_CODE}`
+    );
+
+    await sendTelegram(`
 ✅ BOT ONLINE
 
 🚀 FINAL ADVANCED AI SCALPING TERMINAL ACTIVE
 `);
 
-  await sendPriceAlert();
+    await sendPriceAlert();
 
-  setInterval(
-    sendPriceAlert,
-    300000
-  );
+    setInterval(
+      sendPriceAlert,
+      300000
+    );
 
-  setInterval(
-    smartSignalEngine,
-    120000
-  );
+    setInterval(
+      smartSignalEngine,
+      120000
+    );
 
-  setInterval(
-    monitorTrades,
-    MONITOR_INTERVAL
-  );
+    setInterval(
+      monitorTrades,
+      MONITOR_INTERVAL
+    );
 
-  setInterval(
-    cleanup,
-    60000
-  );
+    setInterval(
+      cleanup,
+      60000
+    );
 
-  setInterval(
-    sendDailyReport,
-    24 *
-      60 *
-      60 *
-      1000
-  );
+    setInterval(
+      sendDailyReport,
+      24 *
+        60 *
+        60 *
+        1000
+    );
 
-  setInterval(
-    sendMarketStructure,
-    15 *
-      60 *
-      1000
-  );
-});
+    setInterval(
+      sendMarketStructure,
+      15 *
+        60 *
+        1000
+    );
+  }
+);
