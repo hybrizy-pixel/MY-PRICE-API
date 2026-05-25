@@ -717,14 +717,14 @@ function detectStructure(
     first;
 
   let structure =
-    "RANGING";
+    "MENDATAR";
 
   if (move > 0.015) {
-    structure = "BULLISH";
+    structure = "MARKET BULLISH";
   }
 
   if (move < -0.015) {
-    structure = "BEARISH";
+    structure = "MARKET BEARISH";
   }
 
   return {
