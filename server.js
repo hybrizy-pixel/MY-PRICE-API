@@ -1,3 +1,7 @@
+// =====================================
+// FINAL ADVANCED AI SCALPING TERMINAL
+// =====================================
+
 require("dotenv").config();
 
 const express = require("express");
@@ -54,7 +58,7 @@ const EXIT_EXPIRY =
 const MONITOR_INTERVAL =
   10000;
 
-const MIN_SCORE = 70;
+const MIN_SCORE = 75;
 
 // =====================================
 // MEMORY
@@ -68,6 +72,8 @@ const TRADE_JOURNAL = [];
 const LAST_ALERT = {};
 const LAST_PRICE = {};
 
+const CANDLE_MEMORY = {};
+
 // =====================================
 // HELPERS
 // =====================================
@@ -77,7 +83,10 @@ function now() {
 }
 
 function safeNumber(value) {
-  if (isNaN(value) || !isFinite(value)) {
+  if (
+    isNaN(value) ||
+    !isFinite(value)
+  ) {
     return 0;
   }
 
@@ -220,6 +229,23 @@ async function getMarketData(
         ticker.last_trade
       );
 
+    if (
+      !CANDLE_MEMORY[coin]
+    ) {
+      CANDLE_MEMORY[coin] = [];
+    }
+
+    CANDLE_MEMORY[coin].push(
+      currentPrice
+    );
+
+    if (
+      CANDLE_MEMORY[coin]
+        .length > 50
+    ) {
+      CANDLE_MEMORY[coin].shift();
+    }
+
     const bids =
       orderbook.bids || [];
 
@@ -249,8 +275,6 @@ async function getMarketData(
     const spreadPercent =
       spread / currentPrice;
 
-    // SUPPORT
-
     const supportZone =
       bids.filter((bid) => {
         const price =
@@ -266,8 +290,6 @@ async function getMarketData(
               0.97
         );
       });
-
-    // RESISTANCE
 
     const resistanceZone =
       asks.filter((ask) => {
@@ -385,94 +407,177 @@ async function getMarketData(
 }
 
 // =====================================
-// SCORE ENGINE
+// ADVANCED FILTERS
 // =====================================
 
-function calculateScore(
+function emaFilter(
+  coin
+) {
+  const prices =
+    CANDLE_MEMORY[coin];
+
+  if (
+    !prices ||
+    prices.length < 21
+  ) {
+    return false;
+  }
+
+  const ema9 =
+    prices
+      .slice(-9)
+      .reduce(
+        (a, b) => a + b,
+        0
+      ) / 9;
+
+  const ema21 =
+    prices
+      .slice(-21)
+      .reduce(
+        (a, b) => a + b,
+        0
+      ) / 21;
+
+  return ema9 > ema21;
+}
+
+function rsiFilter(
+  coin
+) {
+  const prices =
+    CANDLE_MEMORY[coin];
+
+  if (
+    !prices ||
+    prices.length < 15
+  ) {
+    return false;
+  }
+
+  let gains = 0;
+  let losses = 0;
+
+  for (
+    let i = 1;
+    i < prices.length;
+    i++
+  ) {
+    const diff =
+      prices[i] -
+      prices[i - 1];
+
+    if (diff > 0) {
+      gains += diff;
+    } else {
+      losses += Math.abs(
+        diff
+      );
+    }
+  }
+
+  if (losses === 0) {
+    return false;
+  }
+
+  const rs =
+    gains / losses;
+
+  const rsi =
+    100 -
+    100 / (1 + rs);
+
+  return (
+    rsi > 45 &&
+    rsi < 72
+  );
+}
+
+function momentumFilter(
+  coin
+) {
+  const prices =
+    CANDLE_MEMORY[coin];
+
+  if (
+    !prices ||
+    prices.length < 5
+  ) {
+    return false;
+  }
+
+  return (
+    prices[
+      prices.length - 1
+    ] >
+    prices[
+      prices.length - 5
+    ]
+  );
+}
+
+function microTrendFilter(
+  coin
+) {
+  const prices =
+    CANDLE_MEMORY[coin];
+
+  if (
+    !prices ||
+    prices.length < 6
+  ) {
+    return false;
+  }
+
+  let bullish = 0;
+
+  for (
+    let i = 1;
+    i < prices.length;
+    i++
+  ) {
+    if (
+      prices[i] >
+      prices[i - 1]
+    ) {
+      bullish++;
+    }
+  }
+
+  return bullish >= 4;
+}
+
+function volumeSpikeFilter(
   data
 ) {
-  let score = 0;
-
-  if (data.pressure > 1.1) {
-    score += 20;
-  }
-
-  if (data.pressure > 1.3) {
-    score += 10;
-  }
-
-  if (
-    data.spreadPercent <
-    0.0015
-  ) {
-    score += 20;
-  }
-
-  if (
+  return (
     data.supportVolume >
-    data.resistanceVolume
-  ) {
-    score += 20;
-  }
+    data.resistanceVolume *
+      1.5
+  );
+}
 
-  const tpSpace =
-    (data.resistancePrice -
-      data.currentPrice) /
+function retestFilter(
+  data
+) {
+  const distance =
+    Math.abs(
+      data.currentPrice -
+        data.supportPrice
+    ) /
     data.currentPrice;
 
-  if (tpSpace > 0.015) {
-    score += 20;
-  }
-
-  if (
-    data.trend ===
-    "BULLISH"
-  ) {
-    score += 10;
-  }
-
-  if (
-    data.supportVolume >
-    100000
-  ) {
-    score += 10;
-  }
-
-  if (score > 100) {
-    score = 100;
-  }
-
-  return score;
+  return distance < 0.01;
 }
 
-function getSetup(score) {
-  if (score >= 90) {
-    return "🔥 ELITE SETUP";
-  }
-
-  if (score >= 80) {
-    return "✅ STRONG SETUP";
-  }
-
-  return "⚠️ MODERATE SETUP";
-}
-
-function getConfidence(
-  score
+function candleConfirmation(
+  data
 ) {
-  if (score >= 90) {
-    return "VERY HIGH";
-  }
-
-  if (score >= 80) {
-    return "HIGH";
-  }
-
-  if (score >= 70) {
-    return "MODERATE";
-  }
-
-  return "LOW";
+  return (
+    data.pressure > 1.1 &&
+    data.spreadPercent <
+      0.002
+  );
 }
 
 // =====================================
@@ -496,91 +601,147 @@ function detectMarketRegime(
   return "RANGING";
 }
 
-function detectFakeBreakout(
+// =====================================
+// MARKET STRUCTURE
+// =====================================
+
+function detectStructure(
+  coin
+) {
+  const prices =
+    CANDLE_MEMORY[coin];
+
+  if (
+    !prices ||
+    prices.length < 10
+  ) {
+    return null;
+  }
+
+  const recent =
+    prices.slice(-10);
+
+  const first =
+    recent[0];
+
+  const last =
+    recent[
+      recent.length - 1
+    ];
+
+  const move =
+    (last - first) / first;
+
+  let structure =
+    "RANGING";
+
+  if (move > 0.015) {
+    structure =
+      "BULLISH";
+  }
+
+  if (move < -0.015) {
+    structure =
+      "BEARISH";
+  }
+
+  return {
+    structure,
+    momentum:
+      Math.abs(move),
+  };
+}
+
+// =====================================
+// AI SCORE ENGINE
+// =====================================
+
+async function validateSignal(
+  coin,
   data
 ) {
-  if (data.pressure < 1) {
-    return true;
+  let score = 0;
+
+  if (data.pressure > 1.1) {
+    score += 15;
+  }
+
+  if (data.pressure > 1.3) {
+    score += 15;
   }
 
   if (
-    data.spreadPercent >
-    0.004
+    data.spreadPercent <
+    0.0015
   ) {
-    return true;
+    score += 10;
   }
 
-  return false;
+  if (
+    data.supportVolume >
+    data.resistanceVolume
+  ) {
+    score += 15;
+  }
+
+  if (
+    candleConfirmation(
+      data
+    )
+  ) {
+    score += 10;
+  }
+
+  if (
+    momentumFilter(
+      coin
+    )
+  ) {
+    score += 10;
+  }
+
+  if (
+    microTrendFilter(
+      coin
+    )
+  ) {
+    score += 10;
+  }
+
+  if (
+    volumeSpikeFilter(
+      data
+    )
+  ) {
+    score += 10;
+  }
+
+  if (
+    retestFilter(data)
+  ) {
+    score += 10;
+  }
+
+  if (
+    emaFilter(coin)
+  ) {
+    score += 10;
+  }
+
+  if (
+    rsiFilter(coin)
+  ) {
+    score += 10;
+  }
+
+  return score;
 }
 
 // =====================================
-// PRICE ALERT
+// LIVE MARKET STRUCTURE
 // =====================================
 
-async function sendPriceAlert() {
-  let message =
-    "📡 <b>LIVE MARKET UPDATE</b>\n";
-
-  for (const coin of Object.keys(
-    COINS
-  )) {
-    const ticker =
-      await getTicker(
-        coin
-      );
-
-    if (!ticker) {
-      continue;
-    }
-
-    const price =
-      safeNumber(
-        ticker.last_trade
-      );
-
-    let emoji = "➖";
-
-    if (LAST_PRICE[coin]) {
-      if (
-        price >
-        LAST_PRICE[coin]
-      ) {
-        emoji = "🟢";
-      }
-
-      if (
-        price <
-        LAST_PRICE[coin]
-      ) {
-        emoji = "🔴";
-      }
-    }
-
-    LAST_PRICE[coin] =
-      price;
-
-    message += `
-
-${emoji} ${coin}
-
-💵 Price
-RM${formatPrice(
-      coin,
-      price
-    )}
-`;
-  }
-
-  await sendTelegram(
-    message
-  );
-}
-
-// =====================================
-// EVENT ENGINE
-// =====================================
-
-async function marketEventEngine() {
+async function sendMarketStructure() {
   for (const coin of Object.keys(
     COINS
   )) {
@@ -593,126 +754,70 @@ async function marketEventEngine() {
       continue;
     }
 
+    const structure =
+      detectStructure(
+        coin
+      );
+
+    if (!structure) {
+      continue;
+    }
+
     const regime =
       detectMarketRegime(
         data
       );
 
-    const score =
-      calculateScore(
-        data
-      );
-
-    const confidence =
-      getConfidence(score);
-
-    // REJECTION
-
-    if (
-      data.currentPrice >
-        data.resistancePrice *
-          0.998 &&
-      data.pressure < 1 &&
-      cooldown(
-        `reject_${coin}`,
-        1800
-      )
-    ) {
-      await sendTelegram(`
-❌ <b>REJECTION DETECTED</b>
+    await sendTelegram(`
+📡 <b>LIVE MARKET STRUCTURE</b>
 
 🪙 ${coin}
 
-💵 Current Price
-RM${formatPrice(
-        coin,
-        data.currentPrice
-      )}
+📊 Structure
+${structure.structure}
 
-🔴 Resistance Zone
-RM${formatPrice(
-        coin,
-        data.resistancePrice
-      )}
-
-📦 Sell Wall
-${formatUnit(
-        coin,
-        data.resistanceVolume
-      )}
-
-📊 Buy Pressure
-${data.pressure.toFixed(
-        2
-      )}
+⚡ Momentum
+${(
+      structure.momentum *
+      100
+    ).toFixed(2)}%
 
 📡 Market Regime
 ${regime}
 
-🧠 AI Confidence
-${confidence}
+📈 EMA Trend
+${emaFilter(coin)
+        ? "BULLISH"
+        : "WEAK"}
 
-⚠️ Seller defending resistance aggressively.
-`);
-    }
-
-    // WHALE
-
-    if (
-      data.supportVolume >
-        data.resistanceVolume *
-          2 &&
-      data.pressure > 1.15 &&
-      data.trend ===
-        "BULLISH" &&
-      cooldown(
-        `whale_${coin}`,
-        1800
-      )
-    ) {
-      await sendTelegram(`
-🐋 <b>WHALE ACCUMULATION DETECTED</b>
-
-🪙 ${coin}
+📉 RSI Condition
+${rsiFilter(coin)
+        ? "HEALTHY"
+        : "EXTREME"}
 
 💵 Current Price
 RM${formatPrice(
-        coin,
-        data.currentPrice
-      )}
+      coin,
+      data.currentPrice
+    )}
 
-🟢 Strong Support
+🟢 Support
 RM${formatPrice(
-        coin,
-        data.supportPrice
-      )}
+      coin,
+      data.supportPrice
+    )}
 
-📦 Buy Wall
-${formatUnit(
-        coin,
-        data.supportVolume
-      )}
+🔴 Resistance
+RM${formatPrice(
+      coin,
+      data.resistancePrice
+    )}
 
-📦 Sell Wall
-${formatUnit(
-        coin,
-        data.resistanceVolume
-      )}
-
-📊 Buy/Sell Pressure
+📊 Pressure
 ${data.pressure.toFixed(
-        2
-      )}
-
-📡 Market Regime
-${regime}
-
-🧠 AI Confidence
-${confidence}
-
-🔥 Strong buyer absorption detected.
+      2
+    )}
 `);
-    }
   }
 }
 
@@ -724,10 +829,14 @@ async function sendScalpSignal(
   coin,
   data
 ) {
-  if (
-    detectFakeBreakout(
+  const score =
+    await validateSignal(
+      coin,
       data
-    )
+    );
+
+  if (
+    score < MIN_SCORE
   ) {
     return;
   }
@@ -736,28 +845,6 @@ async function sendScalpSignal(
     detectMarketRegime(
       data
     );
-
-  if (
-    regime ===
-    "VOLATILE"
-  ) {
-    return;
-  }
-
-  const score =
-    calculateScore(
-      data
-    );
-
-  if (
-    score <
-    MIN_SCORE
-  ) {
-    return;
-  }
-
-  const confidence =
-    getConfidence(score);
 
   const tpMultiplier =
     score >= 90
@@ -828,33 +915,16 @@ RM${formatPrice(
       data.resistancePrice
     )}
 
-📦 Support Volume
-${formatUnit(
-      coin,
-      data.supportVolume
-    )}
-
-📦 Resistance Volume
-${formatUnit(
-      coin,
-      data.resistanceVolume
-    )}
-
 📊 Buy Pressure
 ${data.pressure.toFixed(
       2
     )}
 
-📡 Market Regime
-${regime}
-
 🧠 AI Score
 ${score}%
 
-🧠 AI Confidence
-${confidence}
-
-${getSetup(score)}
+📡 Market Regime
+${regime}
 
 ⌛ Signal Expiry
 30 Minutes
@@ -866,7 +936,6 @@ ${getSetup(score)}
             {
               text:
                 "✅ START ENTRY",
-
               callback_data:
                 `entry_${id}`,
             },
@@ -917,13 +986,7 @@ async function smartSignalEngine() {
 
     if (
       data.trend ===
-        "BULLISH" &&
-      data.pressure >
-        1.15 &&
-      cooldown(
-        `signal_${coin}`,
-        120
-      )
+      "BULLISH"
     ) {
       await sendScalpSignal(
         coin,
@@ -946,7 +1009,7 @@ bot.on(
     const userId =
       query.from.id;
 
-    // START ENTRY
+    // ENTRY
 
     if (
       data.startsWith(
@@ -1048,9 +1111,7 @@ bot.on(
       await sendTelegram(`
 ❌ TRADE CANCELLED
 
-🛑 Entry cancelled by user.
-
-📡 Monitoring stopped.
+🛑 Monitoring stopped.
 `);
     }
 
@@ -1115,7 +1176,7 @@ bot.on(
 
 🪙 ${trade.coin}
 
-👀 Monitoring resumed.
+📡 Monitoring resumed.
 `);
     }
   }
@@ -1155,10 +1216,6 @@ bot.on(
       if (
         targetProfit <= 0
       ) {
-        await sendTelegram(
-          "❌ Invalid target profit"
-        );
-
         return;
       }
 
@@ -1168,10 +1225,6 @@ bot.on(
       const diff =
         signal.tp -
         signal.entry;
-
-      if (diff <= 0) {
-        return;
-      }
 
       let quantity =
         targetProfit /
@@ -1609,8 +1662,6 @@ RM${formatPrice(
 // =====================================
 
 function cleanup() {
-  // SIGNAL
-
   for (const id of Object.keys(
     PENDING_SIGNALS
   )) {
@@ -1627,8 +1678,6 @@ function cleanup() {
       ];
     }
   }
-
-  // EXIT
 
   for (const id of Object.keys(
     ACTIVE_TRADES
@@ -1723,20 +1772,8 @@ app.listen(PORT, async () => {
   await sendTelegram(`
 ✅ BOT ONLINE
 
-🚀 SMART SCALPING TERMINAL ACTIVE
+🚀 FINAL ADVANCED AI SCALPING TERMINAL ACTIVE
 `);
-
-  await sendPriceAlert();
-
-  setInterval(
-    sendPriceAlert,
-    300000
-  );
-
-  setInterval(
-    marketEventEngine,
-    120000
-  );
 
   setInterval(
     smartSignalEngine,
@@ -1757,6 +1794,13 @@ app.listen(PORT, async () => {
     sendDailyReport,
     24 *
       60 *
+      60 *
+      1000
+  );
+
+  setInterval(
+    sendMarketStructure,
+    15 *
       60 *
       1000
   );
