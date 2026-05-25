@@ -886,7 +886,18 @@ ${data.pressure.toFixed(
 // =====================================
 // SCALPING SIGNAL
 // =====================================
+function getSetup(score) {
 
+  if (score >= 90) {
+    return "🔥 ELITE SETUP";
+  }
+
+  if (score >= 80) {
+    return "✅ STRONG SETUP";
+  }
+
+  return "⚠️ MODERATE SETUP";
+}
 async function sendScalpSignal(
   coin,
   data
@@ -985,6 +996,8 @@ ${data.pressure.toFixed(
 
 🧠 AI Score
 ${score}%
+
+${getSetup(score)}
 
 📡 Market Regime
 ${regime}
