@@ -38,6 +38,7 @@ const SELL_FEE = 0.005;
 
 const SIGNAL_EXPIRY = 30 * 60 * 1000;
 const EXIT_EXPIRY = 15 * 60 * 1000;
+
 const MONITOR_INTERVAL = 10000;
 
 const MIN_SCORE = 70;
@@ -50,6 +51,7 @@ const PENDING_SIGNALS = {};
 const ACTIVE_TRADES = {};
 const USER_FLOW = {};
 const TRADE_JOURNAL = [];
+
 const LAST_ALERT = {};
 const LAST_PRICE = {};
 
@@ -107,12 +109,19 @@ function cooldown(key, seconds) {
   return false;
 }
 
-async function sendTelegram(message, options = {}) {
+async function sendTelegram(
+  message,
+  options = {}
+) {
   try {
-    await bot.sendMessage(CHAT_ID, message, {
-      parse_mode: "HTML",
-      ...options,
-    });
+    await bot.sendMessage(
+      CHAT_ID,
+      message,
+      {
+        parse_mode: "HTML",
+        ...options,
+      }
+    );
   } catch (err) {
     console.log(err.message);
   }
@@ -152,10 +161,11 @@ async function getOrderbook(coin) {
 
 async function getMarketData(coin) {
   try {
-    const [ticker, orderbook] = await Promise.all([
-      getTicker(coin),
-      getOrderbook(coin),
-    ]);
+    const [ticker, orderbook] =
+      await Promise.all([
+        getTicker(coin),
+        getOrderbook(coin),
+      ]);
 
     if (!ticker || !orderbook) {
       return null;
@@ -185,7 +195,9 @@ async function getMarketData(coin) {
     const spreadPercent =
       spread / currentPrice;
 
+    // =====================================
     // SUPPORT
+    // =====================================
 
     const supportZone = bids.filter(
       (bid) => {
@@ -200,7 +212,9 @@ async function getMarketData(coin) {
       }
     );
 
+    // =====================================
     // RESISTANCE
+    // =====================================
 
     const resistanceZone = asks.filter(
       (ask) => {
@@ -358,6 +372,22 @@ function getSetup(score) {
   return "⚠️ MODERATE SETUP";
 }
 
+function getConfidence(score) {
+  if (score >= 90) {
+    return "VERY HIGH";
+  }
+
+  if (score >= 80) {
+    return "HIGH";
+  }
+
+  if (score >= 70) {
+    return "MODERATE";
+  }
+
+  return "LOW";
+}
+
 // =====================================
 // MARKET REGIME
 // =====================================
@@ -387,12 +417,12 @@ function detectFakeBreakout(data) {
 }
 
 // =====================================
-// PRICE ALERTS
+// PRICE ALERT
 // =====================================
 
 async function sendPriceAlert() {
   let message =
-    "📡 <b>PRICE UPDATE</b>\n";
+    "📡 <b>LIVE MARKET UPDATE</b>\n";
 
   for (const coin of Object.keys(
     COINS
@@ -426,6 +456,8 @@ async function sendPriceAlert() {
     message += `
 
 ${emoji} ${coin}
+
+💵 Price
 RM${formatPrice(coin, price)}
 `;
   }
@@ -449,74 +481,197 @@ async function marketEventEngine() {
       continue;
     }
 
-    // BREAKOUT
+    const regime =
+      detectMarketRegime(data);
+
+    const score =
+      calculateScore(data);
+
+    const confidence =
+      getConfidence(score);
+
+    // =====================================
+    // BREAKOUT ALERT
+    // =====================================
 
     if (
       data.currentPrice >
         data.resistancePrice &&
       data.pressure > 1.15 &&
-      cooldown(`breakout_${coin}`, 600)
+      cooldown(
+        `breakout_${coin}`,
+        1800
+      )
     ) {
       await sendTelegram(`
 🚀 <b>BREAKOUT DETECTED</b>
 
 🪙 ${coin}
 
-📈 Price
+💵 Current Price
 RM${formatPrice(
         coin,
         data.currentPrice
       )}
+
+🔴 Resistance Broken
+RM${formatPrice(
+        coin,
+        data.resistancePrice
+      )}
+
+📦 Buy Pressure
+${data.pressure.toFixed(2)}
+
+📊 Support Volume
+${formatUnit(
+        coin,
+        data.supportVolume
+      )}
+
+📊 Resistance Volume
+${formatUnit(
+        coin,
+        data.resistanceVolume
+      )}
+
+📡 Market Regime
+${regime}
+
+🧠 AI Confidence
+${confidence}
+
+🔥 Momentum breakout detected.
 `);
     }
 
-    // REJECTION
+    // =====================================
+    // REJECTION ALERT
+    // =====================================
 
     if (
       data.currentPrice >
-        data.resistancePrice * 0.998 &&
+        data.resistancePrice *
+          0.998 &&
       data.pressure < 1 &&
-      cooldown(`reject_${coin}`, 600)
+      cooldown(
+        `reject_${coin}`,
+        1800
+      )
     ) {
       await sendTelegram(`
 ❌ <b>REJECTION DETECTED</b>
 
 🪙 ${coin}
 
-⚠️ Seller defending resistance.
-`);
-    }
+💵 Current Price
+RM${formatPrice(
+        coin,
+        data.currentPrice
+      )}
 
-    // WHALE
+🔴 Resistance Zone
+RM${formatPrice(
+        coin,
+        data.resistancePrice
+      )}
 
-    if (
-      data.supportVolume > 100000 &&
-      cooldown(`whale_${coin}`, 1200)
-    ) {
-      await sendTelegram(`
-🐋 <b>WHALE BUY WALL</b>
+📦 Sell Wall
+${formatUnit(
+        coin,
+        data.resistanceVolume
+      )}
 
-🪙 ${coin}
+📊 Buy Pressure
+${data.pressure.toFixed(2)}
 
-📦 Volume
+📊 Support Volume
 ${formatUnit(
         coin,
         data.supportVolume
       )}
+
+📡 Market Regime
+${regime}
+
+🧠 AI Confidence
+${confidence}
+
+⚠️ Seller defending resistance aggressively.
+
+🚨 Possible failed breakout detected.
+`);
+    }
+
+    // =====================================
+    // WHALE ALERT
+    // =====================================
+
+    if (
+      data.supportVolume >
+        data.resistanceVolume * 2 &&
+      data.pressure > 1.15 &&
+      data.trend === "BULLISH" &&
+      cooldown(
+        `whale_${coin}`,
+        1800
+      )
+    ) {
+      await sendTelegram(`
+🐋 <b>WHALE ACCUMULATION DETECTED</b>
+
+🪙 ${coin}
+
+💵 Current Price
+RM${formatPrice(
+        coin,
+        data.currentPrice
+      )}
+
+🟢 Strong Support
+RM${formatPrice(
+        coin,
+        data.supportPrice
+      )}
+
+📦 Buy Wall
+${formatUnit(
+        coin,
+        data.supportVolume
+      )}
+
+📦 Sell Wall
+${formatUnit(
+        coin,
+        data.resistanceVolume
+      )}
+
+📊 Buy/Sell Pressure
+${data.pressure.toFixed(2)}
+
+📡 Market Regime
+${regime}
+
+🧠 AI Confidence
+${confidence}
+
+🔥 Strong buyer absorption detected.
 `);
     }
   }
 }
 
 // =====================================
-// SIGNAL ENGINE
+// SCALPING SIGNAL
 // =====================================
 
 async function sendScalpSignal(
   coin,
   data
 ) {
-  if (detectFakeBreakout(data)) {
+  if (
+    detectFakeBreakout(data)
+  ) {
     return;
   }
 
@@ -527,13 +682,15 @@ async function sendScalpSignal(
     return;
   }
 
-  const score = calculateScore(
-    data
-  );
+  const score =
+    calculateScore(data);
 
   if (score < MIN_SCORE) {
     return;
   }
+
+  const confidence =
+    getConfidence(score);
 
   const tpMultiplier =
     score >= 90
@@ -566,35 +723,74 @@ async function sendScalpSignal(
 
 🪙 ${coin}
 
-🧠 Score
-${score}%
+💵 Current Price
+RM${formatPrice(
+      coin,
+      data.currentPrice
+    )}
 
-${getSetup(score)}
-
-📡 Market Regime
-${regime}
-
-📌 Entry
+📌 Suggested Entry
 RM${formatPrice(
       coin,
       data.bestAsk
     )}
 
-📈 TP
+📈 Take Profit
 RM${formatPrice(coin, tp)}
 
-🛑 SL
+🛑 Stop Loss
 RM${formatPrice(coin, sl)}
 
-⌛ Expiry 30 min
+🟢 Strong Support
+RM${formatPrice(
+      coin,
+      data.supportPrice
+    )}
+
+🔴 Resistance
+RM${formatPrice(
+      coin,
+      data.resistancePrice
+    )}
+
+📦 Support Volume
+${formatUnit(
+      coin,
+      data.supportVolume
+    )}
+
+📦 Resistance Volume
+${formatUnit(
+      coin,
+      data.resistanceVolume
+    )}
+
+📊 Buy Pressure
+${data.pressure.toFixed(2)}
+
+📡 Market Regime
+${regime}
+
+🧠 AI Score
+${score}%
+
+🧠 AI Confidence
+${confidence}
+
+${getSetup(score)}
+
+⌛ Signal Expiry
+30 Minutes
 `,
     {
       reply_markup: {
         inline_keyboard: [
           [
             {
-              text: "✅ START ENTRY",
-              callback_data: `entry_${id}`,
+              text:
+                "✅ START ENTRY",
+              callback_data:
+                `entry_${id}`,
             },
           ],
         ],
@@ -602,6 +798,10 @@ RM${formatPrice(coin, sl)}
     }
   );
 }
+
+// =====================================
+// SIGNAL ENGINE
+// =====================================
 
 async function smartSignalEngine() {
   for (const coin of Object.keys(
@@ -618,7 +818,10 @@ async function smartSignalEngine() {
     if (
       data.trend === "BULLISH" &&
       data.pressure > 1.15 &&
-      cooldown(`signal_${coin}`, 120)
+      cooldown(
+        `signal_${coin}`,
+        120
+      )
     ) {
       await sendScalpSignal(
         coin,
@@ -638,10 +841,15 @@ bot.on(
     const data = query.data;
     const userId = query.from.id;
 
+    // =====================================
     // ENTRY
+    // =====================================
 
     if (data.startsWith("entry_")) {
-      const id = data.split("_")[1];
+
+      const id = data.substring(
+        data.indexOf("_") + 1
+      );
 
       const signal =
         PENDING_SIGNALS[id];
@@ -674,14 +882,19 @@ bot.on(
       );
     }
 
+    // =====================================
     // CONFIRM BUY
+    // =====================================
 
     else if (
       data.startsWith(
         "confirmbuy_"
       )
     ) {
-      const id = data.split("_")[1];
+
+      const id = data.substring(
+        data.indexOf("_") + 1
+      );
 
       USER_FLOW[userId] = {
         step: "WAIT_MATCHED_BUY",
@@ -693,12 +906,17 @@ bot.on(
       );
     }
 
+    // =====================================
     // SELL
+    // =====================================
 
     else if (
       data.startsWith("sell_")
     ) {
-      const id = data.split("_")[1];
+
+      const id = data.substring(
+        data.indexOf("_") + 1
+      );
 
       USER_FLOW[userId] = {
         step: "WAIT_MATCHED_SELL",
@@ -710,12 +928,17 @@ bot.on(
       );
     }
 
+    // =====================================
     // HOLD
+    // =====================================
 
     else if (
       data.startsWith("hold_")
     ) {
-      const id = data.split("_")[1];
+
+      const id = data.substring(
+        data.indexOf("_") + 1
+      );
 
       const trade =
         ACTIVE_TRADES[id];
@@ -744,6 +967,7 @@ bot.on(
 // =====================================
 
 bot.on("message", async (msg) => {
+
   const userId = msg.from.id;
   const text = msg.text;
 
@@ -753,9 +977,12 @@ bot.on("message", async (msg) => {
 
   const flow = USER_FLOW[userId];
 
+  // =====================================
   // TARGET PROFIT
+  // =====================================
 
   if (flow.step === "WAIT_TARGET") {
+
     const targetProfit =
       safeNumber(text);
 
@@ -800,33 +1027,56 @@ bot.on("message", async (msg) => {
     const id = tradeId();
 
     ACTIVE_TRADES[id] = {
+
       id,
-      coin: signal.coin,
+
+      coin:
+        signal.coin,
+
       quantity,
-      entryPrice: signal.entry,
-      tp: signal.tp,
-      sl: signal.sl,
-      status: "PENDING",
-      partialTaken: false,
-      createdAt: now(),
+
+      entryPrice:
+        signal.entry,
+
+      tp:
+        signal.tp,
+
+      sl:
+        signal.sl,
+
+      status:
+        "PENDING",
+
+      partialTaken:
+        false,
+
+      createdAt:
+        now(),
+
     };
 
     USER_FLOW[userId] = {
-      step: "WAIT_MATCHED_BUY",
-      tradeId: id,
+
+      step:
+        "WAIT_MATCHED_BUY",
+
+      tradeId:
+        id,
+
     };
 
     await sendTelegram(
-      `
+
+`
 📊 <b>SUGGESTED BUY</b>
 
 🪙 ${signal.coin}
 
 📦 Quantity
 ${formatUnit(
-        signal.coin,
-        quantity
-      )}
+  signal.coin,
+  quantity
+)}
 
 💰 Estimated Buy
 RM${estimatedBuy.toFixed(2)}
@@ -837,27 +1087,36 @@ RM${estimatedSell.toFixed(2)}
 🔥 Estimated PNL
 RM${pnl.toFixed(2)}
 `,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "✅ CONFIRM BUY",
-                callback_data: `confirmbuy_${id}`,
-              },
-            ],
-          ],
+
+{
+  reply_markup: {
+    inline_keyboard: [
+      [
+        {
+          text:
+            "✅ CONFIRM BUY",
+
+          callback_data:
+            `confirmbuy_${id}`,
         },
-      }
+      ],
+    ],
+  },
+}
+
     );
+
   }
 
+  // =====================================
   // MATCHED BUY
+  // =====================================
 
   else if (
     flow.step ===
     "WAIT_MATCHED_BUY"
   ) {
+
     const trade =
       ACTIVE_TRADES[
         flow.tradeId
@@ -897,14 +1156,18 @@ RM${formatPrice(
 `);
 
     delete USER_FLOW[userId];
+
   }
 
+  // =====================================
   // MATCHED SELL
+  // =====================================
 
   else if (
     flow.step ===
     "WAIT_MATCHED_SELL"
   ) {
+
     const trade =
       ACTIVE_TRADES[
         flow.tradeId
@@ -918,7 +1181,8 @@ RM${formatPrice(
       safeNumber(text);
 
     const saleValue =
-      sellPrice * trade.quantity;
+      sellPrice *
+      trade.quantity;
 
     const buyValue =
       trade.entryPrice *
@@ -931,9 +1195,15 @@ RM${formatPrice(
       saleValue * SELL_FEE;
 
     TRADE_JOURNAL.push({
-      coin: trade.coin,
+
+      coin:
+        trade.coin,
+
       pnl,
-      createdAt: new Date(),
+
+      createdAt:
+        new Date(),
+
     });
 
     await sendTelegram(`
@@ -953,7 +1223,9 @@ RM${pnl.toFixed(2)}
     ];
 
     delete USER_FLOW[userId];
+
   }
+
 });
 
 // =====================================
@@ -961,19 +1233,25 @@ RM${pnl.toFixed(2)}
 // =====================================
 
 async function monitorTrades() {
+
   for (const id of Object.keys(
     ACTIVE_TRADES
   )) {
+
     const trade =
       ACTIVE_TRADES[id];
 
-    if (trade.status !== "ACTIVE") {
+    if (
+      trade.status !==
+      "ACTIVE"
+    ) {
       continue;
     }
 
-    const ticker = await getTicker(
-      trade.coin
-    );
+    const ticker =
+      await getTicker(
+        trade.coin
+      );
 
     if (!ticker) {
       continue;
@@ -984,18 +1262,26 @@ async function monitorTrades() {
         ticker.last_trade
       );
 
+    // =====================================
     // TRAILING STOP
+    // =====================================
 
     const move =
+
       (currentPrice -
-        trade.entryPrice) /
+        trade.entryPrice)
+
+      /
+
       trade.entryPrice;
 
     if (move > 0.03) {
+
       const newSL =
         currentPrice * 0.985;
 
       if (newSL > trade.sl) {
+
         trade.sl = newSL;
 
         await sendTelegram(`
@@ -1009,16 +1295,26 @@ RM${formatPrice(
           newSL
         )}
 `);
+
       }
+
     }
 
+    // =====================================
     // PARTIAL TP
+    // =====================================
 
     if (
-      !trade.partialTaken &&
+
+      !trade.partialTaken
+
+      &&
+
       currentPrice >=
-        trade.entryPrice * 1.03
+      trade.entryPrice * 1.03
+
     ) {
+
       trade.partialTaken = true;
 
       await sendTelegram(`
@@ -1028,88 +1324,135 @@ RM${formatPrice(
 
 50% secured.
 `);
+
     }
 
+    // =====================================
     // TAKE PROFIT
+    // =====================================
 
-    if (currentPrice >= trade.tp) {
-      trade.status = "WAIT_EXIT";
+    if (
+      currentPrice >=
+      trade.tp
+    ) {
 
-      trade.exitTriggeredAt = now();
+      trade.status =
+        "WAIT_EXIT";
+
+      trade.exitTriggeredAt =
+        now();
 
       await sendTelegram(
-        `
+
+`
 🚀 <b>SELL NOW</b>
 
 🪙 ${trade.coin}
 
 💵 Current Price
 RM${formatPrice(
-          trade.coin,
-          currentPrice
-        )}
-`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text: "✅ CONFIRM SELL",
-                  callback_data: `sell_${id}`,
-                },
+    trade.coin,
+    currentPrice
+)}
 
-                {
-                  text: "❌ HOLD",
-                  callback_data: `hold_${id}`,
-                },
-              ],
-            ],
-          },
-        }
+📈 TP Reached
+
+⚡ Action Required
+Confirm sell or hold position.
+`,
+
+{
+  reply_markup: {
+    inline_keyboard: [
+      [
+        {
+          text:
+            "✅ CONFIRM SELL",
+
+          callback_data:
+            `sell_${id}`,
+        },
+
+        {
+          text:
+            "❌ HOLD",
+
+          callback_data:
+            `hold_${id}`,
+        },
+      ],
+    ],
+  },
+}
+
       );
+
     }
 
+    // =====================================
     // STOP LOSS
+    // =====================================
 
-    if (currentPrice <= trade.sl) {
-      trade.status = "WAIT_EXIT";
+    if (
+      currentPrice <=
+      trade.sl
+    ) {
 
-      trade.exitTriggeredAt = now();
+      trade.status =
+        "WAIT_EXIT";
+
+      trade.exitTriggeredAt =
+        now();
 
       await sendTelegram(
-        `
+
+`
 🛑 <b>CUTLOSS NOW</b>
 
 🪙 ${trade.coin}
 
 💵 Current Price
 RM${formatPrice(
-          trade.coin,
-          currentPrice
-        )}
+    trade.coin,
+    currentPrice
+)}
+
+⚠️ Stop loss triggered.
+
+⚡ Action Required
+Confirm cutloss or hold position.
 `,
+
+{
+  reply_markup: {
+    inline_keyboard: [
+      [
         {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text:
-                    "✅ CONFIRM CUTLOSS",
+          text:
+            "✅ CONFIRM CUTLOSS",
 
-                  callback_data: `sell_${id}`,
-                },
+          callback_data:
+            `sell_${id}`,
+        },
 
-                {
-                  text: "❌ HOLD",
-                  callback_data: `hold_${id}`,
-                },
-              ],
-            ],
-          },
-        }
+        {
+          text:
+            "❌ HOLD",
+
+          callback_data:
+            `hold_${id}`,
+        },
+      ],
+    ],
+  },
+}
+
       );
+
     }
+
   }
+
 }
 
 // =====================================
@@ -1117,43 +1460,72 @@ RM${formatPrice(
 // =====================================
 
 function cleanup() {
+
+  // =====================================
   // SIGNAL CLEANUP
+  // =====================================
 
   for (const id of Object.keys(
     PENDING_SIGNALS
   )) {
+
     const signal =
       PENDING_SIGNALS[id];
 
     if (
-      now() - signal.createdAt >
+
+      now() -
+      signal.createdAt >
+
       SIGNAL_EXPIRY
+
     ) {
+
       delete PENDING_SIGNALS[id];
+
     }
+
   }
 
+  // =====================================
   // EXIT CLEANUP
+  // =====================================
 
   for (const id of Object.keys(
     ACTIVE_TRADES
   )) {
+
     const trade =
       ACTIVE_TRADES[id];
 
     if (
-      trade.status ===
-        "WAIT_EXIT" &&
-      trade.exitTriggeredAt &&
-      now() -
-        trade.exitTriggeredAt >
-        EXIT_EXPIRY
-    ) {
-      trade.status = "ACTIVE";
 
-      trade.exitTriggeredAt = null;
+      trade.status ===
+      "WAIT_EXIT"
+
+      &&
+
+      trade.exitTriggeredAt
+
+      &&
+
+      now() -
+      trade.exitTriggeredAt >
+
+      EXIT_EXPIRY
+
+    ) {
+
+      trade.status =
+        "ACTIVE";
+
+      trade.exitTriggeredAt =
+        null;
+
     }
+
   }
+
 }
 
 // =====================================
@@ -1161,18 +1533,23 @@ function cleanup() {
 // =====================================
 
 async function sendDailyReport() {
+
   let pnl = 0;
   let wins = 0;
   let losses = 0;
 
   for (const trade of TRADE_JOURNAL) {
+
     pnl += trade.pnl;
 
     if (trade.pnl > 0) {
       wins++;
-    } else {
+    }
+
+    else {
       losses++;
     }
+
   }
 
   await sendTelegram(`
@@ -1190,6 +1567,7 @@ ${losses}
 💰 Total PNL
 RM${pnl.toFixed(2)}
 `);
+
 }
 
 // =====================================
@@ -1197,24 +1575,32 @@ RM${pnl.toFixed(2)}
 // =====================================
 
 app.get("/", (req, res) => {
+
   res.json({
-    status: "ACTIVE",
+
+    status:
+      "ACTIVE",
 
     activeTrades:
-      Object.keys(ACTIVE_TRADES)
-        .length,
+      Object.keys(
+        ACTIVE_TRADES
+      ).length,
 
     pendingSignals:
-      Object.keys(PENDING_SIGNALS)
-        .length,
+      Object.keys(
+        PENDING_SIGNALS
+      ).length,
+
   });
+
 });
 
 // =====================================
-// START
+// START SERVER
 // =====================================
 
 app.listen(PORT, async () => {
+
   console.log(
     `SERVER RUNNING ${PORT}`
   );
@@ -1247,10 +1633,14 @@ app.listen(PORT, async () => {
     MONITOR_INTERVAL
   );
 
-  setInterval(cleanup, 60000);
+  setInterval(
+    cleanup,
+    60000
+  );
 
   setInterval(
     sendDailyReport,
     24 * 60 * 60 * 1000
   );
+
 });
