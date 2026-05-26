@@ -577,15 +577,20 @@ async function smartSignalEngine() {
     // EXECUTION QUALITY PRE-FILTER
     // =====================================
 
+    const projectedEntry =
+      coin === "BTC"
+        ? data.currentPrice * 0.999
+        : data.currentPrice * 0.996;
+
     const projectedTP =
       coin === "BTC"
-        ? data.currentPrice * 1.01
-        : data.currentPrice * 1.03;
+        ? projectedEntry * 1.01
+        : projectedEntry * 1.03;
 
     const projectedSL =
       coin === "BTC"
-        ? data.currentPrice * 0.994
-        : data.currentPrice * 0.988;
+        ? projectedEntry * 0.994
+        : projectedEntry * 0.988;
 
     const projectedMove =
       (projectedTP - data.currentPrice) /
@@ -606,6 +611,7 @@ async function smartSignalEngine() {
     }
 
     PENDING_ENTRIES[coin] = {
+      entryPrice: projectedEntry,
       coin,
       tp:
         projectedTP,
@@ -634,6 +640,12 @@ async function smartSignalEngine() {
 RM${formatPrice(
         coin,
         data.currentPrice
+      )}
+
+📌 Entry:
+RM${formatPrice(
+        coin,
+        projectedEntry
       )}
 
 🎯 TP:
@@ -831,7 +843,7 @@ bot.on("message", async (msg) => {
 
     const entry = PENDING_ENTRIES[coin];
 
-    const entryPrice = entry.bestAsk;
+    const entryPrice = entry.entryPrice;
     const tp = entry.tp;
 
     const profitPerUnit =
@@ -960,7 +972,7 @@ ${quantity.toLocaleString()} ${coin}
 💵 Entry Price:
 RM${formatPrice(
         coin,
-        entry.bestAsk
+        entry.entryPrice
       )}
 
 🎯 TP:
