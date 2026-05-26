@@ -38,22 +38,26 @@ const SCAN_COINS = [
   "AAVE",
 ];
 
+const ACTIVE_TRADES = {};
+const PENDING_ENTRIES = {};
+const USER_STATE = {};
+const PRICE_MEMORY = {};
+const LAST_PRICE = {};
+const LAST_SIGNAL = {};
+
+const GLOBAL_SCALPING_COOLDOWN =
+  5 * 60 * 1000;
+
+const PER_COIN_COOLDOWN =
+  10 * 60 * 1000;
+
+let LAST_GLOBAL_SIGNAL = 0;
+
 const MAX_CAPITAL = {
   WEAK: 5000,
   MID: 15000,
   STRONG: 30000,
 };
-
-const ACTIVE_TRADES = {};
-const PENDING_ENTRIES = {};
-const USER_STATE = {};
-const PRICE_MEMORY = {};
-const LAST_SIGNAL = {};
-const LAST_PRICE = {};
-
-const GLOBAL_SCALPING_COOLDOWN = 5 * 60 * 1000;
-
-let LAST_GLOBAL_SIGNAL = 0;
 
 function now() {
   return Date.now();
@@ -189,7 +193,10 @@ async function getTicker(coin) {
   }
 }
 
-function updatePriceMemory(coin, price) {
+function updatePriceMemory(
+  coin,
+  price
+) {
   if (!PRICE_MEMORY[coin]) {
     PRICE_MEMORY[coin] = [];
   }
@@ -199,14 +206,18 @@ function updatePriceMemory(coin, price) {
     time: now(),
   });
 
-  if (PRICE_MEMORY[coin].length > 500) {
+  if (
+    PRICE_MEMORY[coin].length > 500
+  ) {
     PRICE_MEMORY[coin].shift();
   }
 }
 
 async function updateMemory() {
   for (const coin of SCAN_COINS) {
-    const data = await getTicker(coin);
+    const data = await getTicker(
+      coin
+    );
 
     if (!data) {
       continue;
@@ -231,27 +242,42 @@ async function sendPriceAlert() {
   let grtEmoji = "➖";
 
   if (LAST_PRICE.BTC) {
-    if (btc.currentPrice > LAST_PRICE.BTC) {
+    if (
+      btc.currentPrice >
+      LAST_PRICE.BTC
+    ) {
       btcEmoji = "🟢";
     }
 
-    if (btc.currentPrice < LAST_PRICE.BTC) {
+    if (
+      btc.currentPrice <
+      LAST_PRICE.BTC
+    ) {
       btcEmoji = "🔴";
     }
   }
 
   if (LAST_PRICE.GRT) {
-    if (grt.currentPrice > LAST_PRICE.GRT) {
+    if (
+      grt.currentPrice >
+      LAST_PRICE.GRT
+    ) {
       grtEmoji = "🟢";
     }
 
-    if (grt.currentPrice < LAST_PRICE.GRT) {
+    if (
+      grt.currentPrice <
+      LAST_PRICE.GRT
+    ) {
       grtEmoji = "🔴";
     }
   }
 
-  LAST_PRICE.BTC = btc.currentPrice;
-  LAST_PRICE.GRT = grt.currentPrice;
+  LAST_PRICE.BTC =
+    btc.currentPrice;
+
+  LAST_PRICE.GRT =
+    grt.currentPrice;
 
   const message = `📡 PRICE ALERT
 
@@ -279,22 +305,24 @@ async function sendMarketStructure() {
   }
 
   const btcScore =
-    Math.floor(Math.random() * 20) + 65;
+    Math.floor(Math.random() * 20) +
+    65;
 
   const grtScore =
-    Math.floor(Math.random() * 20) + 60;
+    Math.floor(Math.random() * 20) +
+    60;
 
   const btcSupport =
-    btc.currentPrice * 0.98;
+    btc.currentPrice * 0.985;
 
   const btcResistance =
-    btc.currentPrice * 1.025;
+    btc.currentPrice * 1.02;
 
   const grtSupport =
-    grt.currentPrice * 0.95;
+    grt.currentPrice * 0.975;
 
   const grtResistance =
-    grt.currentPrice * 1.05;
+    grt.currentPrice * 1.03;
 
   const message = `📊 MARKET STRUCTURE UPDATE
 
@@ -386,14 +414,25 @@ async function scanSignals() {
       continue;
     }
 
-    const data = await getTicker(coin);
+    if (
+      LAST_SIGNAL[coin] &&
+      now() - LAST_SIGNAL[coin] <
+        PER_COIN_COOLDOWN
+    ) {
+      continue;
+    }
+
+    const data = await getTicker(
+      coin
+    );
 
     if (!data) {
       continue;
     }
 
     const score =
-      Math.floor(Math.random() * 25) + 65;
+      Math.floor(Math.random() * 25) +
+      65;
 
     const confidence =
       confidenceLabel(score);
@@ -404,20 +443,24 @@ async function scanSignals() {
 
     const entryPrice =
       coin === "BTC"
-        ? data.currentPrice * 0.998
-        : data.currentPrice * 0.995;
+        ? data.currentPrice * 0.999
+        : data.currentPrice * 0.996;
 
     let tp;
+    let durationHours;
 
     if (coin === "BTC") {
-      tp = entryPrice * 1.02;
+      tp = entryPrice * 1.012;
+      durationHours = 4;
     } else if (
       coin === "XRP" ||
       coin === "XLM"
     ) {
-      tp = entryPrice * 1.04;
+      tp = entryPrice * 1.025;
+      durationHours = 6;
     } else {
-      tp = entryPrice * 1.06;
+      tp = entryPrice * 1.028;
+      durationHours = 6;
     }
 
     const sl = entryPrice * 0.985;
@@ -427,14 +470,9 @@ async function scanSignals() {
         entryPrice) *
       100;
 
-    if (tpDistance < 2) {
+    if (tpDistance < 1.2) {
       continue;
     }
-
-    const durationHours =
-      confidence === "STRONG"
-        ? 12
-        : 6;
 
     candidates.push({
       coin,
@@ -444,7 +482,8 @@ async function scanSignals() {
       tp,
       sl,
       durationHours,
-      currentPrice: data.currentPrice,
+      currentPrice:
+        data.currentPrice,
       bestAsk: data.bestAsk,
       bestBid: data.bestBid,
     });
@@ -460,9 +499,12 @@ async function scanSignals() {
 
   const best = candidates[0];
 
-  PENDING_ENTRIES[best.coin] = best;
+  PENDING_ENTRIES[best.coin] =
+    best;
 
   LAST_GLOBAL_SIGNAL = now();
+
+  LAST_SIGNAL[best.coin] = now();
 
   const message = `🚀 SCALPING ENTRY
 
@@ -525,9 +567,12 @@ START ENTRY?`;
 
 async function monitorTrades() {
   for (const coin in ACTIVE_TRADES) {
-    const trade = ACTIVE_TRADES[coin];
+    const trade =
+      ACTIVE_TRADES[coin];
 
-    const data = await getTicker(coin);
+    const data = await getTicker(
+      coin
+    );
 
     if (!data) {
       continue;
@@ -540,7 +585,8 @@ async function monitorTrades() {
       trade.tpReached = true;
 
       const grossProfit =
-        (trade.tp - trade.buyPrice) *
+        (trade.tp -
+          trade.buyPrice) *
         trade.netTradeUnit;
 
       const message = `🎯 TP REACHED SELL NOW
@@ -568,7 +614,9 @@ RM${formatPrice(
 📦 Net Must Sell
 (LUNO QUANTITY)
 
-${trade.netTradeUnit.toFixed(4)} ${coin}
+${trade.netTradeUnit.toFixed(
+        4
+      )} ${coin}
 
 💰 Profit Kasar:
 RM${grossProfit.toFixed(2)}
@@ -626,7 +674,9 @@ RM${formatPrice(
 📦 Net Must Sell
 (LUNO QUANTITY)
 
-${trade.netTradeUnit.toFixed(4)} ${coin}
+${trade.netTradeUnit.toFixed(
+        4
+      )} ${coin}
 
 ━━━━━━━━━━━━━━
 
@@ -682,7 +732,9 @@ RM${formatPrice(
 📦 Net Must Sell
 (LUNO QUANTITY)
 
-${trade.netTradeUnit.toFixed(4)} ${coin}
+${trade.netTradeUnit.toFixed(
+        4
+      )} ${coin}
 
 ━━━━━━━━━━━━━━
 
@@ -762,14 +814,11 @@ bot.on(
     if (data.startsWith("HOLD_")) {
       await bot.sendMessage(
         chatId,
-        `📡 Monitoring Resumed`
+        "📡 Monitoring Resumed"
       );
     }
 
     if (data.startsWith("BUYYES_")) {
-      const coin =
-        data.split("_")[1];
-
       USER_STATE[chatId].step =
         "WAIT_BUY_PRICE";
 
@@ -801,102 +850,116 @@ bot.on(
   }
 );
 
-bot.on("message", async (msg) => {
-  const chatId = msg.chat.id;
+bot.on(
+  "message",
+  async (msg) => {
+    const chatId = msg.chat.id;
 
-  if (!USER_STATE[chatId]) {
-    return;
-  }
-
-  const state = USER_STATE[chatId];
-
-  if (state.step === "WAIT_PROFIT") {
-    const targetProfit =
-      safeNumber(msg.text);
-
-    const entry =
-      PENDING_ENTRIES[state.coin];
-
-    if (!entry) {
+    if (!USER_STATE[chatId]) {
       return;
     }
 
-    const profitPerUnit =
-      entry.tp - entry.entryPrice;
+    const state =
+      USER_STATE[chatId];
 
-    const estimatedNetPerUnit =
-      profitPerUnit -
-      entry.entryPrice * BUY_FEE -
-      entry.tp * SELL_FEE;
+    if (
+      state.step === "WAIT_PROFIT"
+    ) {
+      const targetProfit =
+        safeNumber(msg.text);
 
-    if (estimatedNetPerUnit <= 0) {
-      await bot.sendMessage(
-        chatId,
-        "⚠️ LOW EXECUTION QUALITY"
+      const entry =
+        PENDING_ENTRIES[state.coin];
+
+      if (!entry) {
+        return;
+      }
+
+      const profitPerUnit =
+        entry.tp -
+        entry.entryPrice;
+
+      const estimatedNetPerUnit =
+        profitPerUnit -
+        entry.entryPrice *
+          BUY_FEE -
+        entry.tp * SELL_FEE;
+
+      if (
+        estimatedNetPerUnit <= 0
+      ) {
+        await bot.sendMessage(
+          chatId,
+          "⚠️ LOW EXECUTION QUALITY"
+        );
+
+        return;
+      }
+
+      const quantity = Math.ceil(
+        targetProfit /
+          estimatedNetPerUnit
       );
 
-      return;
-    }
+      const value =
+        quantity *
+        entry.entryPrice;
 
-    const quantity = Math.ceil(
-      targetProfit /
-        estimatedNetPerUnit
-    );
+      const maxCapital =
+        MAX_CAPITAL[
+          entry.confidence
+        ];
 
-    const value =
-      quantity * entry.entryPrice;
+      if (value > maxCapital) {
+        await bot.sendMessage(
+          chatId,
+          "⚠️ REQUIRED CAPITAL TOO HIGH"
+        );
 
-    const maxCapital =
-      MAX_CAPITAL[entry.confidence];
+        delete USER_STATE[
+          chatId
+        ];
 
-    if (value > maxCapital) {
-      await bot.sendMessage(
-        chatId,
-        `⚠️ REQUIRED CAPITAL TOO HIGH`
-      );
+        return;
+      }
 
-      delete USER_STATE[chatId];
+      USER_STATE[chatId] = {
+        step: "WAIT_CONFIRM",
+        coin: entry.coin,
+        quantity,
+        value,
+      };
 
-      return;
-    }
-
-    USER_STATE[chatId] = {
-      step: "WAIT_CONFIRM",
-      coin: entry.coin,
-      quantity,
-      value,
-    };
-
-    const message = `📊 SUGGESTED BUY
+      const message = `📊 SUGGESTED BUY
 
 🪙 ${entry.coin}
 
 📌 Best Ask:
 RM${formatPrice(
-      entry.coin,
-      entry.bestAsk
-    )}
+        entry.coin,
+        entry.bestAsk
+      )}
 
 📦 Min Quantity:
 ${quantity.toLocaleString()} ${entry.coin}
 
 💵 Entry Price:
 RM${formatPrice(
-      entry.coin,
-      entry.entryPrice
-    )}
+        entry.coin,
+        entry.entryPrice
+      )}
 
 🎯 TP:
 RM${formatPrice(
-      entry.coin,
-      entry.tp
-    )}
+        entry.coin,
+        entry.tp
+      )}
 
 🛑 SL:
 RM${formatPrice(
-      entry.coin,
-      entry.sl
-    )}
+        entry.coin,
+        entry.sl
+      )}
 
 💰 Value:
 RM${value.toFixed(0)}
@@ -905,165 +968,192 @@ RM${value.toFixed(0)}
 
 CONTINUE?`;
 
-    await bot.sendMessage(
-      chatId,
-      message,
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: "✅ YES",
-                callback_data: `BUYYES_${entry.coin}`,
-              },
-              {
-                text: "❌ NO",
-                callback_data: `BUYNO_${entry.coin}`,
-              },
+      await bot.sendMessage(
+        chatId,
+        message,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "✅ YES",
+                  callback_data: `BUYYES_${entry.coin}`,
+                },
+                {
+                  text: "❌ NO",
+                  callback_data: `BUYNO_${entry.coin}`,
+                },
+              ],
             ],
-          ],
-        },
-      }
-    );
-  }
-
-  if (state.step === "WAIT_BUY_PRICE") {
-    const matchedPrice =
-      safeNumber(msg.text);
-
-    const entry =
-      PENDING_ENTRIES[state.coin];
-
-    if (!entry) {
-      return;
+          },
+        }
+      );
     }
 
-    const buyFeeUnit =
-      state.quantity * BUY_FEE;
+    if (
+      state.step ===
+      "WAIT_BUY_PRICE"
+    ) {
+      const matchedPrice =
+        safeNumber(msg.text);
 
-    const netTradeUnit =
-      state.quantity - buyFeeUnit;
+      const entry =
+        PENDING_ENTRIES[state.coin];
 
-    const netTradeValue =
-      matchedPrice * netTradeUnit;
+      if (!entry) {
+        return;
+      }
 
-    ACTIVE_TRADES[state.coin] = {
-      coin: state.coin,
-      tp: entry.tp,
-      sl: entry.sl,
-      buyPrice: matchedPrice,
-      quantity: state.quantity,
-      buyFeeUnit,
-      netTradeUnit,
-      netTradeValue,
-      durationHours:
-        entry.durationHours,
-      startTime: now(),
-      tpReached: false,
-      slReached: false,
-      durationAlertSent: false,
-    };
+      const buyFeeUnit =
+        state.quantity *
+        BUY_FEE;
 
-    const message = `✅ TRADE CONFIRMED
+      const netTradeUnit =
+        state.quantity -
+        buyFeeUnit;
+
+      const netTradeValue =
+        matchedPrice *
+        netTradeUnit;
+
+      ACTIVE_TRADES[state.coin] =
+        {
+          coin: state.coin,
+          tp: entry.tp,
+          sl: entry.sl,
+          buyPrice: matchedPrice,
+          quantity: state.quantity,
+          buyFeeUnit,
+          netTradeUnit,
+          netTradeValue,
+          durationHours:
+            entry.durationHours,
+          startTime: now(),
+          tpReached: false,
+          slReached: false,
+          durationAlertSent: false,
+        };
+
+      const message = `✅ TRADE CONFIRMED
 
 🪙 ${state.coin}
 
 📦 Net Trade Unit:
-${netTradeUnit.toFixed(4)} ${state.coin}
+${netTradeUnit.toFixed(
+        4
+      )} ${state.coin}
 
 💰 Net Trade Value:
 RM${netTradeValue.toFixed(2)}
 
 💸 Fees Luno:
-${buyFeeUnit.toFixed(4)} ${state.coin}
+${buyFeeUnit.toFixed(
+        4
+      )} ${state.coin}
 
 🎯 TP:
 RM${formatPrice(
-      state.coin,
-      entry.tp
-    )}
+        state.coin,
+        entry.tp
+      )}
 
 🛑 SL:
 RM${formatPrice(
-      state.coin,
-      entry.sl
-    )}
+        state.coin,
+        entry.sl
+      )}
 
 📡 Trade Monitoring Started...`;
 
-    await bot.sendMessage(
-      chatId,
-      message
-    );
+      await bot.sendMessage(
+        chatId,
+        message
+      );
 
-    delete USER_STATE[chatId];
-  }
-
-  if (state.step === "WAIT_SELL_PRICE") {
-    const matchedPrice =
-      safeNumber(msg.text);
-
-    const trade =
-      ACTIVE_TRADES[state.coin];
-
-    if (!trade) {
-      return;
+      delete USER_STATE[
+        chatId
+      ];
     }
 
-    const sellFeeUnit =
-      trade.netTradeUnit *
-      SELL_FEE;
+    if (
+      state.step ===
+      "WAIT_SELL_PRICE"
+    ) {
+      const matchedPrice =
+        safeNumber(msg.text);
 
-    const netSellUnit =
-      trade.netTradeUnit -
-      sellFeeUnit;
+      const trade =
+        ACTIVE_TRADES[state.coin];
 
-    const netSellValue =
-      matchedPrice * netSellUnit;
+      if (!trade) {
+        return;
+      }
 
-    const pnl =
-      netSellValue -
-      trade.netTradeValue;
+      const sellFeeUnit =
+        trade.netTradeUnit *
+        SELL_FEE;
 
-    const message = `✅ SELL TRADE CONFIRMED
+      const netSellUnit =
+        trade.netTradeUnit -
+        sellFeeUnit;
+
+      const netSellValue =
+        matchedPrice *
+        netSellUnit;
+
+      const pnl =
+        netSellValue -
+        trade.netTradeValue;
+
+      const message = `✅ SELL TRADE CONFIRMED
 
 🪙 ${state.coin}
 
 💵 Matched Price:
 RM${formatPrice(
-      state.coin,
-      matchedPrice
-    )}
+        state.coin,
+        matchedPrice
+      )}
 
 📦 Net Sell Unit:
-${netSellUnit.toFixed(4)} ${state.coin}
+${netSellUnit.toFixed(
+        4
+      )} ${state.coin}
 
 💰 Net Sell Value:
 RM${netSellValue.toFixed(2)}
 
 💸 Fees Luno:
-${sellFeeUnit.toFixed(4)} ${state.coin}
+${sellFeeUnit.toFixed(
+        4
+      )} ${state.coin}
 
 📊 Net ${
-      pnl >= 0
-        ? "Profit"
-        : "Loss"
-    }:
+        pnl >= 0
+          ? "Profit"
+          : "Loss"
+      }:
 RM${pnl.toFixed(2)}
 
 📡 Realtime Monitoring Stopped
 
 ✅ Trade Closed`;
 
-    await bot.sendMessage(
-      chatId,
-      message
-    );
+      await bot.sendMessage(
+        chatId,
+        message
+      );
 
-    delete ACTIVE_TRADES[state.coin];
-    delete USER_STATE[chatId];
+      delete ACTIVE_TRADES[
+        state.coin
+      ];
+
+      delete USER_STATE[
+        chatId
+      ];
+    }
   }
-});
+);
 
 app.get("/", (req, res) => {
   res.json({
@@ -1086,11 +1176,17 @@ setInterval(updateMemory, 5000);
 
 setInterval(scanSignals, 60000);
 
-setInterval(sendPriceAlert, 300000);
+setInterval(
+  sendPriceAlert,
+  300000
+);
 
 setInterval(
   sendMarketStructure,
   900000
 );
 
-setInterval(monitorTrades, 15000);
+setInterval(
+  monitorTrades,
+  15000
+);
