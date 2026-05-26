@@ -54,6 +54,21 @@ const SIGNAL_COOLDOWN = {
 const GLOBAL_ALERT_GAP = 2 * 60 * 1000;
 
 // =====================================
+// EXECUTION QUALITY FILTER
+// =====================================
+
+const MAX_CAPITAL = {
+  WEAK: 5000,
+  MID: 15000,
+  STRONG: 30000,
+};
+
+const MIN_NET_MOVE = {
+  BTC: 0.008,
+  ALT: 0.025,
+};
+
+// =====================================
 // COINS
 // =====================================
 
@@ -558,12 +573,44 @@ async function smartSignalEngine() {
 
     updateGlobalAlert();
 
+    // =====================================
+    // EXECUTION QUALITY PRE-FILTER
+    // =====================================
+
+    const projectedTP =
+      coin === "BTC"
+        ? data.currentPrice * 1.01
+        : data.currentPrice * 1.03;
+
+    const projectedSL =
+      coin === "BTC"
+        ? data.currentPrice * 0.994
+        : data.currentPrice * 0.988;
+
+    const projectedMove =
+      (projectedTP - data.currentPrice) /
+      data.currentPrice;
+
+    if (
+      coin !== "BTC" &&
+      projectedMove < MIN_NET_MOVE.ALT
+    ) {
+      continue;
+    }
+
+    if (
+      coin === "BTC" &&
+      projectedMove < MIN_NET_MOVE.BTC
+    ) {
+      continue;
+    }
+
     PENDING_ENTRIES[coin] = {
       coin,
       tp:
-        data.currentPrice * 1.015,
+        projectedTP,
       sl:
-        data.currentPrice * 0.992,
+        projectedSL,
       currentPrice:
         data.currentPrice,
       bestAsk:
@@ -592,13 +639,13 @@ RM${formatPrice(
 🎯 TP:
 RM${formatPrice(
         coin,
-        data.currentPrice * 1.015
+        projectedTP
       )}
 
 🛑 SL:
 RM${formatPrice(
         coin,
-        data.currentPrice * 0.992
+        projectedSL
       )}
 
 🧠 Confidence:
@@ -790,6 +837,39 @@ bot.on("message", async (msg) => {
     const profitPerUnit =
       tp - entryPrice;
 
+    // =====================================
+    // EXECUTION QUALITY FILTER
+    // =====================================
+
+    const coinType =
+      coin === "BTC"
+        ? "BTC"
+        : "ALT";
+
+    const minimumMove =
+      MIN_NET_MOVE[coinType];
+
+    const movePercent =
+      profitPerUnit / entryPrice;
+
+    // REJECT SMALL TP
+    if (movePercent < minimumMove) {
+      delete USER_STATE[chatId];
+
+      await bot.sendMessage(
+        chatId,
+        `⚠️ LOW EXECUTION QUALITY
+
+🪙 ${coin}
+
+TP distance too small after fees.
+
+📡 Monitoring Next Entry...`
+      );
+
+      return;
+    }
+
     const estimatedNetPerUnit =
       profitPerUnit -
       entryPrice * BUY_FEE -
@@ -801,6 +881,58 @@ bot.on("message", async (msg) => {
     );
 
     const value = quantity * entryPrice;
+
+    // REJECT NEGATIVE PROFITABILITY
+    if (
+      !isFinite(quantity) ||
+      quantity <= 0 ||
+      estimatedNetPerUnit <= 0
+    ) {
+      delete USER_STATE[chatId];
+
+      await bot.sendMessage(
+        chatId,
+        `⚠️ LOW EXECUTION QUALITY
+
+🪙 ${coin}
+
+Fees dominating movement.
+
+📡 Monitoring Next Entry...`
+      );
+
+      return;
+    }
+
+    // MAX CAPITAL FILTER
+    const confidence =
+      entry.confidence;
+
+    const maxCapital =
+      MAX_CAPITAL[confidence];
+
+    if (value > maxCapital) {
+      delete USER_STATE[chatId];
+
+      await bot.sendMessage(
+        chatId,
+        `⚠️ LOW EXECUTION QUALITY
+
+🪙 ${coin}
+
+Required capital too high.
+
+💰 Required:
+RM${value.toFixed(0)}
+
+🛑 Max Allowed:
+RM${maxCapital.toFixed(0)}
+
+📡 Monitoring Next Entry...`
+      );
+
+      return;
+    }
 
     PENDING_ENTRIES[coin].quantity = quantity;
     PENDING_ENTRIES[coin].value = value;
