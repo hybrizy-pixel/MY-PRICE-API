@@ -44,18 +44,16 @@ const MAX_CAPITAL = {
   STRONG: 30000,
 };
 
-const SIGNAL_COOLDOWN = {
-  WEAK: 35 * 60 * 1000,
-  MID: 20 * 60 * 1000,
-  STRONG: 10 * 60 * 1000,
-};
-
 const ACTIVE_TRADES = {};
 const PENDING_ENTRIES = {};
 const USER_STATE = {};
 const PRICE_MEMORY = {};
 const LAST_SIGNAL = {};
 const LAST_PRICE = {};
+
+const GLOBAL_SCALPING_COOLDOWN = 5 * 60 * 1000;
+
+let LAST_GLOBAL_SIGNAL = 0;
 
 function now() {
   return Date.now();
@@ -74,11 +72,11 @@ function formatPrice(coin, value) {
 }
 
 function confidenceLabel(score) {
-  if (score >= 75) {
+  if (score >= 80) {
     return "STRONG";
   }
 
-  if (score >= 60) {
+  if (score >= 65) {
     return "MID";
   }
 
@@ -99,18 +97,18 @@ function setupType(score) {
 
 function calculateDirection(score) {
   if (score >= 80) {
-    return "🚀 MARKET SEDANG NAIK KUAT";
+    return "SEDANG NAIK KUAT";
   }
 
   if (score >= 65) {
-    return "📈 MARKET SEDANG NAIK";
+    return "SEDANG NAIK";
   }
 
   if (score >= 50) {
-    return "↔️ MARKET SIDEWAY";
+    return "SIDEWAY";
   }
 
-  return "🔻 MARKET SEDANG JATUH";
+  return "SEDANG MENURUN";
 }
 
 function calculatePressure(score) {
@@ -147,7 +145,10 @@ function getStructureCriteria(data) {
   return "JGN BELI";
 }
 
-async function sendTelegram(message, options = {}) {
+async function sendTelegram(
+  message,
+  options = {}
+) {
   try {
     return await bot.sendMessage(
       CHAT_ID,
@@ -172,9 +173,15 @@ async function getTicker(coin) {
 
     return {
       coin,
-      currentPrice: safeNumber(response.data.last_trade),
-      bestAsk: safeNumber(response.data.ask),
-      bestBid: safeNumber(response.data.bid),
+      currentPrice: safeNumber(
+        response.data.last_trade
+      ),
+      bestAsk: safeNumber(
+        response.data.ask
+      ),
+      bestBid: safeNumber(
+        response.data.bid
+      ),
     };
   } catch (error) {
     console.log(error.message);
@@ -272,29 +279,26 @@ async function sendMarketStructure() {
   }
 
   const btcScore =
-    Math.floor(Math.random() * 30) + 60;
+    Math.floor(Math.random() * 20) + 65;
 
   const grtScore =
-    Math.floor(Math.random() * 30) + 50;
+    Math.floor(Math.random() * 20) + 60;
 
   const btcSupport =
-    btc.currentPrice * 0.992;
+    btc.currentPrice * 0.98;
 
   const btcResistance =
-    btc.currentPrice * 1.01;
+    btc.currentPrice * 1.025;
 
   const grtSupport =
-    grt.currentPrice * 0.988;
+    grt.currentPrice * 0.95;
 
   const grtResistance =
-    grt.currentPrice * 1.03;
+    grt.currentPrice * 1.05;
 
   const message = `📊 MARKET STRUCTURE UPDATE
 
 🪙 BTC
-
-📈 Arah Market:
-${calculateDirection(btcScore)}
 
 💵 Harga Semasa:
 RM${formatPrice(
@@ -314,7 +318,10 @@ RM${formatPrice(
     btcResistance
   )}
 
-⚡ Tekanan Market:
+📈 Market:
+${calculateDirection(btcScore)}
+
+⚡ Tekanan:
 ${calculatePressure(btcScore)}
 
 🧠 Kriteria:
@@ -328,9 +335,6 @@ ${getStructureCriteria({
 ━━━━━━━━━━━━━━
 
 🪙 GRT
-
-📈 Arah Market:
-${calculateDirection(grtScore)}
 
 💵 Harga Semasa:
 RM${formatPrice(
@@ -350,7 +354,10 @@ RM${formatPrice(
     grtResistance
   )}
 
-⚡ Tekanan Market:
+📈 Market:
+${calculateDirection(grtScore)}
+
+⚡ Tekanan:
 ${calculatePressure(grtScore)}
 
 🧠 Kriteria:
@@ -365,16 +372,17 @@ ${getStructureCriteria({
 }
 
 async function scanSignals() {
+  if (
+    now() - LAST_GLOBAL_SIGNAL <
+    GLOBAL_SCALPING_COOLDOWN
+  ) {
+    return;
+  }
+
+  const candidates = [];
+
   for (const coin of SCAN_COINS) {
     if (ACTIVE_TRADES[coin]) {
-      continue;
-    }
-
-    if (
-      LAST_SIGNAL[coin] &&
-      now() - LAST_SIGNAL[coin] <
-        SIGNAL_COOLDOWN.MID
-    ) {
       continue;
     }
 
@@ -385,7 +393,7 @@ async function scanSignals() {
     }
 
     const score =
-      Math.floor(Math.random() * 30) + 60;
+      Math.floor(Math.random() * 25) + 65;
 
     const confidence =
       confidenceLabel(score);
@@ -396,105 +404,123 @@ async function scanSignals() {
 
     const entryPrice =
       coin === "BTC"
-        ? data.currentPrice * 0.999
-        : data.currentPrice * 0.996;
+        ? data.currentPrice * 0.998
+        : data.currentPrice * 0.995;
 
     let tp;
 
     if (coin === "BTC") {
-      tp = entryPrice * 1.018;
+      tp = entryPrice * 1.02;
     } else if (
       coin === "XRP" ||
       coin === "XLM"
     ) {
-      tp = entryPrice * 1.05;
+      tp = entryPrice * 1.04;
     } else {
-      tp = entryPrice * 1.07;
+      tp = entryPrice * 1.06;
     }
 
-    const sl = entryPrice * 0.988;
+    const sl = entryPrice * 0.985;
+
+    const tpDistance =
+      ((tp - entryPrice) /
+        entryPrice) *
+      100;
+
+    if (tpDistance < 2) {
+      continue;
+    }
 
     const durationHours =
       confidence === "STRONG"
         ? 12
         : 6;
 
-    const durationLabel = `${durationHours} HOURS`;
-
-    PENDING_ENTRIES[coin] = {
+    candidates.push({
       coin,
-      currentPrice: data.currentPrice,
+      score,
+      confidence,
       entryPrice,
       tp,
       sl,
       durationHours,
-      durationLabel,
-      confidence,
-      score,
+      currentPrice: data.currentPrice,
       bestAsk: data.bestAsk,
       bestBid: data.bestBid,
-    };
+    });
+  }
 
-    LAST_SIGNAL[coin] = now();
+  if (candidates.length === 0) {
+    return;
+  }
 
-    const message = `🚀 SCALPING ENTRY
+  candidates.sort(
+    (a, b) => b.score - a.score
+  );
 
-🪙 ${coin}
+  const best = candidates[0];
+
+  PENDING_ENTRIES[best.coin] = best;
+
+  LAST_GLOBAL_SIGNAL = now();
+
+  const message = `🚀 SCALPING ENTRY
+
+🪙 ${best.coin}
 
 💵 Current:
 RM${formatPrice(
-      coin,
-      data.currentPrice
-    )}
+    best.coin,
+    best.currentPrice
+  )}
 
 📌 Entry:
 RM${formatPrice(
-      coin,
-      entryPrice
-    )}
+    best.coin,
+    best.entryPrice
+  )}
 
 🎯 TP:
 RM${formatPrice(
-      coin,
-      tp
-    )}
+    best.coin,
+    best.tp
+  )}
 
 🛑 SL:
 RM${formatPrice(
-      coin,
-      sl
-    )}
+    best.coin,
+    best.sl
+  )}
 
 ⏳ Trade Duration:
-${durationLabel}
+${best.durationHours} HOURS
 
 🧠 Confidence:
-${score}% ${confidence}
+${best.score}% ${best.confidence}
 
 📊 Setup:
-${setupType(score)}
+${setupType(best.score)}
 
 ━━━━━━━━━━━━━━
 
 START ENTRY?`;
 
-    await sendTelegram(message, {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: "✅ START ENTRY",
-              callback_data: `START_${coin}`,
-            },
-            {
-              text: "❌ IGNORE",
-              callback_data: `IGNORE_${coin}`,
-            },
-          ],
+  await sendTelegram(message, {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: "✅ START ENTRY",
+            callback_data: `START_${best.coin}`,
+          },
+          {
+            text: "❌ IGNORE",
+            callback_data: `IGNORE_${best.coin}`,
+          },
         ],
-      },
-    });
-  }
+      ],
+    },
+  });
 }
 
 async function monitorTrades() {
@@ -517,7 +543,7 @@ async function monitorTrades() {
         (trade.tp - trade.buyPrice) *
         trade.netTradeUnit;
 
-      const message = `🎯 TP REACHED
+      const message = `🎯 TP REACHED SELL NOW
 
 🪙 ${coin}
 
@@ -557,11 +583,11 @@ SELL NOW?`;
             [
               {
                 text: "💰 SELL",
-                callback_data: `TPSELL_${coin}`,
+                callback_data: `SELL_${coin}`,
               },
               {
                 text: "✋ HOLD",
-                callback_data: `TPHOLD_${coin}`,
+                callback_data: `HOLD_${coin}`,
               },
             ],
           ],
@@ -612,11 +638,11 @@ SELL NOW?`;
             [
               {
                 text: "💰 SELL",
-                callback_data: `SLSELL_${coin}`,
+                callback_data: `SELL_${coin}`,
               },
               {
                 text: "✋ HOLD",
-                callback_data: `SLHOLD_${coin}`,
+                callback_data: `HOLD_${coin}`,
               },
             ],
           ],
@@ -624,7 +650,7 @@ SELL NOW?`;
       });
     }
 
-    const durationExpired =
+    const expired =
       now() - trade.startTime >=
       trade.durationHours *
         60 *
@@ -632,7 +658,7 @@ SELL NOW?`;
         1000;
 
     if (
-      durationExpired &&
+      expired &&
       !trade.durationAlertSent
     ) {
       trade.durationAlertSent = true;
@@ -668,11 +694,11 @@ SELL AT CURRENT PRICE?`;
             [
               {
                 text: "💰 SELL",
-                callback_data: `TIMESELL_${coin}`,
+                callback_data: `SELL_${coin}`,
               },
               {
                 text: "✋ HOLD",
-                callback_data: `TIMEHOLD_${coin}`,
+                callback_data: `HOLD_${coin}`,
               },
             ],
           ],
@@ -710,7 +736,7 @@ bot.on(
 
       await bot.sendMessage(
         chatId,
-        `❌ ENTRY IGNORED
+        `❌ ENTRY CANCELLED
 
 🪙 ${coin}
 
@@ -718,11 +744,7 @@ bot.on(
       );
     }
 
-    if (
-      data.startsWith("TPSELL_") ||
-      data.startsWith("SLSELL_") ||
-      data.startsWith("TIMESELL_")
-    ) {
+    if (data.startsWith("SELL_")) {
       const coin =
         data.split("_")[1];
 
@@ -737,14 +759,39 @@ bot.on(
       );
     }
 
-    if (
-      data.startsWith("TPHOLD_") ||
-      data.startsWith("SLHOLD_") ||
-      data.startsWith("TIMEHOLD_")
-    ) {
+    if (data.startsWith("HOLD_")) {
       await bot.sendMessage(
         chatId,
-        `📡 MONITORING RESUMED`
+        `📡 Monitoring Resumed`
+      );
+    }
+
+    if (data.startsWith("BUYYES_")) {
+      const coin =
+        data.split("_")[1];
+
+      USER_STATE[chatId].step =
+        "WAIT_BUY_PRICE";
+
+      await bot.sendMessage(
+        chatId,
+        "📌 ENTER MATCHED BUY PRICE"
+      );
+    }
+
+    if (data.startsWith("BUYNO_")) {
+      const coin =
+        data.split("_")[1];
+
+      delete USER_STATE[chatId];
+
+      await bot.sendMessage(
+        chatId,
+        `❌ ENTRY CANCELLED
+
+🪙 ${coin}
+
+📡 Monitoring Next Entry...`
       );
     }
 
@@ -814,13 +861,13 @@ bot.on("message", async (msg) => {
     }
 
     USER_STATE[chatId] = {
-      step: "WAIT_BUY_PRICE",
+      step: "WAIT_CONFIRM",
       coin: entry.coin,
       quantity,
       value,
     };
 
-    const suggestMessage = `📊 SUGGESTED BUY
+    const message = `📊 SUGGESTED BUY
 
 🪙 ${entry.coin}
 
@@ -860,7 +907,7 @@ CONTINUE?`;
 
     await bot.sendMessage(
       chatId,
-      suggestMessage,
+      message,
       {
         reply_markup: {
           inline_keyboard: [
@@ -953,7 +1000,7 @@ RM${formatPrice(
   }
 
   if (state.step === "WAIT_SELL_PRICE") {
-    const matchedSellPrice =
+    const matchedPrice =
       safeNumber(msg.text);
 
     const trade =
@@ -972,8 +1019,7 @@ RM${formatPrice(
       sellFeeUnit;
 
     const netSellValue =
-      matchedSellPrice *
-      netSellUnit;
+      matchedPrice * netSellUnit;
 
     const pnl =
       netSellValue -
@@ -986,7 +1032,7 @@ RM${formatPrice(
 💵 Matched Price:
 RM${formatPrice(
       state.coin,
-      matchedSellPrice
+      matchedPrice
     )}
 
 📦 Net Sell Unit:
