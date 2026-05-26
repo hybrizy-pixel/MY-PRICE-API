@@ -1,8 +1,3 @@
-// ==========================================
-// FINAL INSTITUTIONAL AI SCALPING TERMINAL
-// COMPLETE 100% FULL VERSION
-// ==========================================
-
 require("dotenv").config();
 
 const express = require("express");
@@ -11,1126 +6,1394 @@ const TelegramBot = require("node-telegram-bot-api");
 
 const app = express();
 
-// ==========================================
-// ENVIRONMENT
-// ==========================================
+// =====================================
+// ENV
+// =====================================
 
-const PORT =
-  process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const CHAT_ID = process.env.CHAT_ID;
 
-const BOT_TOKEN =
-  process.env.BOT_TOKEN;
-
-const CHAT_ID =
-  process.env.CHAT_ID;
-
-if (
-  !BOT_TOKEN ||
-  !CHAT_ID
-) {
-
-  console.log(
-    "Missing BOT_TOKEN / CHAT_ID"
-  );
-
+if (!BOT_TOKEN || !CHAT_ID) {
+  console.log("Missing BOT_TOKEN or CHAT_ID");
   process.exit(1);
 }
 
-// ==========================================
+// =====================================
 // TELEGRAM
-// ==========================================
+// =====================================
 
-const bot =
-  new TelegramBot(
-    BOT_TOKEN,
-    {
-      polling: true,
-    }
-  );
+const bot = new TelegramBot(BOT_TOKEN, {
+  polling: true,
+});
 
-// ==========================================
-// RANDOM SERVICE CODE
-// ==========================================
+// =====================================
+// SERVICE CODE
+// =====================================
 
-const SERVICE_CODE =
-  `[${Math.random()
-    .toString(36)
-    .substring(2, 6)
-    .toUpperCase()}]`;
+const SERVICE_CODE = `[${Math.random()
+  .toString(36)
+  .substring(2, 6)
+  .toUpperCase()}]`;
 
-// ==========================================
+// =====================================
+// CONFIG
+// =====================================
+
+const BUY_FEE = 0.005;
+const SELL_FEE = 0.005;
+
+const MIN_SCORE = 55;
+
+const SIGNAL_COOLDOWN = {
+  WEAK: 35 * 60 * 1000,
+  MID: 20 * 60 * 1000,
+  STRONG: 10 * 60 * 1000,
+};
+
+const GLOBAL_ALERT_GAP = 2 * 60 * 1000;
+
+// =====================================
 // COINS
-// ==========================================
+// =====================================
 
 const COINS = {
   BTC: "XBTMYR",
-  AAVE: "AAVEMYR",
-  CRV: "CRVMYR",
-  XLM: "XLMMYR",
-  XRP: "XRPMYR",
   GRT: "GRTMYR",
+  XRP: "XRPMYR",
+  XLM: "XLMMYR",
+  CRV: "CRVMYR",
+  AAVE: "AAVEMYR",
 };
 
-// ==========================================
-// DISPLAY COINS
-// ==========================================
-
-const DISPLAY_COINS = [
-  "BTC",
-  "GRT",
-];
-
-// ==========================================
-// CONFIG
-// ==========================================
-
-const BUY_FEE = 0.005;
-
-const SELL_FEE = 0.005;
-
-const SIGNAL_EXPIRY =
-  30 * 60 * 1000;
-
-const SIGNAL_COOLDOWN =
-  20 * 60 * 1000;
-
-const BREAKOUT_COOLDOWN =
-  15 * 60 * 1000;
-
-const BREAKDOWN_COOLDOWN =
-  15 * 60 * 1000;
-
-const REJECTION_COOLDOWN =
-  15 * 60 * 1000;
-
-const GLOBAL_ALERT_GAP =
-  2 * 60 * 1000;
-
-const SIGNAL_SCAN_INTERVAL =
-  120000;
-
-const MONITOR_INTERVAL =
-  10000;
-
-const PRICE_UPDATE_INTERVAL =
-  300000;
-
-const STRUCTURE_INTERVAL =
-  15 *
-  60 *
-  1000;
-
-const CLEANUP_INTERVAL =
-  300000;
-
-const MIN_SCORE = 75;
-
-const MAX_CAPITAL =
-  10000;
-
-const RETRACEMENT_TRIGGER =
-  0.20;
-
-// ==========================================
+// =====================================
 // MEMORY
-// ==========================================
-
-const ACTIVE_TRADES = {};
-
-const PENDING_SIGNALS = {};
-
-const USER_FLOW = {};
-
-const LAST_SIGNAL = {};
-
-const LAST_BREAKOUT = {};
-
-const LAST_BREAKDOWN = {};
-
-const LAST_REJECTION = {};
-
-const LAST_PRICE = {};
+// =====================================
 
 const PRICE_MEMORY = {};
+const ACTIVE_TRADES = {};
+const DAILY_STATS = {
+  wins: 0,
+  losses: 0,
+  pnl: 0,
+};
+const LAST_SIGNAL = {};
+const USER_STATE = {};
+const PENDING_ENTRIES = {};
+const LAST_PRICE = {};
 
 let LAST_ALERT_TIME = 0;
 
-// ==========================================
+// =====================================
 // HELPERS
-// ==========================================
+// =====================================
 
 function now() {
   return Date.now();
 }
 
 function safeNumber(v) {
-
-  if (
-    isNaN(v) ||
-    !isFinite(v)
-  ) {
-    return 0;
-  }
-
-  return Number(v);
+  return Number(v) || 0;
 }
 
-function signalId() {
-
-  return `SIG_${Date.now()}`;
+function canSendGlobalAlert() {
+  return now() - LAST_ALERT_TIME > GLOBAL_ALERT_GAP;
 }
 
-function tradeId() {
-
-  return `TRD_${Date.now()}`;
+function updateGlobalAlert() {
+  LAST_ALERT_TIME = now();
 }
 
-function formatPrice(
-  coin,
-  value
-) {
-
+function formatPrice(coin, value) {
   if (coin === "BTC") {
-
-    return safeNumber(
-      value
-    ).toFixed(2);
+    return safeNumber(value).toFixed(2);
   }
 
-  return safeNumber(
-    value
-  ).toFixed(4);
+  return safeNumber(value).toFixed(4);
 }
 
-function formatUnit(
-  coin,
-  value
-) {
-
-  if (coin === "BTC") {
-
-    return safeNumber(
-      value
-    ).toFixed(6);
+function confidenceLabel(score) {
+  if (score >= 75) {
+    return "STRONG";
   }
 
-  return safeNumber(
-    value
-  ).toFixed(0);
+  if (score >= 60) {
+    return "MID";
+  }
+
+  return "WEAK";
 }
 
-function canSendAlert() {
+function setupType(score) {
+  if (score >= 75) {
+    return "CONTINUATION";
+  }
 
-  return (
-    now() -
-      LAST_ALERT_TIME >
-    GLOBAL_ALERT_GAP
-  );
+  if (score >= 60) {
+    return "BREAKOUT";
+  }
+
+  return "EARLY MOMENTUM";
 }
 
-function updateAlertTime() {
-
-  LAST_ALERT_TIME =
-    now();
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ==========================================
-// TELEGRAM SEND
-// ==========================================
+// =====================================
+// TELEGRAM
+// =====================================
 
-async function sendTelegram(
-  message,
-  options = {}
-) {
-
+async function sendTelegram(message, options = {}) {
   try {
-
-    await bot.sendMessage(
+    return await bot.sendMessage(
       CHAT_ID,
-
-      `${SERVICE_CODE}
-
-${message}`,
-
+      `${SERVICE_CODE}\n\n${message}`,
       {
         parse_mode: "HTML",
         ...options,
       }
     );
-
   } catch (err) {
+    console.log(err.message);
+  }
+}
 
-    console.log(
-      err.message
+// =====================================
+// LUNO API
+// =====================================
+
+async function getTicker(coin) {
+  try {
+    const response = await axios.get(
+      `https://api.luno.com/api/1/ticker?pair=${COINS[coin]}`
     );
-  }
-}
-
-// ==========================================
-// API
-// ==========================================
-
-async function getTicker(
-  coin
-) {
-
-  try {
-
-    const response =
-      await axios.get(
-        `https://api.luno.com/api/1/ticker?pair=${COINS[coin]}`
-      );
 
     return response.data;
-
-  } catch {
-
+  } catch (err) {
+    console.log(err.message);
     return null;
   }
 }
 
-async function getOrderbook(
-  coin
-) {
-
+async function getOrderbook(coin) {
   try {
-
-    const response =
-      await axios.get(
-        `https://api.luno.com/api/1/orderbook?pair=${COINS[coin]}`
-      );
+    const response = await axios.get(
+      `https://api.luno.com/api/1/orderbook?pair=${COINS[coin]}`
+    );
 
     return response.data;
-
-  } catch {
-
+  } catch (err) {
+    console.log(err.message);
     return null;
   }
 }
 
-// ==========================================
+// =====================================
 // PRICE MEMORY
-// ==========================================
+// =====================================
 
-function updatePriceMemory(
-  coin,
-  price
-) {
-
-  if (
-    !PRICE_MEMORY[coin]
-  ) {
-
+function updatePriceMemory(coin, price) {
+  if (!PRICE_MEMORY[coin]) {
     PRICE_MEMORY[coin] = [];
   }
 
-  PRICE_MEMORY[coin]
-    .push({
-      price,
-      time: now(),
-    });
+  PRICE_MEMORY[coin].push({
+    price,
+    time: now(),
+  });
 
-  if (
-    PRICE_MEMORY[coin]
-      .length > 1000
-  ) {
-
-    PRICE_MEMORY[coin]
-      .shift();
+  if (PRICE_MEMORY[coin].length > 3000) {
+    PRICE_MEMORY[coin].shift();
   }
 }
 
-// ==========================================
+function getPrices(coin) {
+  return PRICE_MEMORY[coin]?.map((p) => p.price) || [];
+}
+
+// =====================================
 // OHLC ENGINE
-// ==========================================
+// =====================================
 
-function buildOHLC(
-  coin,
-  seconds
-) {
+function buildOHLC(coin, seconds) {
+  const memory = PRICE_MEMORY[coin];
 
-  const memory =
-    PRICE_MEMORY[coin];
-
-  if (
-    !memory ||
-    memory.length < 5
-  ) {
+  if (!memory || memory.length < 5) {
     return null;
   }
 
-  const cutoff =
-    now() -
-    seconds * 1000;
+  const cutoff = now() - seconds * 1000;
 
-  const candles =
-    memory.filter(
-      (p) =>
-        p.time >= cutoff
-    );
+  const candles = memory.filter((p) => p.time >= cutoff);
 
-  if (
-    candles.length < 2
-  ) {
+  if (candles.length < 2) {
     return null;
   }
 
   return {
-
-    open:
-      candles[0].price,
-
-    high:
-      Math.max(
-        ...candles.map(
-          (c) => c.price
-        )
-      ),
-
-    low:
-      Math.min(
-        ...candles.map(
-          (c) => c.price
-        )
-      ),
-
-    close:
-      candles[
-        candles.length - 1
-      ].price,
+    open: candles[0].price,
+    high: Math.max(...candles.map((c) => c.price)),
+    low: Math.min(...candles.map((c) => c.price)),
+    close: candles[candles.length - 1].price,
   };
 }
 
-// ==========================================
-// EMA ENGINE
-// ==========================================
+// =====================================
+// EMA
+// =====================================
 
-function calculateEMA(
-  values,
-  period
-) {
-
-  if (
-    values.length < period
-  ) {
+function calculateEMA(values, period) {
+  if (values.length < period) {
     return null;
   }
 
-  const k =
-    2 / (period + 1);
+  const k = 2 / (period + 1);
 
-  let ema =
-    values[0];
+  let ema = values[0];
 
-  for (
-    let i = 1;
-    i < values.length;
-    i++
-  ) {
-
-    ema =
-      values[i] * k +
-      ema * (1 - k);
+  for (let i = 1; i < values.length; i++) {
+    ema = values[i] * k + ema * (1 - k);
   }
 
   return ema;
 }
 
-// ==========================================
-// RSI ENGINE
-// ==========================================
+// =====================================
+// RSI
+// =====================================
 
-function calculateRSI(
-  prices,
-  period = 14
-) {
-
-  if (
-    prices.length <
-    period + 1
-  ) {
+function calculateRSI(prices, period = 14) {
+  if (prices.length < period + 1) {
     return 50;
   }
 
   let gains = 0;
   let losses = 0;
 
-  for (
-    let i = 1;
-    i <= period;
-    i++
-  ) {
-
-    const diff =
-      prices[i] -
-      prices[i - 1];
+  for (let i = 1; i <= period; i++) {
+    const diff = prices[i] - prices[i - 1];
 
     if (diff > 0) {
-
       gains += diff;
-
     } else {
-
-      losses += Math.abs(
-        diff
-      );
+      losses += Math.abs(diff);
     }
   }
 
-  if (losses === 0)
+  if (losses === 0) {
     return 100;
-
-  const rs =
-    gains / losses;
-
-  return (
-    100 -
-    100 / (1 + rs)
-  );
-}
-
-// ==========================================
-// MARKET DATA
-// ==========================================
-
-async function getMarketData(
-  coin
-) {
-
-  try {
-
-    const [
-      ticker,
-      orderbook,
-    ] = await Promise.all([
-      getTicker(coin),
-      getOrderbook(coin),
-    ]);
-
-    if (
-      !ticker ||
-      !orderbook
-    ) {
-      return null;
-    }
-
-    const currentPrice =
-      safeNumber(
-        ticker.last_trade
-      );
-
-    updatePriceMemory(
-      coin,
-      currentPrice
-    );
-
-    const bids =
-      orderbook.bids || [];
-
-    const asks =
-      orderbook.asks || [];
-
-    if (
-      !bids.length ||
-      !asks.length
-    ) {
-      return null;
-    }
-
-    const bestBid =
-      safeNumber(
-        bids[0].price
-      );
-
-    const bestAsk =
-      safeNumber(
-        asks[0].price
-      );
-
-    let buyVolume = 0;
-    let sellVolume = 0;
-
-    bids
-      .slice(0, 20)
-      .forEach((b) => {
-
-        buyVolume +=
-          safeNumber(
-            b.volume
-          );
-      });
-
-    asks
-      .slice(0, 20)
-      .forEach((a) => {
-
-        sellVolume +=
-          safeNumber(
-            a.volume
-          );
-      });
-
-    const support =
-      Math.max(
-        ...bids
-          .slice(0, 20)
-          .map((b) =>
-            safeNumber(
-              b.price
-            )
-          )
-      );
-
-    const resistance =
-      Math.min(
-        ...asks
-          .slice(0, 20)
-          .map((a) =>
-            safeNumber(
-              a.price
-            )
-          )
-      );
-
-    return {
-
-      currentPrice,
-
-      bestBid,
-
-      bestAsk,
-
-      support,
-
-      resistance,
-
-      buyVolume,
-
-      sellVolume,
-
-      pressure:
-        buyVolume /
-        (sellVolume || 1),
-    };
-
-  } catch {
-
-    return null;
   }
+
+  const rs = gains / losses;
+
+  return 100 - 100 / (1 + rs);
 }
 
-// ==========================================
+// =====================================
 // STRUCTURE
-// ==========================================
+// =====================================
 
-function detectStructure(
-  coin,
-  timeframe
-) {
+function detectStructure(coin, timeframe) {
+  const candle = buildOHLC(coin, timeframe);
 
-  const candle =
-    buildOHLC(
-      coin,
-      timeframe
-    );
-
-  if (!candle)
+  if (!candle) {
     return "MENDATAR";
+  }
 
-  const move =
-    (
-      candle.close -
-      candle.open
-    ) / candle.open;
+  const move = (candle.close - candle.open) / candle.open;
 
-  if (move > 0.008)
+  if (move > 0.0035) {
     return "MENAIK";
+  }
 
-  if (move < -0.008)
+  if (move < -0.0035) {
     return "MENURUN";
+  }
 
   return "MENDATAR";
 }
 
-// ==========================================
-// MULTI TIMEFRAME
-// ==========================================
+// =====================================
+// MARKET DATA
+// =====================================
 
-function multiTimeframeAnalysis(
-  coin
-) {
+async function getMarketData(coin) {
+  try {
+    const [ticker, orderbook] = await Promise.all([
+      getTicker(coin),
+      getOrderbook(coin),
+    ]);
 
-  const tf1 =
-    detectStructure(
-      coin,
-      60
-    );
+    if (!ticker || !orderbook) {
+      return null;
+    }
 
-  const tf5 =
-    detectStructure(
-      coin,
-      300
-    );
+    const currentPrice = safeNumber(ticker.last_trade);
 
-  const tf15 =
-    detectStructure(
-      coin,
-      900
-    );
+    updatePriceMemory(coin, currentPrice);
 
-  let score = 0;
+    const bids = orderbook.bids || [];
+    const asks = orderbook.asks || [];
 
-  if (
-    tf1 === "MENAIK"
-  ) score += 20;
+    const bestBid = safeNumber(bids[0]?.price);
+    const bestAsk = safeNumber(asks[0]?.price);
 
-  if (
-    tf5 === "MENAIK"
-  ) score += 15;
+    let buyVolume = 0;
+    let sellVolume = 0;
 
-  if (
-    tf15 === "MENAIK"
-  ) score += 10;
+    bids.slice(0, 20).forEach((b) => {
+      buyVolume += safeNumber(b.volume);
+    });
 
-  return {
-    tf1,
-    tf5,
-    tf15,
-    score,
-  };
+    asks.slice(0, 20).forEach((a) => {
+      sellVolume += safeNumber(a.volume);
+    });
+
+    return {
+      currentPrice,
+      bestBid,
+      bestAsk,
+      buyVolume,
+      sellVolume,
+      pressure: buyVolume / (sellVolume || 1),
+    };
+  } catch (err) {
+    console.log(err.message);
+    return null;
+  }
 }
 
-// ==========================================
-// VALIDATE SIGNAL
-// ==========================================
+// =====================================
+// FILTER ENGINE
+// =====================================
 
-async function validateSignal(
-  coin,
-  data
-) {
-
+async function validateSignal(coin, data) {
   let score = 0;
 
-  const mtf =
-    multiTimeframeAnalysis(
-      coin
-    );
+  const prices = getPrices(coin);
 
-  score += mtf.score;
+  const ema9 = calculateEMA(prices, 9);
+  const ema21 = calculateEMA(prices, 21);
+  const ema50 = calculateEMA(prices, 50);
 
-  if (
-    data.pressure > 1.05
-  ) {
+  const rsi = calculateRSI(prices);
 
-    score += 20;
+  const tf1 = detectStructure(coin, 60);
+  const tf5 = detectStructure(coin, 300);
+  const tf15 = detectStructure(coin, 900);
+
+  // EMA
+  if (ema9 > ema21) {
+    score += 25;
   }
 
-  if (
-    data.buyVolume >
-    data.sellVolume *
-      1.2
-  ) {
+  if (data.currentPrice > ema50) {
+    score += 10;
+  }
 
+  // RSI
+  if (rsi >= 48 && rsi <= 78) {
     score += 15;
   }
 
+  if (rsi > 85) {
+    score -= 20;
+  }
+
+  // BREAKOUT
+  if (prices.length > 20) {
+    const recentHigh = Math.max(...prices.slice(-20));
+
+    if (data.currentPrice > recentHigh * 1.0015) {
+      score += 20;
+    }
+  }
+
+  // BUY PRESSURE
+  if (data.pressure > 1.2) {
+    score += 15;
+  }
+
+  // VOLUME
+  const volumeStrength =
+    data.buyVolume / (data.sellVolume || 1);
+
+  if (volumeStrength > 1.4) {
+    score += 15;
+  }
+
+  // TIMEFRAME
+  if (tf1 === "MENAIK") {
+    score += 10;
+  }
+
+  if (tf5 === "MENAIK") {
+    score += 10;
+  }
+
+  if (tf15 === "MENAIK") {
+    score += 5;
+  }
+
+  // REJECTION FILTER
+  const candle = buildOHLC(coin, 60);
+
+  if (candle) {
+    const rejection =
+      candle.high - candle.close >
+      (candle.close - candle.open) * 1.5;
+
+    if (rejection) {
+      score -= 25;
+    }
+  }
+
   return {
-
     score,
-
-    mtf,
+    rsi,
+    type: setupType(score),
+    confidence: confidenceLabel(score),
   };
 }
 
-// ==========================================
+// =====================================
 // PRICE ALERT
-// ==========================================
+// =====================================
 
 async function sendPriceAlert() {
+  let message = `📡 <b>LIVE PRICE UPDATE</b>`;
 
-  let message =
-`
-📡 <b>LIVE MARKET UPDATE</b>
-`;
+  for (const coin of ["BTC", "GRT"]) {
+    const ticker = await getTicker(coin);
 
-  for (const coin of DISPLAY_COINS) {
+    if (!ticker) continue;
 
-    const ticker =
-      await getTicker(
-        coin
-      );
-
-    if (!ticker)
-      continue;
-
-    const price =
-      safeNumber(
-        ticker.last_trade
-      );
+    const price = safeNumber(ticker.last_trade);
 
     let emoji = "➖";
 
-    if (
-      LAST_PRICE[coin]
-    ) {
-
-      if (
-        price >
-        LAST_PRICE[coin]
-      ) {
-
+    if (LAST_PRICE[coin]) {
+      if (price > LAST_PRICE[coin]) {
         emoji = "🟢";
       }
 
-      if (
-        price <
-        LAST_PRICE[coin]
-      ) {
-
+      if (price < LAST_PRICE[coin]) {
         emoji = "🔴";
       }
     }
 
-    LAST_PRICE[coin] =
-      price;
+    LAST_PRICE[coin] = price;
 
-    message += `
-
-${emoji} ${coin} • RM${formatPrice(
-      coin,
-      price
-    )}`;
+    message += `\n\n${emoji} ${coin}`;
+    message += `\nRM${formatPrice(coin, price)}`;
   }
 
-  await sendTelegram(
-    message
-  );
+  await sendTelegram(message);
 }
 
-// ==========================================
+// =====================================
 // MARKET STRUCTURE
-// ==========================================
+// =====================================
 
-async function sendMarketStructure() {
+async function sendStructureAlert() {
+  let message = `📊 <b>MARKET STRUCTURE</b>`;
 
-  let message =
-`
-📡 <b>MARKET STRUCTURE</b>
-`;
+  for (const coin of ["BTC", "GRT"]) {
+    const tf1 = detectStructure(coin, 60);
+    const tf5 = detectStructure(coin, 300);
+    const tf15 = detectStructure(coin, 900);
 
-  for (const coin of DISPLAY_COINS) {
-
-    const data =
-      await getMarketData(
-        coin
-      );
-
-    if (!data)
-      continue;
-
-    const structure =
-      detectStructure(
-        coin,
-        300
-      );
-
-    message += `
-
-🪙 ${coin}
-
-📊 ${structure}
-
-💵 RM${formatPrice(
-      coin,
-      data.currentPrice
-    )}
-
-🟢 Support
-RM${formatPrice(
-      coin,
-      data.support
-    )}
-
-🔴 Resistance
-RM${formatPrice(
-      coin,
-      data.resistance
-    )}
-
-━━━━━━━━━━━━━━`;
+    message += `\n\n🪙 ${coin}`;
+    message += `\n1m  → ${tf1}`;
+    message += `\n5m  → ${tf5}`;
+    message += `\n15m → ${tf15}`;
   }
 
-  await sendTelegram(
-    message
-  );
+  await sendTelegram(message);
 }
 
-// ==========================================
+// =====================================
 // SIGNAL ENGINE
-// ==========================================
+// =====================================
 
 async function smartSignalEngine() {
-
-  for (const coin of Object.keys(
-    COINS
-  )) {
-
-    const activeTrade =
-      Object.values(
-        ACTIVE_TRADES
-      ).some(
-        (trade) =>
-          trade.coin ===
-            coin &&
-          trade.status !==
-            "CLOSED"
-      );
-
-    if (activeTrade)
-      continue;
-
-    const data =
-      await getMarketData(
-        coin
-      );
-
-    if (!data)
-      continue;
-
-    const validation =
-      await validateSignal(
-        coin,
-        data
-      );
-
-    if (
-      validation.score <
-      MIN_SCORE
-    ) {
+  for (const coin of Object.keys(COINS)) {
+    if (ACTIVE_TRADES[coin]) {
       continue;
     }
+
+    const data = await getMarketData(coin);
+
+    if (!data) {
+      continue;
+    }
+
+    const validation = await validateSignal(
+      coin,
+      data
+    );
+
+    if (validation.score < MIN_SCORE) {
+      continue;
+    }
+
+    const cooldown =
+      SIGNAL_COOLDOWN[
+        validation.confidence
+      ];
 
     if (
       LAST_SIGNAL[coin] &&
-      now() -
-        LAST_SIGNAL[
-          coin
-        ] <
-        SIGNAL_COOLDOWN
+      now() - LAST_SIGNAL[coin] < cooldown
     ) {
       continue;
     }
 
-    LAST_SIGNAL[
-      coin
-    ] = now();
+    if (!canSendGlobalAlert()) {
+      continue;
+    }
 
-    updateAlertTime();
+    LAST_SIGNAL[coin] = now();
 
-    await sendTelegram(`
-🔄 <b>SCALPING ENTRY</b>
+    updateGlobalAlert();
+
+    PENDING_ENTRIES[coin] = {
+      coin,
+      tp:
+        data.currentPrice * 1.015,
+      sl:
+        data.currentPrice * 0.992,
+      currentPrice:
+        data.currentPrice,
+      bestAsk:
+        data.bestAsk,
+      bestBid:
+        data.bestBid,
+      confidence:
+        validation.confidence,
+      score:
+        validation.score,
+      type:
+        validation.type,
+    };
+
+    await sendTelegram(
+      `🚀 <b>SCALPING ENTRY</b>
 
 🪙 ${coin}
 
-💵 Current Price
+💵 Current:
 RM${formatPrice(
-      coin,
-      data.currentPrice
-    )}
+        coin,
+        data.currentPrice
+      )}
 
-🧠 AI Score
-${validation.score}%
+🎯 TP:
+RM${formatPrice(
+        coin,
+        data.currentPrice * 1.015
+      )}
 
-📡 1m
-${validation.mtf.tf1}
+🛑 SL:
+RM${formatPrice(
+        coin,
+        data.currentPrice * 0.992
+      )}
 
-📡 5m
-${validation.mtf.tf5}
+🧠 Confidence:
+${validation.score}% ${validation.confidence}
 
-📡 15m
-${validation.mtf.tf15}
-`);
+📊 Setup:
+${validation.type}
+
+━━━━━━━━━━━━━━
+
+START ENTRY?`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: "✅ START ENTRY",
+                callback_data: `START_${coin}`,
+              },
+              {
+                text: "❌ IGNORE",
+                callback_data: `IGNORE_${coin}`,
+              },
+            ],
+          ],
+        },
+      }
+    );
   }
 }
 
-// ==========================================
-// TRADE MONITOR
-// ==========================================
+// =====================================
+// TELEGRAM CALLBACKS
+// =====================================
+
+bot.on("callback_query", async (query) => {
+  const data = query.data;
+  const chatId = query.message.chat.id;
+
+  // START ENTRY
+  if (data.startsWith("START_")) {
+    const coin = data.split("_")[1];
+
+    USER_STATE[chatId] = {
+      step: "WAIT_PROFIT",
+      coin,
+      createdAt: now(),
+    };
+
+    await bot.sendMessage(
+      chatId,
+      `💰 TARGET NET PROFIT (RM)?`
+    );
+  }
+
+  // IGNORE
+  if (data.startsWith("IGNORE_")) {
+    const coin = data.split("_")[1];
+
+    await bot.sendMessage(
+      chatId,
+      `❌ ENTRY IGNORED
+
+🪙 ${coin}
+
+📡 Monitoring Next Entry...`
+    );
+  }
+
+  // BUY YES
+  if (data.startsWith("BUYYES_")) {
+    const coin = data.split("_")[1];
+
+    USER_STATE[chatId] = {
+      step: "WAIT_BUY_MATCHED",
+      coin,
+      createdAt: now(),
+    };
+
+    await bot.sendMessage(
+      chatId,
+      `📌 ENTER MATCHED BUY PRICE`
+    );
+  }
+
+  // BUY NO
+  if (data.startsWith("BUYNO_")) {
+    const coin = data.split("_")[1];
+
+    await bot.sendMessage(
+      chatId,
+      `❌ ENTRY CANCELLED
+
+🪙 ${coin}
+
+📡 Monitoring Next Entry...`
+    );
+  }
+
+  // TP SELL
+  if (data.startsWith("TPSELL_")) {
+    const coin = data.split("_")[1];
+
+    USER_STATE[chatId] = {
+      step: "WAIT_TP_SELL_MATCHED",
+      coin,
+      createdAt: now(),
+    };
+
+    await bot.sendMessage(
+      chatId,
+      `📌 ENTER MATCHED SELL PRICE`
+    );
+  }
+
+  // TP HOLD
+  if (data.startsWith("TPHOLD_")) {
+    const coin = data.split("_")[1];
+
+    await bot.sendMessage(
+      chatId,
+      `📡 TRADE HOLD
+
+🪙 ${coin}
+
+Realtime Monitoring Resumed...`
+    );
+  }
+
+  // SL SELL
+  if (data.startsWith("SLSELL_")) {
+    const coin = data.split("_")[1];
+
+    USER_STATE[chatId] = {
+      step: "WAIT_SL_SELL_MATCHED",
+      coin,
+      createdAt: now(),
+    };
+
+    await bot.sendMessage(
+      chatId,
+      `📌 ENTER MATCHED SELL PRICE`
+    );
+  }
+
+  // SL HOLD
+  if (data.startsWith("SLHOLD_")) {
+    const coin = data.split("_")[1];
+
+    await bot.sendMessage(
+      chatId,
+      `⚠️ STOP LOSS OVERRIDDEN
+
+🪙 ${coin}
+
+📡 Realtime Monitoring Resumed...`
+    );
+  }
+
+  await bot.answerCallbackQuery(query.id);
+});
+
+// =====================================
+// USER MESSAGE FLOW
+// =====================================
+
+bot.on("message", async (msg) => {
+  const chatId = msg.chat.id;
+
+  if (!USER_STATE[chatId]) {
+    return;
+  }
+
+  const state = USER_STATE[chatId];
+  const coin = state.coin;
+
+  // =====================================
+  // TARGET PROFIT
+  // =====================================
+
+  if (state.step === "WAIT_PROFIT") {
+    const targetProfit = safeNumber(msg.text);
+
+    const entry = PENDING_ENTRIES[coin];
+
+    const entryPrice = entry.bestAsk;
+    const tp = entry.tp;
+
+    const profitPerUnit =
+      tp - entryPrice;
+
+    const estimatedNetPerUnit =
+      profitPerUnit -
+      entryPrice * BUY_FEE -
+      tp * SELL_FEE;
+
+    const quantity = Math.ceil(
+      targetProfit /
+        estimatedNetPerUnit
+    );
+
+    const value = quantity * entryPrice;
+
+    PENDING_ENTRIES[coin].quantity = quantity;
+    PENDING_ENTRIES[coin].value = value;
+
+    USER_STATE[chatId] = {
+      step: "WAIT_BUY_CONFIRM",
+      coin,
+    };
+
+    await bot.sendMessage(
+      chatId,
+      `📊 SUGGESTED BUY
+
+🪙 ${coin}
+
+📌 Best Ask:
+RM${formatPrice(
+        coin,
+        entry.bestAsk
+      )}
+
+📦 Min Quantity:
+${quantity.toLocaleString()} ${coin}
+
+💵 Entry Price:
+RM${formatPrice(
+        coin,
+        entry.bestAsk
+      )}
+
+🎯 TP:
+RM${formatPrice(
+        coin,
+        entry.tp
+      )}
+
+🛑 SL:
+RM${formatPrice(
+        coin,
+        entry.sl
+      )}
+
+💰 Value:
+RM${value.toFixed(0)}
+
+━━━━━━━━━━━━━━
+
+CONTINUE?`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: "✅ YES",
+                callback_data: `BUYYES_${coin}`,
+              },
+              {
+                text: "❌ NO",
+                callback_data: `BUYNO_${coin}`,
+              },
+            ],
+          ],
+        },
+      }
+    );
+  }
+
+  // =====================================
+  // BUY MATCHED
+  // =====================================
+
+  if (state.step === "WAIT_BUY_MATCHED") {
+    const matchedPrice =
+      safeNumber(msg.text);
+
+    const entry = PENDING_ENTRIES[coin];
+
+    const feesUnit =
+      entry.quantity * BUY_FEE;
+
+    const netTradeUnit =
+      entry.quantity - feesUnit;
+
+    const netTradeValue =
+      matchedPrice * netTradeUnit;
+
+    ACTIVE_TRADES[coin] = {
+      coin,
+      tp: entry.tp,
+      sl: entry.sl,
+      matchedPrice,
+      quantity: entry.quantity,
+      netTradeUnit,
+      netTradeValue,
+      status: "OPEN",
+      startTime: now(),
+      tpAlertSent: false,
+      slAlertSent: false,
+      breakEvenActivated: false,
+    };
+
+    delete USER_STATE[chatId];
+
+    await bot.sendMessage(
+      chatId,
+      `✅ TRADE CONFIRMED
+
+🪙 ${coin}
+
+💵 Matched Price:
+RM${formatPrice(
+        coin,
+        matchedPrice
+      )}
+
+📦 Net Trade Unit:
+${netTradeUnit.toLocaleString()} ${coin}
+
+💰 Net Trade Value:
+RM${netTradeValue.toFixed(0)}
+
+📉 Luno Fees:
+${feesUnit.toLocaleString()} ${coin}
+
+━━━━━━━━━━━━━━
+
+📡 Trade Monitoring Started...`
+    );
+  }
+
+  // =====================================
+  // TP SELL MATCHED
+  // =====================================
+
+  if (state.step === "WAIT_TP_SELL_MATCHED") {
+    const matchedPrice =
+      safeNumber(msg.text);
+
+    const trade = ACTIVE_TRADES[coin];
+
+    const sellFees =
+      trade.netTradeUnit * SELL_FEE;
+
+    const netSaleUnit =
+      trade.netTradeUnit - sellFees;
+
+    const netSaleValue =
+      matchedPrice * netSaleUnit;
+
+    const netProfit =
+      netSaleValue -
+      trade.netTradeValue;
+
+    DAILY_STATS.wins += 1;
+    DAILY_STATS.pnl += netProfit;
+
+    delete ACTIVE_TRADES[coin];
+    delete USER_STATE[chatId];
+
+    await bot.sendMessage(
+      chatId,
+      `✅ SELL TRADE CONFIRMED
+
+🪙 ${coin}
+
+💵 Matched Price:
+RM${formatPrice(
+        coin,
+        matchedPrice
+      )}
+
+📦 Net Sale Unit:
+${netSaleUnit.toLocaleString()} ${coin}
+
+💰 Net Sale Value:
+RM${netSaleValue.toFixed(0)}
+
+📉 Luno Fees:
+${sellFees.toLocaleString()} ${coin}
+
+💵 Net Profit:
+RM${netProfit.toFixed(0)}
+
+━━━━━━━━━━━━━━
+
+📡 Live Monitoring Stopped
+
+✅ Trade Closed`
+    );
+  }
+
+  // =====================================
+  // SL SELL MATCHED
+  // =====================================
+
+  if (state.step === "WAIT_SL_SELL_MATCHED") {
+    const matchedPrice =
+      safeNumber(msg.text);
+
+    const trade = ACTIVE_TRADES[coin];
+
+    const sellFees =
+      trade.netTradeUnit * SELL_FEE;
+
+    const netSaleUnit =
+      trade.netTradeUnit - sellFees;
+
+    const netSaleValue =
+      matchedPrice * netSaleUnit;
+
+    const netLoss =
+      netSaleValue -
+      trade.netTradeValue;
+
+    DAILY_STATS.losses += 1;
+    DAILY_STATS.pnl += netLoss;
+
+    delete ACTIVE_TRADES[coin];
+    delete USER_STATE[chatId];
+
+    await bot.sendMessage(
+      chatId,
+      `🛑 STOP LOSS CONFIRMED
+
+🪙 ${coin}
+
+💵 Matched Price:
+RM${formatPrice(
+        coin,
+        matchedPrice
+      )}
+
+📦 Net Sell Unit:
+${netSaleUnit.toLocaleString()} ${coin}
+
+💰 Net Value After Sell:
+RM${netSaleValue.toFixed(0)}
+
+📉 Luno Fees:
+${sellFees.toLocaleString()} ${coin}
+
+💸 Net Loss:
+RM${netLoss.toFixed(0)}
+
+━━━━━━━━━━━━━━
+
+📡 Live Monitoring Stopped
+
+✅ Trade Ended`
+    );
+  }
+});
+
+// =====================================
+  // DAILY REPORT
+  // =====================================
+
+  setInterval(
+    sendDailyReport,
+    24 * 60 * 60 * 1000
+  );
+
+  // =====================================
+  // TRADE MONITOR
+// =====================================
 
 async function monitorTrades() {
+  for (const coin of Object.keys(ACTIVE_TRADES)) {
+    const trade = ACTIVE_TRADES[coin];
 
-  for (const id of Object.keys(
-    ACTIVE_TRADES
-  )) {
+    const market = await getMarketData(coin);
 
-    const trade =
-      ACTIVE_TRADES[id];
-
-    if (
-      trade.status ===
-      "CLOSED"
-    ) {
+    if (!market) {
       continue;
     }
 
-    const ticker =
-      await getTicker(
-        trade.coin
-      );
+    // =====================================
+    // TP HIT
+    // =====================================
 
-    if (!ticker)
-      continue;
-
-    const currentPrice =
-      safeNumber(
-        ticker.last_trade
-      );
+    // =====================================
+    // BREAK EVEN SYSTEM
+    // =====================================
 
     if (
-      currentPrice >=
-      trade.tp
+      !trade.breakEvenActivated &&
+      market.currentPrice >=
+        trade.matchedPrice * 1.006
     ) {
+      trade.sl = trade.matchedPrice;
+      trade.breakEvenActivated = true;
 
-      await sendTelegram(`
-🎯 <b>TP REACHED</b>
+      await sendTelegram(
+        `🛡 <b>BREAK EVEN ACTIVATED</b>
 
-🪙 ${trade.coin}
+🪙 ${coin}
 
-💵 RM${formatPrice(
-        trade.coin,
-        currentPrice
-      )}
-`);
+🛑 New SL:
+RM${formatPrice(
+          coin,
+          trade.sl
+        )}`
+      );
     }
 
+    // =====================================
+    // TRAILING TP
+    // =====================================
+
     if (
-      currentPrice <=
-      trade.sl
+      market.currentPrice >=
+      trade.tp * 1.003
     ) {
+      trade.tp = trade.tp * 1.002;
+    }
 
-      await sendTelegram(`
-🛑 <b>STOP LOSS ALERT</b>
+    // =====================================
+    // TP HIT
+    // =====================================
 
-🪙 ${trade.coin}
+    if (
+      market.currentPrice >= trade.tp &&
+      !trade.tpAlertSent
+    ) {
+      trade.tpAlertSent = true;
+      const sellFees =
+        trade.netTradeUnit * SELL_FEE;
 
-💵 RM${formatPrice(
-        trade.coin,
-        currentPrice
-      )}
-`);
+      const netMustSell =
+        trade.netTradeUnit - sellFees;
+
+      const grossProfit =
+        market.bestBid * netMustSell -
+        trade.netTradeValue;
+
+      await sendTelegram(
+        `🎯 <b>TP REACHED</b>
+
+🪙 ${coin}
+
+💵 Current Price:
+RM${formatPrice(
+          coin,
+          market.currentPrice
+        )}
+
+📌 Best Bid:
+RM${formatPrice(
+          coin,
+          market.bestBid
+        )}
+
+🎯 Current TP:
+RM${formatPrice(
+          coin,
+          trade.tp
+        )}
+
+━━━━━━━━━━━━━━
+
+📦 Net Must Sell
+(Luno Quantity)
+
+${netMustSell.toLocaleString()} ${coin}
+
+💰 Profit Kasar:
+RM${grossProfit.toFixed(0)}
+
+━━━━━━━━━━━━━━
+
+SELL NOW?`,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "💰 SELL",
+                  callback_data: `TPSELL_${coin}`,
+                },
+                {
+                  text: "✋ HOLD",
+                  callback_data: `TPHOLD_${coin}`,
+                },
+              ],
+            ],
+          },
+        }
+      );
+
+      await sleep(10000);
+
+      trade.slAlertSent = false;
+
+      trade.tpAlertSent = false;
+    }
+
+    // =====================================
+    // SL HIT
+    // =====================================
+
+    if (
+      market.currentPrice <= trade.sl &&
+      !trade.slAlertSent
+    ) {
+      trade.slAlertSent = true;
+      const sellFees =
+        trade.netTradeUnit * SELL_FEE;
+
+      const netMustSell =
+        trade.netTradeUnit - sellFees;
+
+      const estimatedLoss =
+        market.bestBid * netMustSell -
+        trade.netTradeValue;
+
+      await sendTelegram(
+        `🛑 <b>STOP LOSS HIT</b>
+
+🪙 ${coin}
+
+💵 Current Price:
+RM${formatPrice(
+          coin,
+          market.currentPrice
+        )}
+
+📌 Best Bid:
+RM${formatPrice(
+          coin,
+          market.bestBid
+        )}
+
+🛑 Current SL:
+RM${formatPrice(
+          coin,
+          trade.sl
+        )}
+
+━━━━━━━━━━━━━━
+
+📦 Net Must Sell
+(Luno Quantity)
+
+${netMustSell.toLocaleString()} ${coin}
+
+💸 Estimated Loss:
+RM${estimatedLoss.toFixed(0)}
+
+━━━━━━━━━━━━━━
+
+SELL NOW?`,
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "💰 SELL",
+                  callback_data: `SLSELL_${coin}`,
+                },
+                {
+                  text: "✋ HOLD",
+                  callback_data: `SLHOLD_${coin}`,
+                },
+              ],
+            ],
+          },
+        }
+      );
+
+      await sleep(10000);
+
+      trade.slAlertSent = false;
     }
   }
 }
 
-// ==========================================
-// CLEANUP
-// ==========================================
-
-function cleanup() {
-
-  Object.keys(
-    PENDING_SIGNALS
-  ).forEach((id) => {
-
-    const signal =
-      PENDING_SIGNALS[id];
-
-    if (
-      now() -
-        signal.createdAt >
-      SIGNAL_EXPIRY
-    ) {
-
-      delete PENDING_SIGNALS[
-        id
-      ];
-    }
-  });
-}
-
-// ==========================================
+// =====================================
 // EXPRESS
-// ==========================================
+// =====================================
 
 app.get("/", (req, res) => {
-
   res.json({
-
-    status:
-      "ACTIVE",
-
-    service:
-      SERVICE_CODE,
+    status: "ACTIVE",
+    service: SERVICE_CODE,
   });
 });
 
-// ==========================================
+// =====================================
+// DAILY REPORT
+// =====================================
+
+async function sendDailyReport() {
+  await sendTelegram(
+    `📊 <b>DAILY REPORT</b>
+
+✅ Wins: ${DAILY_STATS.wins}
+❌ Losses: ${DAILY_STATS.losses}
+
+💰 Net PNL:
+RM${DAILY_STATS.pnl.toFixed(0)}`
+  );
+}
+
+// =====================================
+// ENTRY SESSION CLEANER
+// =====================================
+
+setInterval(() => {
+  Object.keys(USER_STATE).forEach((chatId) => {
+    const state = USER_STATE[chatId];
+
+    if (
+      state.createdAt &&
+      now() - state.createdAt >
+        5 * 60 * 1000
+    ) {
+      delete USER_STATE[chatId];
+
+      bot.sendMessage(
+        chatId,
+        `⌛ ENTRY SESSION EXPIRED
+
+📡 Monitoring Next Entry...`
+      );
+    }
+  });
+}, 60000);
+
+// =====================================
 // START SERVER
-// ==========================================
+// =====================================
 
-app.listen(
-  PORT,
+app.listen(PORT, async () => {
+  console.log(`RUNNING ${PORT}`);
 
-  async () => {
+  await sendTelegram(
+    `✅ BOT ONLINE
 
-    console.log(
-      `RUNNING ${PORT}`
-    );
+🚀 INSTITUTIONAL SCALPING TERMINAL ACTIVE`
+  );
 
-    await sendTelegram(`
-✅ BOT ONLINE
+  // =====================================
+  // LIVE PRICE MEMORY
+  // =====================================
 
-🚀 FINAL INSTITUTIONAL AI SCALPING TERMINAL ACTIVE
-`);
+  setInterval(async () => {
+    for (const coin of Object.keys(COINS)) {
+      const ticker = await getTicker(coin);
 
-    // FIRST PRICE UPDATE
-    await sendPriceAlert();
+      if (!ticker) {
+        continue;
+      }
 
-    // ==========================================
-    // LIVE PRICE UPDATE
-    // ==========================================
+      updatePriceMemory(
+        coin,
+        safeNumber(ticker.last_trade)
+      );
+    }
+  }, 5000);
 
-    setInterval(
-      sendPriceAlert,
-      300000
-    );
+  // =====================================
+  // PRICE ALERT
+  // =====================================
 
-    // ==========================================
-    // MARKET STRUCTURE
-    // ==========================================
+  setInterval(
+    sendPriceAlert,
+    5 * 60 * 1000
+  );
 
-    setInterval(
-      sendMarketStructure,
-      15 *
-        60 *
-        1000
-    );
+  // =====================================
+  // MARKET STRUCTURE
+  // =====================================
 
-    // ==========================================
-    // SIGNAL ENGINE
-    // ==========================================
+  setInterval(
+    sendStructureAlert,
+    15 * 60 * 1000
+  );
 
-    setInterval(
-      smartSignalEngine,
-      120000
-    );
+  // =====================================
+  // SIGNAL ENGINE
+  // =====================================
 
-    // ==========================================
-    // TRADE MONITOR
-    // ==========================================
+  setInterval(
+    smartSignalEngine,
+    60 * 1000
+  );
 
-    setInterval(
-      monitorTrades,
-      MONITOR_INTERVAL
-    );
+  // =====================================
+  // TRADE MONITOR
+  // =====================================
 
-    // ==========================================
-    // CLEANUP
-    // ==========================================
-
-    setInterval(
-      cleanup,
-      300000
-    );
-  }
-);
+  setInterval(
+    monitorTrades,
+    15000
+  );
+});
