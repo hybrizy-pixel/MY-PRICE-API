@@ -42,8 +42,8 @@ const ACTIVE_TRADES = {};
 const PENDING_ENTRIES = {};
 const USER_STATE = {};
 const PRICE_MEMORY = {};
-const LAST_PRICE = {};
 const LAST_SIGNAL = {};
+const LAST_PRICE = {};
 
 const GLOBAL_SCALPING_COOLDOWN =
   5 * 60 * 1000;
@@ -304,13 +304,39 @@ async function sendMarketStructure() {
     return;
   }
 
-  const btcScore =
-    Math.floor(Math.random() * 20) +
-    65;
-
-  const grtScore =
+  const btc1m =
     Math.floor(Math.random() * 20) +
     60;
+
+  const btc5m =
+    Math.floor(Math.random() * 20) +
+    60;
+
+  const btc15m =
+    Math.floor(Math.random() * 20) +
+    60;
+
+  const grt1m =
+    Math.floor(Math.random() * 20) +
+    60;
+
+  const grt5m =
+    Math.floor(Math.random() * 20) +
+    60;
+
+  const grt15m =
+    Math.floor(Math.random() * 20) +
+    60;
+
+  const btcAverage =
+    Math.floor(
+      (btc1m + btc5m + btc15m) / 3
+    );
+
+  const grtAverage =
+    Math.floor(
+      (grt1m + grt5m + grt15m) / 3
+    );
 
   const btcSupport =
     btc.currentPrice * 0.985;
@@ -347,15 +373,19 @@ RM${formatPrice(
   )}
 
 📈 Market:
-${calculateDirection(btcScore)}
+${calculateDirection(
+    btcAverage
+  )}
 
 ⚡ Tekanan:
-${calculatePressure(btcScore)}
+${calculatePressure(
+    btcAverage
+  )}
 
 🧠 Kriteria:
 ${getStructureCriteria({
     coin: "BTC",
-    score: btcScore,
+    score: btcAverage,
     support: btcSupport,
     resistance: btcResistance,
   })}
@@ -383,15 +413,19 @@ RM${formatPrice(
   )}
 
 📈 Market:
-${calculateDirection(grtScore)}
+${calculateDirection(
+    grtAverage
+  )}
 
 ⚡ Tekanan:
-${calculatePressure(grtScore)}
+${calculatePressure(
+    grtAverage
+  )}
 
 🧠 Kriteria:
 ${getStructureCriteria({
     coin: "GRT",
-    score: grtScore,
+    score: grtAverage,
     support: grtSupport,
     resistance: grtResistance,
   })}`;
@@ -430,9 +464,24 @@ async function scanSignals() {
       continue;
     }
 
-    const score =
-      Math.floor(Math.random() * 25) +
-      65;
+    const score1m =
+      Math.floor(Math.random() * 20) +
+      60;
+
+    const score5m =
+      Math.floor(Math.random() * 20) +
+      60;
+
+    const score15m =
+      Math.floor(Math.random() * 20) +
+      60;
+
+    const score = Math.floor(
+      (score1m +
+        score5m +
+        score15m) /
+        3
+    );
 
     const confidence =
       confidenceLabel(score);
@@ -450,17 +499,32 @@ async function scanSignals() {
     let durationHours;
 
     if (coin === "BTC") {
-      tp = entryPrice * 1.012;
-      durationHours = 4;
+      if (confidence === "STRONG") {
+        tp = entryPrice * 1.03;
+        durationHours = 8;
+      } else {
+        tp = entryPrice * 1.015;
+        durationHours = 4;
+      }
     } else if (
       coin === "XRP" ||
       coin === "XLM"
     ) {
-      tp = entryPrice * 1.025;
-      durationHours = 6;
+      if (confidence === "STRONG") {
+        tp = entryPrice * 1.06;
+        durationHours = 8;
+      } else {
+        tp = entryPrice * 1.03;
+        durationHours = 6;
+      }
     } else {
-      tp = entryPrice * 1.028;
-      durationHours = 6;
+      if (confidence === "STRONG") {
+        tp = entryPrice * 1.05;
+        durationHours = 8;
+      } else {
+        tp = entryPrice * 1.03;
+        durationHours = 6;
+      }
     }
 
     const sl = entryPrice * 0.985;
@@ -470,7 +534,7 @@ async function scanSignals() {
         entryPrice) *
       100;
 
-    if (tpDistance < 1.2) {
+    if (tpDistance < 1.5) {
       continue;
     }
 
