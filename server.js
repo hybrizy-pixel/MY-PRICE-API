@@ -83,13 +83,12 @@ const TRADE_HISTORY = Object.fromEntries(
   ])
 );
 
-const SEEN_TRADE_SEQUENCES =
-  Object.fromEntries(
-    SCAN_COINS.map((coin) => [
-      coin,
-      new Set(),
-    ])
-  );
+const SEEN_TRADE_SEQUENCES = Object.fromEntries(
+  SCAN_COINS.map((coin) => [
+    coin,
+    new Set(),
+  ])
+);
 
 /* ============================================================
    SERVER TIME
@@ -151,91 +150,105 @@ const PER_COIN_COOLDOWN =
 let LAST_GLOBAL_SIGNAL = 0;
 
 /* ============================================================
-   BREAKOUT CONFIG
+   ORDERBOOK MARKET STRUCTURE CONFIG
 ============================================================ */
 
 /*
-  Executed trade mesti melepasi resistance
-  sekurang-kurangnya 0.10%
-  untuk dikira breakout evidence.
+  Market Structure sekarang ORDERBOOK-FIRST.
+
+  Bot cari support/resistance daripada
+  live Luno bids/asks.
+
+  Wall terlalu jauh daripada current price
+  tidak dianggap current support/resistance.
 */
+
+const ORDERBOOK_STRUCTURE_RANGE_PCT = {
+  BTC: 2.00,
+  GRT: 3.00,
+  XRP: 3.00,
+  XLM: 3.00,
+  CRV: 3.00,
+  AAVE: 3.00,
+};
+
+/*
+  Kita tak terus pilih order paling dekat.
+
+  Orders berhampiran digabung menjadi zone
+  supaya fragmented wall masih boleh dikesan.
+*/
+
+const ORDERBOOK_CLUSTER_PCT = {
+  BTC: 0.08,
+  GRT: 0.15,
+  XRP: 0.15,
+  XLM: 0.15,
+  CRV: 0.15,
+  AAVE: 0.15,
+};
+
+/*
+  Wall minimum mesti sekurang-kurangnya
+  sedikit lebih besar daripada typical
+  orderbook zone.
+
+  Ini mengelakkan order kecil dipanggil
+  support/resistance.
+*/
+
+const MIN_WALL_RELATIVE_RATIO =
+  1.20;
+
+/*
+  Bila dua wall hampir sama strength,
+  wall lebih dekat dengan current price
+  diberi sedikit keutamaan.
+*/
+
+const WALL_DISTANCE_WEIGHT =
+  0.35;
+
+/* ============================================================
+   BREAKOUT CONFIG
+============================================================ */
 
 const BREAKOUT_BUFFER_PCT =
   0.10;
 
-/*
-  Untuk confirmation,
-  harga terakhir masih perlu
-  bertahan sekurang-kurangnya
-  0.05% atas resistance.
-*/
-
 const BREAKOUT_HOLD_BUFFER_PCT =
   0.05;
-
-/*
-  Turun sedikit bawah resistance
-  tidak terus dianggap fake breakout.
-*/
 
 const BREAKOUT_FAILURE_BUFFER_PCT =
   0.35;
 
-/*
-  Deep failure.
-*/
-
 const BREAKOUT_HARD_FAILURE_PCT =
   0.60;
-
-/*
-  Market Structure mula breakout watch
-  bila resistance maksimum 1%
-  daripada current price.
-*/
 
 const BREAKOUT_WATCH_MAX_DISTANCE_PCT =
   1.00;
 
-/*
-  Fake breakout status kekal
-  selama 30 minit.
-*/
-
 const FAKE_BREAKOUT_VISIBLE_MS =
   30 * 60 * 1000;
 
-/*
-  Breakout confirmed status kekal
-  selama 30 minit.
-*/
-
 const CONFIRMED_BREAKOUT_VISIBLE_MS =
   30 * 60 * 1000;
+
+/*
+  Confirmation lama tak boleh digunakan
+  kalau resistance/wall yang berkaitan
+  sudah tidak relevan dengan current structure.
+*/
+
+const CONFIRMED_STRUCTURE_TOLERANCE_PCT =
+  0.50;
 
 /* ============================================================
    ENTRY CONFIG
 ============================================================ */
 
-/*
-  Maksimum harga yang dibenarkan
-  untuk chase Technical Entry.
-
-  Kalau orderbook perlu harga
-  lebih jauh daripada 0.30%,
-  bot kembali guna Technical Entry.
-*/
-
 const MAX_ENTRY_CHASE_PCT =
   0.30;
-
-/*
-  Minimum gross room.
-
-  Fee:
-  BUY  = 0.5%
-  SELL = 0.5%
-*/
 
 const MIN_GROSS_ROOM_PCT =
   1.30;
@@ -363,20 +376,6 @@ function median(values) {
 /* ============================================================
    INPUT VALIDATION
 ============================================================ */
-
-/*
-  Jangan guna safeNumber() untuk input yang
-  mempunyai makna khas seperti:
-
-  MATCHED QUANTITY = 0
-
-  Sebab:
-  Number("abc") = NaN
-  tetapi safeNumber("abc") = 0.
-
-  Kita tak mahu typo dianggap
-  ORDER NOT MATCHED.
-*/
 
 function parseUserNumber(
   input
@@ -613,18 +612,8 @@ async function getTicker(
 }
 
 /* ============================================================
-   LUNO TOP ORDER BOOK
+   LUNO TOP ORDERBOOK
 ============================================================ */
-
-/*
-  orderbook_top digunakan kerana
-  asks/bids pada harga sama sudah
-  di-aggregate.
-
-  Ini membolehkan bot tengok
-  berapa kuantiti tersedia pada
-  setiap kawasan harga.
-*/
 
 async function getTopOrderBook(
   coin
@@ -708,9 +697,7 @@ async function getTopOrderBook(
 
     return {
       coin,
-
       asks,
-
       bids,
 
       timestamp:
@@ -820,6 +807,9 @@ async function getRecentTrades(
 
 /* ============================================================
    PRICE MEMORY
+   TREND / MOMENTUM ONLY
+
+   NOT primary support/resistance anymore.
 ============================================================ */
 
 function updatePriceMemory(
@@ -961,62 +951,6 @@ function getPriceSnapshot(
 }
 
 /* ============================================================
-   1-MIN PRICE SERIES
-============================================================ */
-
-function getMinuteSeries(
-  coin,
-  durationMs =
-    TWENTY_FOUR_HOURS
-) {
-  const raw =
-    getPriceMemoryWindow(
-      coin,
-      durationMs
-    );
-
-  if (
-    !raw.length
-  ) {
-    return [];
-  }
-
-  const buckets =
-    new Map();
-
-  for (
-    const item of
-    raw
-  ) {
-    const minute =
-      Math.floor(
-        item.time /
-          60000
-      ) *
-      60000;
-
-    buckets.set(
-      minute,
-      {
-        time:
-          item.time,
-
-        price:
-          item.price,
-      }
-    );
-  }
-
-  return [
-    ...buckets.values(),
-  ].sort(
-    (a, b) =>
-      a.time -
-      b.time
-  );
-}
-
-/* ============================================================
    TRADE HISTORY CLEANUP
 ============================================================ */
 
@@ -1098,8 +1032,7 @@ async function collectTradesForCoin(
     return;
   }
 
-  const newTrades =
-    [];
+  const newTrades = [];
 
   for (
     const trade of
@@ -1143,14 +1076,6 @@ async function collectTradesForCoin(
   purgeOldTrades(
     coin
   );
-
-  /*
-    Setiap executed trade baru
-    terus dihantar ke breakout engine.
-
-    Breakout confirmation tidak perlu
-    tunggu scanner 1 minit.
-  */
 
   newTrades.sort(
     (a, b) =>
@@ -1216,20 +1141,16 @@ function summarizeTrades(
     return null;
   }
 
-  const sorted =
-    [
-      ...trades,
-    ].sort(
-      (a, b) =>
-        a.timestamp -
-        b.timestamp
-    );
+  const sorted = [
+    ...trades,
+  ].sort(
+    (a, b) =>
+      a.timestamp -
+      b.timestamp
+  );
 
-  let buyVolume =
-    0;
-
-  let sellVolume =
-    0;
+  let buyVolume = 0;
+  let sellVolume = 0;
 
   let high =
     -Infinity;
@@ -1412,126 +1333,59 @@ ${buildLine(
   );
 }
 /* ============================================================
-   SUPPORT / RESISTANCE PIVOTS
+   ORDERBOOK ZONE CLUSTERING
 ============================================================ */
 
-function extractPivots(
-  series,
-  wing = 2
-) {
-  const highs = [];
-  const lows = [];
+/*
+  Fragmented orders yang sangat dekat
+  digabung sebagai satu liquidity zone.
 
-  for (
-    let i = wing;
-    i < series.length - wing;
-    i++
-  ) {
-    const current =
-      series[i];
+  Example:
+  0.0774  50k
+  0.0775  70k
+  0.0775  40k
 
-    const left =
-      series.slice(
-        i - wing,
-        i
-      );
+  Boleh dianggap satu resistance zone
+  jika masih dalam cluster tolerance.
+*/
 
-    const right =
-      series.slice(
-        i + 1,
-        i + wing + 1
-      );
-
-    const neighbors = [
-      ...left,
-      ...right,
-    ];
-
-    const isHigh =
-      neighbors.every(
-        (item) =>
-          current.price >=
-          item.price
-      );
-
-    const isLow =
-      neighbors.every(
-        (item) =>
-          current.price <=
-          item.price
-      );
-
-    if (
-      isHigh
-    ) {
-      highs.push(
-        current
-      );
-    }
-
-    if (
-      isLow
-    ) {
-      lows.push(
-        current
-      );
-    }
-  }
-
-  return {
-    highs,
-    lows,
-  };
-}
-
-/* ============================================================
-   CLUSTER NEARBY LEVELS
-============================================================ */
-
-function clusterLevels(
-  points,
-  tolerancePct = 0.25
+function clusterOrderBookSide(
+  orders,
+  tolerancePct
 ) {
   if (
-    !points.length
+    !orders ||
+    !orders.length
   ) {
     return [];
   }
 
-  const sorted = [
-    ...points,
-  ].sort(
-    (a, b) =>
-      a.price -
-      b.price
-  );
-
   const clusters = [];
 
   for (
-    const point of
-    sorted
+    const order of
+    orders
   ) {
-    let matched =
+    let matchedCluster =
       null;
 
     for (
       const cluster of
       clusters
     ) {
-      const distance =
+      const distancePct =
         Math.abs(
           percentChange(
             cluster.price,
-            point.price
+            order.price
           )
         );
 
       if (
-        distance <=
+        distancePct <=
         tolerancePct
       ) {
-        matched =
+        matchedCluster =
           cluster;
 
         break;
@@ -1539,363 +1393,335 @@ function clusterLevels(
     }
 
     if (
-      !matched
+      !matchedCluster
     ) {
       clusters.push({
         price:
-          point.price,
+          order.price,
 
-        points: [
-          point,
+        volume:
+          order.volume,
+
+        orders: [
+          order,
         ],
       });
 
       continue;
     }
 
-    matched.points.push(
-      point
-    );
-
-    matched.price =
-      average(
-        matched.points.map(
-          (item) =>
-            item.price
-        )
+    matchedCluster
+      .orders
+      .push(
+        order
       );
+
+    matchedCluster.volume +=
+      order.volume;
+
+    /*
+      Weighted average price
+      by volume.
+    */
+
+    const weightedValue =
+      matchedCluster.orders.reduce(
+        (
+          total,
+          item
+        ) =>
+          total +
+          (
+            item.price *
+            item.volume
+          ),
+        0
+      );
+
+    const totalVolume =
+      matchedCluster.orders.reduce(
+        (
+          total,
+          item
+        ) =>
+          total +
+          item.volume,
+        0
+      );
+
+    matchedCluster.price =
+      totalVolume > 0
+        ? weightedValue /
+          totalVolume
+        : matchedCluster.price;
   }
 
   return clusters;
 }
 
 /* ============================================================
-   SUPPORT / RESISTANCE CANDIDATES
+   FILTER RELEVANT ORDERBOOK RANGE
 ============================================================ */
 
-function getCandidateLevels(
+function getRelevantOrderBookZones({
   coin,
   currentPrice,
-  durationMs =
-    TWENTY_FOUR_HOURS
-) {
-  const series =
-    getMinuteSeries(
-      coin,
-      durationMs
+  asks,
+  bids,
+}) {
+  const rangePct =
+    ORDERBOOK_STRUCTURE_RANGE_PCT[
+      coin
+    ] || 3.00;
+
+  const clusterPct =
+    ORDERBOOK_CLUSTER_PCT[
+      coin
+    ] || 0.15;
+
+  const minPrice =
+    currentPrice *
+    (
+      1 -
+      rangePct /
+        100
     );
 
-  if (
-    series.length < 5
-  ) {
-    return {
-      supports: [],
-      resistances: [],
-      series,
-    };
-  }
-
-  const pivots =
-    extractPivots(
-      series,
-      2
+  const maxPrice =
+    currentPrice *
+    (
+      1 +
+      rangePct /
+        100
     );
 
-  const highClusters =
-    clusterLevels(
-      pivots.highs,
-      0.25
+  const relevantBids =
+    (
+      bids || []
+    ).filter(
+      (order) =>
+        order.price <
+          currentPrice &&
+        order.price >=
+          minPrice
     );
 
-  const lowClusters =
-    clusterLevels(
-      pivots.lows,
-      0.25
+  const relevantAsks =
+    (
+      asks || []
+    ).filter(
+      (order) =>
+        order.price >
+          currentPrice &&
+        order.price <=
+          maxPrice
     );
 
-  /*
-    Resistance mesti
-    DI ATAS current price.
-  */
+  const bidClusters =
+    clusterOrderBookSide(
+      relevantBids,
+      clusterPct
+    );
 
-  const resistances =
-    highClusters
-      .filter(
-        (level) =>
-          level.price >
-          currentPrice *
-            1.0005
-      )
-      .sort(
-        (a, b) =>
-          a.price -
-          b.price
-      );
-
-  /*
-    Support mesti
-    DI BAWAH current price.
-  */
-
-  const supports =
-    lowClusters
-      .filter(
-        (level) =>
-          level.price <
-          currentPrice *
-            0.9995
-      )
-      .sort(
-        (a, b) =>
-          b.price -
-          a.price
-      );
+  const askClusters =
+    clusterOrderBookSide(
+      relevantAsks,
+      clusterPct
+    );
 
   return {
-    supports,
-    resistances,
-    series,
+    bidClusters,
+    askClusters,
   };
 }
 
 /* ============================================================
-   LEVEL STRENGTH / TEST COUNT
+   ORDERBOOK WALL STATS
 ============================================================ */
 
-function evaluateLevelStrength(
-  coin,
-  level,
-  type,
-  durationMs =
-    TWENTY_FOUR_HOURS
+function getWallStats(
+  clusters
 ) {
   if (
-    !level
+    !clusters.length
   ) {
     return {
-      rating: 0,
-      touches: 0,
-      avgRejectionPct: 0,
-      weakening: false,
+      medianVolume:
+        0,
+
+      averageVolume:
+        0,
+
+      maxVolume:
+        0,
     };
   }
 
-  const series =
-    getMinuteSeries(
-      coin,
-      durationMs
+  const volumes =
+    clusters.map(
+      (cluster) =>
+        cluster.volume
     );
 
+  return {
+    medianVolume:
+      median(
+        volumes
+      ),
+
+    averageVolume:
+      average(
+        volumes
+      ),
+
+    maxVolume:
+      Math.max(
+        ...volumes
+      ),
+  };
+}
+
+/* ============================================================
+   WALL RATING 1-10
+============================================================ */
+
+/*
+  Rating bukan berdasarkan unit mentah.
+
+  Contoh:
+  300k GRT mungkin besar,
+  tapi 300k BTC mustahil dibanding
+  dengan cara sama.
+
+  Jadi kita compare wall volume
+  dengan typical zone volume
+  dalam orderbook coin itu sendiri.
+*/
+
+function rateOrderBookWall({
+  cluster,
+  stats,
+  currentPrice,
+}) {
   if (
-    series.length < 5
+    !cluster ||
+    !stats ||
+    !stats.medianVolume
   ) {
     return {
-      rating: 1,
-      touches: 0,
-      avgRejectionPct: 0,
-      weakening: false,
+      rating:
+        1,
+
+      ratio:
+        1,
+
+      distancePct:
+        cluster
+          ? Math.abs(
+              percentChange(
+                currentPrice,
+                cluster.price
+              )
+            )
+          : null,
     };
   }
 
-  const touchZonePct =
-    0.25;
+  const ratio =
+    cluster.volume /
+    stats.medianVolume;
 
-  const exitZonePct =
-    0.50;
-
-  let insideZone =
-    false;
-
-  const touchIndexes = [];
-
-  for (
-    let i = 0;
-    i < series.length;
-    i++
-  ) {
-    const distance =
-      Math.abs(
-        percentChange(
-          level,
-          series[i].price
-        )
-      );
-
-    if (
-      !insideZone &&
-      distance <=
-        touchZonePct
-    ) {
-      insideZone =
-        true;
-
-      touchIndexes.push(
-        i
-      );
-
-      continue;
-    }
-
-    if (
-      insideZone &&
-      distance >=
-        exitZonePct
-    ) {
-      insideZone =
-        false;
-    }
-  }
-
-  const rejectionPcts = [];
-
-  for (
-    const index of
-    touchIndexes
-  ) {
-    const future =
-      series.slice(
-        index + 1,
-        Math.min(
-          index + 7,
-          series.length
-        )
-      );
-
-    if (
-      !future.length
-    ) {
-      continue;
-    }
-
-    if (
-      type ===
-      "RESISTANCE"
-    ) {
-      const lowest =
-        Math.min(
-          ...future.map(
-            (item) =>
-              item.price
-          )
-        );
-
-      const rejection =
-        Math.max(
-          0,
-          -percentChange(
-            level,
-            lowest
-          )
-        );
-
-      rejectionPcts.push(
-        rejection
-      );
-    } else {
-      const highest =
-        Math.max(
-          ...future.map(
-            (item) =>
-              item.price
-          )
-        );
-
-      const rejection =
-        Math.max(
-          0,
-          percentChange(
-            level,
-            highest
-          )
-        );
-
-      rejectionPcts.push(
-        rejection
-      );
-    }
-  }
-
-  const touches =
-    touchIndexes.length;
-
-  const avgRejectionPct =
-    average(
-      rejectionPcts
-    );
+  /*
+    Base rating from relative depth.
+  */
 
   let rating =
     1;
 
-  /*
-    Banyak touch tambah strength,
-    tetapi capped.
-  */
+  if (
+    ratio >= 1.2
+  ) {
+    rating =
+      2;
+  }
 
-  rating +=
-    Math.min(
-      touches,
-      4
+  if (
+    ratio >= 1.5
+  ) {
+    rating =
+      3;
+  }
+
+  if (
+    ratio >= 2
+  ) {
+    rating =
+      4;
+  }
+
+  if (
+    ratio >= 3
+  ) {
+    rating =
+      5;
+  }
+
+  if (
+    ratio >= 4
+  ) {
+    rating =
+      6;
+  }
+
+  if (
+    ratio >= 6
+  ) {
+    rating =
+      7;
+  }
+
+  if (
+    ratio >= 8
+  ) {
+    rating =
+      8;
+  }
+
+  if (
+    ratio >= 12
+  ) {
+    rating =
+      9;
+  }
+
+  if (
+    ratio >= 18
+  ) {
+    rating =
+      10;
+  }
+
+  const distancePct =
+    Math.abs(
+      percentChange(
+        currentPrice,
+        cluster.price
+      )
     );
 
   /*
-    Strong rejection tambah score.
-  */
+    Very near wall gets small
+    practical relevance boost.
 
-  rating +=
-    clamp(
-      Math.round(
-        avgRejectionPct /
-          0.25
-      ),
-      0,
-      4
-    );
-
-  let weakening =
-    false;
-
-  /*
-    Kalau rejection terbaru
-    semakin kecil berbanding awal,
-    wall mungkin sedang diserap.
+    Cap remains 10.
   */
 
   if (
-    rejectionPcts.length >= 3
+    distancePct <=
+      0.30
   ) {
-    const firstHalf =
-      average(
-        rejectionPcts.slice(
-          0,
-          Math.ceil(
-            rejectionPcts.length /
-              2
-          )
-        )
-      );
-
-    const lastHalf =
-      average(
-        rejectionPcts.slice(
-          Math.floor(
-            rejectionPcts.length /
-              2
-          )
-        )
-      );
-
-    if (
-      firstHalf > 0 &&
-      lastHalf <
-        firstHalf *
-          0.60
-    ) {
-      weakening =
-        true;
-
-      rating -=
-        2;
-    }
+    rating +=
+      1;
   }
 
   rating =
@@ -1909,116 +1735,432 @@ function evaluateLevelStrength(
 
   return {
     rating,
-    touches,
-    avgRejectionPct,
-    weakening,
+
+    ratio,
+
+    distancePct,
   };
 }
 
 /* ============================================================
-   ACTIVE SUPPORT / RESISTANCE
+   SELECT BEST CURRENT WALL
 ============================================================ */
 
-function calculateSupportResistance(
+/*
+  Kita tak semestinya pilih wall PALING BESAR.
+
+  Wall dekat current price lebih relevant
+  kepada scalping.
+
+  Score:
+  relative wall strength
+  minus distance penalty.
+*/
+
+function selectBestOrderBookWall({
+  clusters,
+  currentPrice,
+}) {
+  if (
+    !clusters.length
+  ) {
+    return null;
+  }
+
+  const stats =
+    getWallStats(
+      clusters
+    );
+
+  const candidates =
+    clusters.map(
+      (cluster) => {
+        const strength =
+          rateOrderBookWall({
+            cluster,
+            stats,
+            currentPrice,
+          });
+
+        /*
+          Require some relative significance
+          unless book has very few zones.
+        */
+
+        const validWall =
+          clusters.length <=
+            2 ||
+          strength.ratio >=
+            MIN_WALL_RELATIVE_RATIO;
+
+        const score =
+          (
+            strength.rating *
+            10
+          ) -
+          (
+            strength.distancePct *
+            WALL_DISTANCE_WEIGHT *
+            10
+          );
+
+        return {
+          ...cluster,
+
+          strength,
+
+          score,
+
+          validWall,
+        };
+      }
+    )
+      .filter(
+        (item) =>
+          item.validWall
+      )
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          b.score -
+          a.score
+      );
+
+  if (
+    !candidates.length
+  ) {
+    /*
+      Fallback:
+      choose nearest zone instead of N/A
+      if valid book data exists.
+    */
+
+    return [
+      ...clusters,
+    ].sort(
+      (
+        a,
+        b
+      ) =>
+        Math.abs(
+          percentChange(
+            currentPrice,
+            a.price
+          )
+        ) -
+        Math.abs(
+          percentChange(
+            currentPrice,
+            b.price
+          )
+        )
+    )[0];
+  }
+
+  return candidates[0];
+}
+
+/* ============================================================
+   LIVE ORDERBOOK MARKET STRUCTURE
+============================================================ */
+
+async function getOrderBookStructure(
   coin,
   currentPrice
 ) {
-  const local =
-    getCandidateLevels(
-      coin,
-      currentPrice,
-      SIX_HOURS
+  const orderBook =
+    await getTopOrderBook(
+      coin
     );
 
-  const major =
-    getCandidateLevels(
+  if (
+    !orderBook
+  ) {
+    return null;
+  }
+
+  const zones =
+    getRelevantOrderBookZones({
       coin,
+
       currentPrice,
-      TWENTY_FOUR_HOURS
+
+      asks:
+        orderBook.asks,
+
+      bids:
+        orderBook.bids,
+    });
+
+  const supportCluster =
+    selectBestOrderBookWall({
+      clusters:
+        zones.bidClusters,
+
+      currentPrice,
+    });
+
+  const resistanceCluster =
+    selectBestOrderBookWall({
+      clusters:
+        zones.askClusters,
+
+      currentPrice,
+    });
+
+  const bidStats =
+    getWallStats(
+      zones.bidClusters
+    );
+
+  const askStats =
+    getWallStats(
+      zones.askClusters
     );
 
   let support =
-    local.supports[0]
-      ?.price ||
-    major.supports[0]
-      ?.price ||
     null;
 
   let resistance =
-    local.resistances[0]
-      ?.price ||
-    major.resistances[0]
-      ?.price ||
     null;
 
   if (
-    resistance &&
-    resistance <=
-      currentPrice
+    supportCluster
   ) {
-    resistance =
-      null;
+    const supportStrength =
+      rateOrderBookWall({
+        cluster:
+          supportCluster,
+
+        stats:
+          bidStats,
+
+        currentPrice,
+      });
+
+    support = {
+      price:
+        supportCluster.price,
+
+      volume:
+        supportCluster.volume,
+
+      rating:
+        supportStrength.rating,
+
+      ratio:
+        supportStrength.ratio,
+
+      distancePct:
+        Math.abs(
+          percentChange(
+            currentPrice,
+            supportCluster.price
+          )
+        ),
+
+      orderCount:
+        supportCluster
+          .orders
+          ?.length ||
+        1,
+    };
   }
 
   if (
-    support &&
-    support >=
-      currentPrice
+    resistanceCluster
   ) {
-    support =
-      null;
+    const resistanceStrength =
+      rateOrderBookWall({
+        cluster:
+          resistanceCluster,
+
+        stats:
+          askStats,
+
+        currentPrice,
+      });
+
+    resistance = {
+      price:
+        resistanceCluster.price,
+
+      volume:
+        resistanceCluster.volume,
+
+      rating:
+        resistanceStrength.rating,
+
+      ratio:
+        resistanceStrength.ratio,
+
+      distancePct:
+        Math.abs(
+          percentChange(
+            currentPrice,
+            resistanceCluster.price
+          )
+        ),
+
+      orderCount:
+        resistanceCluster
+          .orders
+          ?.length ||
+        1,
+    };
   }
 
   return {
     support,
     resistance,
+
+    bidZones:
+      zones.bidClusters,
+
+    askZones:
+      zones.askClusters,
+
+    timestamp:
+      orderBook.timestamp,
   };
 }
 
 /* ============================================================
-   NEXT RESISTANCE
+   NEXT RESISTANCE FROM ORDERBOOK
 ============================================================ */
 
-function findNextResistance(
+/*
+  Next resistance untuk TP room
+  juga sekarang orderbook-first.
+*/
+
+async function findNextOrderBookResistance(
   coin,
   currentPrice
 ) {
-  const candidates =
-    getCandidateLevels(
-      coin,
-      currentPrice,
-      TWENTY_FOUR_HOURS
-    ).resistances;
+  const orderBook =
+    await getTopOrderBook(
+      coin
+    );
 
   if (
-    !candidates.length
+    !orderBook ||
+    !orderBook.asks.length
   ) {
     return null;
   }
 
-  const next =
-    candidates[0];
+  const rangePct =
+    ORDERBOOK_STRUCTURE_RANGE_PCT[
+      coin
+    ] || 3.00;
 
-  const strength =
-    evaluateLevelStrength(
-      coin,
-      next.price,
-      "RESISTANCE",
-      TWENTY_FOUR_HOURS
+  const maxPrice =
+    currentPrice *
+    (
+      1 +
+      rangePct /
+        100
     );
 
-  return {
-    price:
-      next.price,
+  const relevantAsks =
+    orderBook.asks.filter(
+      (ask) =>
+        ask.price >
+          currentPrice &&
+        ask.price <=
+          maxPrice
+    );
 
-    distancePct:
-      percentChange(
-        currentPrice,
-        next.price
-      ),
+  const clusters =
+    clusterOrderBookSide(
+      relevantAsks,
+      ORDERBOOK_CLUSTER_PCT[
+        coin
+      ] || 0.15
+    );
 
-    strength,
-  };
+  if (
+    !clusters.length
+  ) {
+    return null;
+  }
+
+  const stats =
+    getWallStats(
+      clusters
+    );
+
+  /*
+    Sort by price.
+    We need nearest meaningful wall.
+  */
+
+  const sorted =
+    clusters
+      .map(
+        (cluster) => {
+          const strength =
+            rateOrderBookWall({
+              cluster,
+              stats,
+              currentPrice,
+            });
+
+          return {
+            price:
+              cluster.price,
+
+            volume:
+              cluster.volume,
+
+            distancePct:
+              percentChange(
+                currentPrice,
+                cluster.price
+              ),
+
+            strength,
+          };
+        }
+      )
+      .filter(
+        (item) =>
+          item.distancePct >
+            0
+      )
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          a.price -
+          b.price
+      );
+
+  if (
+    !sorted.length
+  ) {
+    return null;
+  }
+
+  /*
+    Prefer first meaningful resistance.
+  */
+
+  const meaningful =
+    sorted.find(
+      (item) =>
+        item.strength.ratio >=
+          MIN_WALL_RELATIVE_RATIO ||
+        item.strength.rating >=
+          4
+    );
+
+  return meaningful ||
+    sorted[0];
 }
 
 /* ============================================================
@@ -2030,28 +2172,28 @@ function getMarketDirection(
 ) {
   if (
     changePct >=
-    0.5
+      0.5
   ) {
     return "SEDANG NAIK KUAT";
   }
 
   if (
     changePct >=
-    0.15
+      0.15
   ) {
     return "SEDANG NAIK";
   }
 
   if (
     changePct <=
-    -0.5
+      -0.5
   ) {
     return "SEDANG MENURUN KUAT";
   }
 
   if (
     changePct <=
-    -0.15
+      -0.15
   ) {
     return "SEDANG MENURUN";
   }
@@ -2069,28 +2211,28 @@ function getPressureLabel(
 ) {
   if (
     buyPct >=
-    65
+      65
   ) {
     return "TEKANAN BELI KUAT";
   }
 
   if (
     buyPct >=
-    55
+      55
   ) {
     return "TEKANAN BELI SEDERHANA";
   }
 
   if (
     sellPct >=
-    65
+      65
   ) {
     return "TEKANAN JUAL KUAT";
   }
 
   if (
     sellPct >=
-    55
+      55
   ) {
     return "TEKANAN JUAL SEDERHANA";
   }
@@ -2132,11 +2274,20 @@ function getRecentFakeBreakout(
 }
 
 /* ============================================================
-   RECENT CONFIRMED BREAKOUT
+   VALIDATE RECENT CONFIRMED BREAKOUT
 ============================================================ */
 
-function getRecentConfirmedBreakout(
-  coin
+/*
+  Elak masalah lama:
+
+  Resistance dah berubah / hilang
+  tetapi status masih tulis
+  BREAKOUT CONFIRMED — SCALPER ACTIVE.
+*/
+
+function getRelevantConfirmedBreakout(
+  coin,
+  currentResistance
 ) {
   const item =
     LAST_CONFIRMED_BREAKOUT[
@@ -2161,11 +2312,47 @@ function getRecentConfirmedBreakout(
     return null;
   }
 
+  /*
+    Kalau breakout record ada
+    tetapi current resistance tiada,
+    kita tidak display old confirmed state.
+  */
+
+  if (
+    !currentResistance
+  ) {
+    return null;
+  }
+
+  const referenceResistance =
+    item.resistance;
+
+  if (
+    !referenceResistance
+  ) {
+    return null;
+  }
+
+  const difference =
+    Math.abs(
+      percentChange(
+        referenceResistance,
+        currentResistance
+      )
+    );
+
+  if (
+    difference >
+    CONFIRMED_STRUCTURE_TOLERANCE_PCT
+  ) {
+    return null;
+  }
+
   return item;
 }
 
 /* ============================================================
-   BREAKOUT WATCH CREATION
+   BREAKOUT WATCH
 ============================================================ */
 
 function ensureBreakoutWatch({
@@ -2190,7 +2377,8 @@ function ensureBreakoutWatch({
     !buyPressure ||
     distancePct ===
       null ||
-    distancePct < 0 ||
+    distancePct <
+      0 ||
     distancePct >
       BREAKOUT_WATCH_MAX_DISTANCE_PCT
   ) {
@@ -2203,8 +2391,8 @@ function ensureBreakoutWatch({
     ];
 
   /*
-    Resistance zone sama:
-    jangan reset evidence.
+    Same wall zone:
+    preserve evidence.
   */
 
   if (
@@ -2221,7 +2409,7 @@ function ensureBreakoutWatch({
       resistance;
 
     existing.resistanceStrength =
-      resistanceStrength.rating;
+      resistanceStrength;
 
     return;
   }
@@ -2233,8 +2421,7 @@ function ensureBreakoutWatch({
 
     resistance,
 
-    resistanceStrength:
-      resistanceStrength.rating,
+    resistanceStrength,
 
     startedAt:
       now(),
@@ -2391,11 +2578,21 @@ async function analyzeMarketStructure(
   const currentPrice =
     ticker.currentPrice;
 
-  const levels =
-    calculateSupportResistance(
+  /*
+    ORDERBOOK-FIRST
+  */
+
+  const bookStructure =
+    await getOrderBookStructure(
       coin,
       currentPrice
     );
+
+  if (
+    !bookStructure
+  ) {
+    return null;
+  }
 
   const snapshot15m =
     getPriceSnapshot(
@@ -2413,12 +2610,37 @@ async function analyzeMarketStructure(
         1000
     );
 
+  /*
+    Direction still needs price memory.
+
+    If bot just restarted and 15m history
+    is not ready, use shorter/latest fallback
+    instead of making whole structure N/A.
+  */
+
+  let directionChange =
+    0;
+
   if (
-    !snapshot15m ||
-    !snapshot60m
+    snapshot15m
   ) {
-    return null;
+    directionChange =
+      snapshot15m.change;
+  } else if (
+    snapshot60m
+  ) {
+    directionChange =
+      snapshot60m.change;
   }
+
+  const direction =
+    getMarketDirection(
+      directionChange
+    );
+
+  /*
+    Executed trades determine pressure.
+  */
 
   const trades15m =
     getTradesInWindow(
@@ -2446,39 +2668,21 @@ async function analyzeMarketStructure(
       ? flow15m.sellPct
       : 50;
 
-  const direction =
-    getMarketDirection(
-      snapshot15m.change
-    );
-
   const pressure =
     getPressureLabel(
       buyPct,
       sellPct
     );
 
-  const supportStrength =
-    evaluateLevelStrength(
-      coin,
-      levels.support,
-      "SUPPORT",
-      TWENTY_FOUR_HOURS
-    );
+  const support =
+    bookStructure.support;
 
-  const resistanceStrength =
-    evaluateLevelStrength(
-      coin,
-      levels.resistance,
-      "RESISTANCE",
-      TWENTY_FOUR_HOURS
-    );
+  const resistance =
+    bookStructure.resistance;
 
   const resistanceDistancePct =
-    levels.resistance
-      ? percentChange(
-          currentPrice,
-          levels.resistance
-        )
+    resistance
+      ? resistance.distancePct
       : null;
 
   const fakeBreakout =
@@ -2487,8 +2691,11 @@ async function analyzeMarketStructure(
     );
 
   const confirmedBreakout =
-    getRecentConfirmedBreakout(
-      coin
+    getRelevantConfirmedBreakout(
+      coin,
+      resistance
+        ? resistance.price
+        : null
     );
 
   let market =
@@ -2505,42 +2712,33 @@ async function analyzeMarketStructure(
     market =
       `${direction} — BREAKOUT CONFIRMED`;
   } else if (
-    levels.resistance &&
-    resistanceDistancePct !==
-      null &&
-    resistanceDistancePct >=
-      0 &&
-    resistanceDistancePct <=
+    resistance &&
+    resistance.distancePct <=
       0.50
   ) {
     market =
       `${direction} — DEKAT RESISTANCE`;
   } else if (
-    levels.support
+    support &&
+    support.distancePct <=
+      0.50
   ) {
-    const supportDistancePct =
-      percentChange(
-        levels.support,
-        currentPrice
-      );
-
-    if (
-      supportDistancePct >= 0 &&
-      supportDistancePct <=
-        0.50
-    ) {
-      market =
-        `${direction} — DEKAT SUPPORT`;
-    }
+    market =
+      `${direction} — DEKAT SUPPORT`;
   }
 
   ensureBreakoutWatch({
     coin,
 
     resistance:
-      levels.resistance,
+      resistance
+        ? resistance.price
+        : null,
 
-    resistanceStrength,
+    resistanceStrength:
+      resistance
+        ? resistance.rating
+        : 0,
 
     distancePct:
       resistanceDistancePct,
@@ -2551,15 +2749,20 @@ async function analyzeMarketStructure(
   const criteria =
     getMarketCriteria({
       coin,
+
       direction,
+
       pressure,
 
       resistance:
-        levels.resistance,
+        resistance
+          ? resistance.price
+          : null,
 
       resistanceDistancePct,
 
       fakeBreakout,
+
       confirmedBreakout,
     });
 
@@ -2568,55 +2771,85 @@ async function analyzeMarketStructure(
 
     currentPrice,
 
-    support:
-      levels.support,
+    supportPrice:
+      support
+        ? support.price
+        : null,
 
-    supportStrength,
+    supportRating:
+      support
+        ? support.rating
+        : 0,
 
-    resistance:
-      levels.resistance,
+    supportVolume:
+      support
+        ? support.volume
+        : 0,
 
-    resistanceStrength,
+    supportDistancePct:
+      support
+        ? support.distancePct
+        : null,
+
+    resistancePrice:
+      resistance
+        ? resistance.price
+        : null,
+
+    resistanceRating:
+      resistance
+        ? resistance.rating
+        : 0,
+
+    resistanceVolume:
+      resistance
+        ? resistance.volume
+        : 0,
 
     resistanceDistancePct,
 
     market,
+
     direction,
+
     pressure,
+
     criteria,
 
     buyPct,
+
     sellPct,
   };
 }
 
 /* ============================================================
-   MARKET STRUCTURE TELEGRAM FORMAT
+   MARKET STRUCTURE DISPLAY
 ============================================================ */
 
 function buildMarketStructureSection(
   data
 ) {
   const supportText =
-    data.support
+    data.supportPrice
       ? `RM${formatPrice(
           data.coin,
-          data.support
-        )} — ${data.supportStrength.rating}/10
-👆 Tested: ${data.supportStrength.touches}x`
+          data.supportPrice
+        )} — ${data.supportRating}/10
+📏 Jarak: ${data.supportDistancePct.toFixed(
+          2
+        )}%`
       : "N/A";
 
   const resistanceText =
-    data.resistance
+    data.resistancePrice
       ? `RM${formatPrice(
           data.coin,
-          data.resistance
-        )} — ${data.resistanceStrength.rating}/10
-👆 Tested: ${data.resistanceStrength.touches}x
+          data.resistancePrice
+        )} — ${data.resistanceRating}/10
 📏 Jarak: ${data.resistanceDistancePct.toFixed(
           2
         )}%`
-      : "N/A — PRICE DISCOVERY";
+      : "N/A";
 
   return `🪙 ${data.coin}
 
@@ -2688,12 +2921,12 @@ ${sections.join(
 ============================================================ */
 
 /*
-  NO scheduled 2H Telegram alert.
+  TIADA scheduled 2H Telegram alert.
 
-  2H analysis hanya digunakan untuk:
+  Digunakan untuk:
   - hidden scalping safety
-  - /flow command
-  - /flow/:coin API
+  - /flow
+  - /flow/:coin
 */
 
 function getPrevious2HWindows(
@@ -2770,9 +3003,7 @@ function getRelativeVolumeInfo(
       )
     );
 
-  if (
-    !avg
-  ) {
+  if (!avg) {
     return {
       ratio: null,
       label: null,
@@ -2932,7 +3163,7 @@ function getDominance(
 }
 
 /* ============================================================
-   2H BACKGROUND DECISION
+   2H DECISION
 ============================================================ */
 
 function getTwoHourActionDecision({
@@ -2979,12 +3210,6 @@ function getTwoHourActionDecision({
     }
   }
 
-  /*
-    BUYER volume tinggi
-    tetapi harga turun:
-    possible absorption / pullback.
-  */
-
   if (
     dominance.side ===
       "BUYER" &&
@@ -2993,10 +3218,6 @@ function getTwoHourActionDecision({
   ) {
     return "BLOCK";
   }
-
-  /*
-    SELLER dominant + harga turun.
-  */
 
   if (
     dominance.side ===
@@ -3011,7 +3232,7 @@ function getTwoHourActionDecision({
 }
 
 /* ============================================================
-   ANALYZE 2H BACKGROUND
+   ANALYZE 2H
 ============================================================ */
 
 async function analyze2HMarketCondition(
@@ -3043,16 +3264,9 @@ async function analyze2HMarketCondition(
       currentTrades
     );
 
-  if (
-    !summary
-  ) {
+  if (!summary) {
     return null;
   }
-
-  /*
-    Jangan anggap ada full 2H data
-    sejurus selepas server restart.
-  */
 
   const coverageMs =
     summary.endTime -
@@ -3079,9 +3293,7 @@ async function analyze2HMarketCondition(
       coin
     );
 
-  if (
-    !ticker
-  ) {
+  if (!ticker) {
     return null;
   }
 
@@ -3098,21 +3310,18 @@ async function analyze2HMarketCondition(
       previous
     );
 
-  const startPrice =
-    summary.open;
-
-  const peakPrice =
-    summary.high;
-
-  const currentPrice =
-    ticker.currentPrice;
-
   const priceTrend =
     getCurrent2HPriceTrend({
       coin,
-      startPrice,
-      peakPrice,
-      currentPrice,
+
+      startPrice:
+        summary.open,
+
+      peakPrice:
+        summary.high,
+
+      currentPrice:
+        ticker.currentPrice,
     });
 
   const dominance =
@@ -3138,12 +3347,13 @@ async function analyze2HMarketCondition(
 }
 
 /* ============================================================
-   BREAKOUT TRADE EVIDENCE
+   BREAKOUT EVIDENCE
 ============================================================ */
 
 function getRecentMedianTradeVolume(
   coin,
-  lookbackMs = TWO_HOURS
+  lookbackMs =
+    TWO_HOURS
 ) {
   const trades =
     getTradesInWindow(
@@ -3171,16 +3381,6 @@ function getRecentMedianTradeVolume(
    TRADE EVIDENCE WEIGHT
 ============================================================ */
 
-/*
-  Normal trade   = 1
-  >= 2x median   = 2
-  >= 5x median   = 3
-
-  IMPORTANT:
-  1 huge trade sahaja
-  masih TAK CUKUP untuk confirm.
-*/
-
 function getTradeEvidenceWeight(
   coin,
   trade
@@ -3190,9 +3390,7 @@ function getTradeEvidenceWeight(
       coin
     );
 
-  if (
-    !normal
-  ) {
+  if (!normal) {
     return 1;
   }
 
@@ -3216,7 +3414,7 @@ function getTradeEvidenceWeight(
 }
 
 /* ============================================================
-   PROCESS EXECUTED TRADE
+   PROCESS EXECUTED TRADE AGAINST BREAKOUT WATCH
 ============================================================ */
 
 async function processBreakoutWatchTrade(
@@ -3289,7 +3487,7 @@ async function processBreakoutWatchTrade(
     );
 
   /* =========================================================
-     TRADE ABOVE RESISTANCE
+     ABOVE RESISTANCE
   ========================================================= */
 
   if (
@@ -3315,13 +3513,6 @@ async function processBreakoutWatchTrade(
     watch.aboveTradeCount +=
       1;
 
-    /*
-      BUY = full bullish evidence.
-      SELL above resistance masih
-      menunjukkan acceptance,
-      tetapi weaker.
-    */
-
     if (
       trade.isBuy
     ) {
@@ -3335,29 +3526,35 @@ async function processBreakoutWatchTrade(
     watch.failureScore =
       0;
 
+    /*
+      Re-read live structure.
+
+      Orderbook wall may have moved,
+      so we must not blindly confirm
+      old resistance.
+    */
+
     const structure =
       await analyzeMarketStructure(
         coin
       );
 
+    if (!structure) {
+      return;
+    }
+
     const pressureOkay =
-      structure &&
       !structure.pressure.includes(
         "JUAL"
       );
 
     /*
-      Confirmation:
+      If new live resistance suddenly moves
+      far away from watched wall,
+      old wall was probably removed/consumed.
 
-      A)
-      2+ executed trades
-      + Buyer Evidence >= 3
-
-      OR
-
-      B)
-      3+ executed trades
-      + Buyer Evidence >= 2
+      That's acceptable as breakout evidence,
+      but confirmation still needs executed trades.
     */
 
     const enoughEvidence =
@@ -3386,13 +3583,6 @@ async function processBreakoutWatchTrade(
       watch.confirmed =
         true;
 
-      /*
-        Tak hantar breakout-confirmed alert
-        secara berasingan.
-
-        Terus masuk scalping engine.
-      */
-
       await triggerBreakoutScalpingEntry(
         coin,
         watch,
@@ -3411,16 +3601,11 @@ async function processBreakoutWatchTrade(
     trade.price >=
     failureThreshold
   ) {
-    /*
-      Small dip boleh jadi
-      normal profit taking.
-    */
-
     return;
   }
 
   /* =========================================================
-     BREAKOUT FAILURE
+     FAILURE
   ========================================================= */
 
   const failureWeight =
@@ -3459,20 +3644,8 @@ async function processBreakoutWatchTrade(
 }
 
 /* ============================================================
-   INITIAL ENTRY SELECTION
+   PRELIMINARY ENTRY
 ============================================================ */
-
-/*
-  Sebelum target profit dimasukkan,
-  bot belum tahu required quantity.
-
-  Jadi di stage ini kita cuma tentukan
-  preliminary/technical entry.
-
-  Quantity-aware orderbook selection
-  dibuat kemudian selepas user masukkan
-  TARGET NET PROFIT.
-*/
 
 function choosePreliminaryEntry({
   technicalEntry,
@@ -3490,12 +3663,6 @@ function choosePreliminaryEntry({
         "TECHNICAL ENTRY",
     };
   }
-
-  /*
-    Kalau Best Ask lebih rendah
-    daripada technical entry,
-    boleh guna harga lebih baik.
-  */
 
   if (
     bestAsk <=
@@ -3539,26 +3706,8 @@ function choosePreliminaryEntry({
 }
 
 /* ============================================================
-   QUANTITY-AWARE ORDERBOOK ENTRY
+   QUANTITY-AWARE LIMIT ENTRY
 ============================================================ */
-
-/*
-  Dipanggil SELEPAS target profit diketahui.
-
-  requiredQuantity sudah diketahui.
-
-  Bot scan asks daripada harga terendah ke atas.
-
-  Dia kira cumulative volume.
-
-  Bila cumulative volume cukup cover
-  Suggested Quantity, harga ask itu
-  dianggap Full-Fill Limit Price.
-
-  Tapi:
-  harga itu TAK BOLEH melebihi
-  Technical Entry + MAX_ENTRY_CHASE_PCT.
-*/
 
 async function chooseQuantityAwareLimitEntry({
   coin,
@@ -3569,11 +3718,6 @@ async function chooseQuantityAwareLimitEntry({
     await getTopOrderBook(
       coin
     );
-
-  /*
-    Kalau orderbook gagal,
-    fallback technical entry.
-  */
 
   if (
     !orderBook ||
@@ -3617,10 +3761,6 @@ async function chooseQuantityAwareLimitEntry({
     const ask of
     orderBook.asks
   ) {
-    /*
-      Jangan chase lebih 0.30%.
-    */
-
     if (
       ask.price >
       maxAllowedEntry
@@ -3641,11 +3781,6 @@ async function chooseQuantityAwareLimitEntry({
       break;
     }
   }
-
-  /*
-    Orderbook depth cukup
-    dalam chase allowance.
-  */
 
   if (
     selectedPrice
@@ -3672,14 +3807,6 @@ async function chooseQuantityAwareLimitEntry({
         true,
     };
   }
-
-  /*
-    Depth tak cukup dalam 0.30%.
-
-    Jangan kejar lebih tinggi.
-
-    Kekal Technical Entry.
-  */
 
   const technicalDepth =
     orderBook.asks
@@ -3720,18 +3847,24 @@ async function chooseQuantityAwareLimitEntry({
 }
 
 /* ============================================================
-   ROOM TO TP FILTER
+   ROOM TO TP
+   ORDERBOOK-FIRST
 ============================================================ */
 
-function evaluateRoomToTP(
+async function evaluateRoomToTP(
   coin,
   entryPrice
 ) {
   const nextResistance =
-    findNextResistance(
+    await findNextOrderBookResistance(
       coin,
       entryPrice
     );
+
+  /*
+    No meaningful wall above
+    within configured range.
+  */
 
   if (
     !nextResistance
@@ -3754,7 +3887,7 @@ function evaluateRoomToTP(
         ),
 
       reason:
-        "NO KNOWN RESISTANCE ABOVE",
+        "NO STRONG WALL ABOVE",
     };
   }
 
@@ -3783,8 +3916,10 @@ function evaluateRoomToTP(
   }
 
   if (
-    distance <= 1.0 &&
-    strength >= 7
+    distance <=
+      1.00 &&
+    strength >=
+      7
   ) {
     return {
       allowed:
@@ -3798,8 +3933,10 @@ function evaluateRoomToTP(
   }
 
   if (
-    distance <= 1.5 &&
-    strength >= 8
+    distance <=
+      1.50 &&
+    strength >=
+      8
   ) {
     return {
       allowed:
@@ -3821,6 +3958,10 @@ function evaluateRoomToTP(
       ] /
         100
     );
+
+  /*
+    TP sedikit sebelum wall.
+  */
 
   const beforeWall =
     nextResistance.price *
@@ -3929,21 +4070,29 @@ function getScalpingScore({
   let score =
     50;
 
-  score +=
-    clamp(
-      snapshot15m.change *
-        20,
-      -25,
-      25
-    );
+  if (
+    snapshot15m
+  ) {
+    score +=
+      clamp(
+        snapshot15m.change *
+          20,
+        -25,
+        25
+      );
+  }
 
-  score +=
-    clamp(
-      snapshot60m.change *
-        8,
-      -15,
-      15
-    );
+  if (
+    snapshot60m
+  ) {
+    score +=
+      clamp(
+        snapshot60m.change *
+          8,
+        -15,
+        15
+      );
+  }
 
   if (
     pressure ===
@@ -3992,7 +4141,8 @@ function getScalpingScore({
   if (
     support &&
     resistance &&
-    resistance > support
+    resistance >
+      support
   ) {
     const position =
       (
@@ -4005,8 +4155,10 @@ function getScalpingScore({
       );
 
     if (
-      position >= 0.55 &&
-      position <= 0.90
+      position >=
+        0.55 &&
+      position <=
+        0.90
     ) {
       score +=
         5;
@@ -4050,11 +4202,12 @@ async function getTwoHourSafety(
 function buildEntryRiskLevels({
   coin,
   entryPrice,
-  brokenResistance = null,
+  brokenResistance =
+    null,
   room,
   confidence,
 }) {
-  let tp =
+  const tp =
     room?.maxTargetPrice ||
     entryPrice *
     (
@@ -4090,7 +4243,8 @@ function buildEntryRiskLevels({
       : 6;
 
   if (
-    coin === "BTC"
+    coin ===
+    "BTC"
   ) {
     durationHours =
       confidence ===
@@ -4107,20 +4261,8 @@ function buildEntryRiskLevels({
 }
 
 /* ============================================================
-   SEND INITIAL SCALPING ENTRY
+   SEND SCALPING ENTRY
 ============================================================ */
-
-/*
-  Penting:
-
-  Alert pertama BELUM lock final
-  quantity-aware Limit Entry.
-
-  Final Limit Entry akan dihitung
-  selepas user masukkan Target Net Profit,
-  sebab waktu itulah Suggested Quantity
-  baru diketahui.
-*/
 
 async function sendScalpingEntry(
   candidate
@@ -4177,7 +4319,7 @@ ${candidate
   )}%`;
   }
 
-  const message =
+  await sendTelegram(
     `🚀 SCALPING ENTRY
 
 🪙 ${candidate.coin}
@@ -4217,10 +4359,7 @@ ${candidate.setup}${roomText}
 
 ━━━━━━━━━━━━━━
 
-START ENTRY?`;
-
-  await sendTelegram(
-    message,
+START ENTRY?`,
     {
       reply_markup: {
         inline_keyboard: [
@@ -4248,7 +4387,7 @@ START ENTRY?`;
 
 /* ============================================================
    BREAKOUT CONFIRMED
-   -> SCALPING ENTRY
+   -> DIRECT SCALPING ENTRY
 ============================================================ */
 
 async function triggerBreakoutScalpingEntry(
@@ -4340,22 +4479,8 @@ async function triggerBreakoutScalpingEntry(
     }
   }
 
-  /*
-    Technical Entry =
-    executed trade yang melengkapkan
-    breakout confirmation.
-  */
-
   const technicalEntry =
     trade.price;
-
-  /*
-    Preliminary entry hanya untuk
-    buat first TP/room estimate.
-
-    Final quantity-aware entry
-    akan dibuat selepas target profit.
-  */
 
   const preliminary =
     choosePreliminaryEntry({
@@ -4366,7 +4491,7 @@ async function triggerBreakoutScalpingEntry(
     });
 
   const room =
-    evaluateRoomToTP(
+    await evaluateRoomToTP(
       coin,
       preliminary.entryPrice
     );
@@ -4413,16 +4538,6 @@ async function triggerBreakoutScalpingEntry(
         1000
     );
 
-  if (
-    !snapshot15m ||
-    !snapshot60m
-  ) {
-    watch.confirmed =
-      false;
-
-    return;
-  }
-
   const baseScore =
     getScalpingScore({
       snapshot15m,
@@ -4438,10 +4553,10 @@ async function triggerBreakoutScalpingEntry(
         ticker.currentPrice,
 
       support:
-        structure.support,
+        structure.supportPrice,
 
       resistance:
-        structure.resistance,
+        structure.resistancePrice,
     });
 
   const evidenceBonus =
@@ -4583,9 +4698,8 @@ async function scanSignals() {
     }
 
     /*
-      BTC/GRT yang sedang
-      BREAKOUT WATCH tak boleh
-      bypass anti-fake engine.
+      BTC/GRT yang sedang breakout watch
+      tidak boleh bypass anti-fake engine.
     */
 
     if (
@@ -4604,9 +4718,7 @@ async function scanSignals() {
         coin
       );
 
-    if (
-      !ticker
-    ) {
+    if (!ticker) {
       continue;
     }
 
@@ -4615,15 +4727,13 @@ async function scanSignals() {
         coin
       );
 
-    if (
-      !structure
-    ) {
+    if (!structure) {
       continue;
     }
 
     /*
-      BTC/GRT dekat resistance:
-      serahkan kepada breakout watch.
+      BTC/GRT yang dekat live resistance
+      diserahkan kepada BREAKOUT WATCH.
     */
 
     if (
@@ -4656,8 +4766,14 @@ async function scanSignals() {
           1000
       );
 
+    /*
+      Generic scanner perlukan
+      sekurang-kurangnya sedikit
+      short-term history.
+    */
+
     if (
-      !snapshot15m ||
+      !snapshot15m &&
       !snapshot60m
     ) {
       continue;
@@ -4666,6 +4782,7 @@ async function scanSignals() {
     const score =
       getScalpingScore({
         snapshot15m,
+
         snapshot60m,
 
         pressure:
@@ -4678,10 +4795,10 @@ async function scanSignals() {
           structure.currentPrice,
 
         support:
-          structure.support,
+          structure.supportPrice,
 
         resistance:
-          structure.resistance,
+          structure.resistancePrice,
       });
 
     const confidence =
@@ -4696,10 +4813,9 @@ async function scanSignals() {
       continue;
     }
 
-    /*
-      Hidden 2H filter
-      hanya untuk BTC/GRT.
-    */
+    /* ========================================================
+       HIDDEN 2H FILTER
+    ======================================================== */
 
     if (
       CORE_COINS.includes(
@@ -4719,11 +4835,9 @@ async function scanSignals() {
       }
     }
 
-    /*
-      Generic setup:
-      current price dianggap
-      technical entry.
-    */
+    /* ========================================================
+       TECHNICAL ENTRY
+    ======================================================== */
 
     const technicalEntry =
       ticker.currentPrice;
@@ -4736,8 +4850,12 @@ async function scanSignals() {
           ticker.bestAsk,
       });
 
+    /* ========================================================
+       ORDERBOOK ROOM CHECK
+    ======================================================== */
+
     const room =
-      evaluateRoomToTP(
+      await evaluateRoomToTP(
         coin,
         preliminary.entryPrice
       );
@@ -4818,7 +4936,10 @@ async function scanSignals() {
   }
 
   candidates.sort(
-    (a, b) =>
+    (
+      a,
+      b
+    ) =>
       b.score -
       a.score
   );
@@ -4828,6 +4949,305 @@ async function scanSignals() {
   );
 }
 
+/* ============================================================
+   FINAL ORDER PLAN RESOLVER
+============================================================ */
+
+/*
+  Target profit menentukan quantity.
+
+  Quantity pula menentukan berapa jauh
+  bot perlu naik dalam ASK orderbook
+  untuk cuba dapat full fill.
+
+  Bila Final Limit Entry berubah,
+  TP / room / required quantity juga berubah.
+
+  Jadi kita buat beberapa iteration
+  sampai entry stabil.
+*/
+
+async function resolveFinalOrderPlan(
+  entry,
+  targetProfit
+) {
+  const finalSellableUnitPerGrossUnit =
+    (
+      1 -
+      BUY_FEE
+    ) *
+    (
+      1 -
+      SELL_FEE
+    );
+
+  let entryPrice =
+    entry.preliminaryEntry ||
+    entry.technicalEntry;
+
+  let lastDepthSelection =
+    null;
+
+  /* ========================================================
+     ITERATIVE ORDERBOOK RESOLUTION
+  ======================================================== */
+
+  for (
+    let attempt = 0;
+    attempt < 4;
+    attempt++
+  ) {
+    const room =
+      await evaluateRoomToTP(
+        entry.coin,
+        entryPrice
+      );
+
+    if (
+      !room.allowed
+    ) {
+      return {
+        allowed:
+          false,
+
+        reason:
+          room.reason,
+      };
+    }
+
+    const risk =
+      buildEntryRiskLevels({
+        coin:
+          entry.coin,
+
+        entryPrice,
+
+        brokenResistance:
+          entry.brokenResistance ||
+          null,
+
+        room,
+
+        confidence:
+          entry.confidence,
+      });
+
+    const netPerUnit =
+      risk.tp *
+        finalSellableUnitPerGrossUnit -
+      entryPrice;
+
+    if (
+      netPerUnit <= 0
+    ) {
+      return {
+        allowed:
+          false,
+
+        reason:
+          "NET PROFIT NEGATIVE AFTER FEES",
+      };
+    }
+
+    const quantity =
+      Math.ceil(
+        targetProfit /
+          netPerUnit
+      );
+
+    const depthSelection =
+      await chooseQuantityAwareLimitEntry({
+        coin:
+          entry.coin,
+
+        technicalEntry:
+          entry.technicalEntry,
+
+        requiredQuantity:
+          quantity,
+      });
+
+    lastDepthSelection =
+      depthSelection;
+
+    const nextEntry =
+      depthSelection.finalEntry;
+
+    /*
+      Entry dah stabil.
+
+      Harga yang diperlukan untuk quantity
+      sama dengan harga iteration semasa.
+    */
+
+    if (
+      Math.abs(
+        nextEntry -
+        entryPrice
+      ) <
+      0.0000000001
+    ) {
+      return {
+        allowed:
+          true,
+
+        entryPrice,
+
+        quantity,
+
+        room,
+
+        risk,
+
+        netPerUnit,
+
+        depthSelection,
+      };
+    }
+
+    /*
+      Orderbook memerlukan harga berbeza.
+
+      Recalculate TP, SL dan quantity
+      menggunakan harga baru.
+    */
+
+    entryPrice =
+      nextEntry;
+  }
+
+  /* ========================================================
+     FINAL PASS
+  ======================================================== */
+
+  const room =
+    await evaluateRoomToTP(
+      entry.coin,
+      entryPrice
+    );
+
+  if (
+    !room.allowed
+  ) {
+    return {
+      allowed:
+        false,
+
+      reason:
+        room.reason,
+    };
+  }
+
+  const risk =
+    buildEntryRiskLevels({
+      coin:
+        entry.coin,
+
+      entryPrice,
+
+      brokenResistance:
+        entry.brokenResistance ||
+        null,
+
+      room,
+
+      confidence:
+        entry.confidence,
+    });
+
+  const netPerUnit =
+    risk.tp *
+      finalSellableUnitPerGrossUnit -
+    entryPrice;
+
+  if (
+    netPerUnit <= 0
+  ) {
+    return {
+      allowed:
+        false,
+
+      reason:
+        "FINAL PROFIT ROOM NOT VIABLE",
+    };
+  }
+
+  const quantity =
+    Math.ceil(
+      targetProfit /
+        netPerUnit
+    );
+
+  const depthSelection =
+    await chooseQuantityAwareLimitEntry({
+      coin:
+        entry.coin,
+
+      technicalEntry:
+        entry.technicalEntry,
+
+      requiredQuantity:
+        quantity,
+    });
+
+  /* ========================================================
+     FINAL ORDERBOOK SAFETY
+  ======================================================== */
+
+  /*
+    Orderbook mungkin berubah semasa
+    semua calculation di atas dibuat.
+
+    Jadi harga daripada final depth check
+    MESTI sama dengan entryPrice yang
+    digunakan untuk kira:
+
+    - quantity
+    - TP
+    - SL
+    - target profit
+    - fees
+
+    Kalau berubah, jangan bagi user
+    stale Suggested Limit Order.
+  */
+
+  if (
+    !depthSelection ||
+    Math.abs(
+      depthSelection.finalEntry -
+        entryPrice
+    ) >=
+      0.0000000001
+  ) {
+    return {
+      allowed:
+        false,
+
+      reason:
+        "ORDERBOOK CHANGED DURING FINAL CHECK",
+    };
+  }
+
+  return {
+    allowed:
+      true,
+
+    entryPrice,
+
+    quantity,
+
+    room,
+
+    risk,
+
+    netPerUnit,
+
+    depthSelection:
+      depthSelection ||
+      lastDepthSelection,
+  };
+}
 /* ============================================================
    ACTIVE TRADE MONITOR
 ============================================================ */
@@ -4847,9 +5267,7 @@ async function monitorTrades() {
         coin
       );
 
-    if (
-      !ticker
-    ) {
+    if (!ticker) {
       continue;
     }
 
@@ -5089,10 +5507,14 @@ bot.on(
   "callback_query",
   async (query) => {
     const data =
-      query.data;
+      String(
+        query.data ||
+          ""
+      );
 
     const chatId =
-      query.message.chat.id;
+      query.message
+        .chat.id;
 
     /* ======================================================
        START ENTRY
@@ -5108,19 +5530,33 @@ bot.on(
           "_"
         )[1];
 
-      USER_STATE[
-        chatId
-      ] = {
-        step:
-          "WAIT_PROFIT",
+      const pending =
+        PENDING_ENTRIES[
+          coin
+        ];
 
-        coin,
-      };
+      if (
+        !pending
+      ) {
+        await replyTelegram(
+          chatId,
+          "⚠️ Entry signal sudah expired."
+        );
+      } else {
+        USER_STATE[
+          chatId
+        ] = {
+          step:
+            "WAIT_PROFIT",
 
-      await replyTelegram(
-        chatId,
-        "💰 TARGET NET PROFIT (RM)?"
-      );
+          coin,
+        };
+
+        await replyTelegram(
+          chatId,
+          "💰 TARGET NET PROFIT (RM)?"
+        );
+      }
     }
 
     /* ======================================================
@@ -5139,6 +5575,10 @@ bot.on(
 
       delete PENDING_ENTRIES[
         coin
+      ];
+
+      delete USER_STATE[
+        chatId
       ];
 
       await replyTelegram(
@@ -5293,19 +5733,18 @@ Masukkan 0 jika order tidak match.`
           "_"
         )[1];
 
+      const trade =
+        ACTIVE_TRADES[
+          coin
+        ];
+
       if (
-        ACTIVE_TRADES[
-          coin
-        ]
+        trade
       ) {
-        ACTIVE_TRADES[
-          coin
-        ].tpReached =
+        trade.tpReached =
           false;
 
-        ACTIVE_TRADES[
-          coin
-        ].slReached =
+        trade.slReached =
           false;
 
         await replyTelegram(
@@ -5345,14 +5784,13 @@ bot.on(
         chatId
       ];
 
-    if (
-      !state
-    ) {
+    if (!state) {
       return;
     }
 
     /*
-      Ignore commands while waiting for numeric input.
+      Command jangan diproses
+      sebagai numeric input.
     */
 
     if (
@@ -5380,7 +5818,8 @@ bot.on(
 
       if (
         !parsed.valid ||
-        parsed.value <= 0
+        parsed.value <=
+          0
       ) {
         await replyTelegram(
           chatId,
@@ -5398,9 +5837,7 @@ bot.on(
           state.coin
         ];
 
-      if (
-        !entry
-      ) {
+      if (!entry) {
         delete USER_STATE[
           chatId
         ];
@@ -5414,90 +5851,17 @@ bot.on(
       }
 
       /* ====================================================
-         FIRST QUANTITY ESTIMATE
-
-         Kita perlu quantity estimate dahulu
-         sebelum boleh scan orderbook depth.
+         RESOLVE FINAL QUANTITY-AWARE ORDER
       ==================================================== */
 
-      const firstEntryPrice =
-        entry.preliminaryEntry ||
-        entry.technicalEntry;
-
-      const firstFinalSellableUnit =
-        (
-          1 -
-          BUY_FEE
-        ) *
-        (
-          1 -
-          SELL_FEE
-        );
-
-      const firstNetPerUnit =
-        entry.tp *
-          firstFinalSellableUnit -
-        firstEntryPrice;
-
-      if (
-        firstNetPerUnit <= 0
-      ) {
-        delete USER_STATE[
-          chatId
-        ];
-
-        delete PENDING_ENTRIES[
-          state.coin
-        ];
-
-        await replyTelegram(
-          chatId,
-          `⚠️ ENTRY CANCELLED
-
-TP reference tidak memberikan
-net profit positif selepas fee.`
-        );
-
-        return;
-      }
-
-      const firstRequiredQuantity =
-        Math.ceil(
-          targetProfit /
-            firstNetPerUnit
-        );
-
-      /* ====================================================
-         QUANTITY-AWARE ORDERBOOK CHECK
-      ==================================================== */
-
-      const depthSelection =
-        await chooseQuantityAwareLimitEntry({
-          coin:
-            entry.coin,
-
-          technicalEntry:
-            entry.technicalEntry,
-
-          requiredQuantity:
-            firstRequiredQuantity,
-        });
-
-      const finalEntryPrice =
-        depthSelection.finalEntry;
-
-      /* ====================================================
-         RECHECK ROOM USING FINAL LIMIT ENTRY
-      ==================================================== */
-
-      const finalRoom =
-        evaluateRoomToTP(
-          entry.coin,
-          finalEntryPrice
+      const plan =
+        await resolveFinalOrderPlan(
+          entry,
+          targetProfit
         );
 
       if (
-        !finalRoom.allowed
+        !plan.allowed
       ) {
         delete USER_STATE[
           chatId
@@ -5513,13 +5877,7 @@ net profit positif selepas fee.`
 
 🪙 ${entry.coin}
 
-📌 Final Limit Entry:
-RM${formatPrice(
-            entry.coin,
-            finalEntryPrice
-          )}
-
-❌ ${finalRoom.reason}
+❌ ${plan.reason}
 
 📡 Monitoring Next Entry...`
         );
@@ -5527,189 +5885,9 @@ RM${formatPrice(
         return;
       }
 
-      /* ====================================================
-         RECALCULATE TP / SL USING FINAL ENTRY
-      ==================================================== */
-
-      const finalRisk =
-        buildEntryRiskLevels({
-          coin:
-            entry.coin,
-
-          entryPrice:
-            finalEntryPrice,
-
-          brokenResistance:
-            entry.brokenResistance ||
-            null,
-
-          room:
-            finalRoom,
-
-          confidence:
-            entry.confidence,
-        });
-
-      /* ====================================================
-         FINAL QUANTITY CALCULATION
-      ==================================================== */
-
-      const finalSellableUnitPerGrossUnit =
-        (
-          1 -
-          BUY_FEE
-        ) *
-        (
-          1 -
-          SELL_FEE
-        );
-
-      const finalNetPerUnit =
-        finalRisk.tp *
-          finalSellableUnitPerGrossUnit -
-        finalEntryPrice;
-
-      if (
-        finalNetPerUnit <= 0
-      ) {
-        delete USER_STATE[
-          chatId
-        ];
-
-        delete PENDING_ENTRIES[
-          state.coin
-        ];
-
-        await replyTelegram(
-          chatId,
-          "⚠️ ENTRY CANCELLED — NET PROFIT NEGATIVE AFTER FINAL ENTRY."
-        );
-
-        return;
-      }
-
-      const quantity =
-        Math.ceil(
-          targetProfit /
-            finalNetPerUnit
-        );
-
-      /*
-        Quantity changed after final entry.
-
-        Re-run orderbook once using
-        FINAL required quantity.
-      */
-
-      const finalDepthSelection =
-        await chooseQuantityAwareLimitEntry({
-          coin:
-            entry.coin,
-
-          technicalEntry:
-            entry.technicalEntry,
-
-          requiredQuantity:
-            quantity,
-        });
-
-      let lockedEntryPrice =
-        finalDepthSelection
-          .finalEntry;
-
-      /*
-        If orderbook second pass changes price,
-        do one final room/risk calculation.
-      */
-
-      const lockedRoom =
-        evaluateRoomToTP(
-          entry.coin,
-          lockedEntryPrice
-        );
-
-      if (
-        !lockedRoom.allowed
-      ) {
-        delete USER_STATE[
-          chatId
-        ];
-
-        delete PENDING_ENTRIES[
-          state.coin
-        ];
-
-        await replyTelegram(
-          chatId,
-          `⚠️ ENTRY CANCELLED
-
-Final orderbook entry leaves
-insufficient room to TP.
-
-Reason:
-${lockedRoom.reason}`
-        );
-
-        return;
-      }
-
-      const lockedRisk =
-        buildEntryRiskLevels({
-          coin:
-            entry.coin,
-
-          entryPrice:
-            lockedEntryPrice,
-
-          brokenResistance:
-            entry.brokenResistance ||
-            null,
-
-          room:
-            lockedRoom,
-
-          confidence:
-            entry.confidence,
-        });
-
-      /*
-        Recalculate required quantity
-        one last time using locked entry.
-      */
-
-      const lockedNetPerUnit =
-        lockedRisk.tp *
-          finalSellableUnitPerGrossUnit -
-        lockedEntryPrice;
-
-      if (
-        lockedNetPerUnit <= 0
-      ) {
-        delete USER_STATE[
-          chatId
-        ];
-
-        delete PENDING_ENTRIES[
-          state.coin
-        ];
-
-        await replyTelegram(
-          chatId,
-          "⚠️ ENTRY CANCELLED — FINAL PROFIT ROOM NOT VIABLE."
-        );
-
-        return;
-      }
-
-      const lockedQuantity =
-        Math.ceil(
-          targetProfit /
-            lockedNetPerUnit
-        );
-
       const value =
-        lockedQuantity *
-        lockedEntryPrice;
+        plan.quantity *
+        plan.entryPrice;
 
       const maxCapital =
         MAX_CAPITAL[
@@ -5747,7 +5925,7 @@ RM${maxCapital.toFixed(
       }
 
       /* ====================================================
-         LOCK FINAL ORDER DATA
+         LOCK FINAL ORDER
       ==================================================== */
 
       USER_STATE[
@@ -5760,42 +5938,45 @@ RM${maxCapital.toFixed(
           entry.coin,
 
         quantity:
-          lockedQuantity,
+          plan.quantity,
 
         value,
 
         targetProfit,
 
         entryPrice:
-          lockedEntryPrice,
+          plan.entryPrice,
 
         tp:
-          lockedRisk.tp,
+          plan.risk.tp,
 
         sl:
-          lockedRisk.sl,
-
-        fullFillEstimated:
-          finalDepthSelection
-            .fullFillEstimated,
-
-        orderbookDepth:
-          finalDepthSelection
-            .depthAvailable,
-
-        entrySource:
-          finalDepthSelection
-            .source,
+          plan.risk.sl,
 
         technicalEntry:
           entry.technicalEntry,
+
+        fullFillEstimated:
+          plan.depthSelection
+            ?.fullFillEstimated ||
+          false,
+
+        orderbookDepth:
+          plan.depthSelection
+            ?.depthAvailable ||
+          0,
+
+        entrySource:
+          plan.depthSelection
+            ?.source ||
+          "TECHNICAL ENTRY",
       };
 
       const fillText =
-        finalDepthSelection
-          .fullFillEstimated
+        plan.depthSelection
+          ?.fullFillEstimated
           ? "✅ DEPTH CUKUP"
-          : "⚠️ DEPTH TAK CUKUP / PARTIAL MATCH MUNGKIN";
+          : "⚠️ DEPTH TAK CUKUP — PARTIAL MATCH MUNGKIN";
 
       await replyTelegram(
         chatId,
@@ -5812,11 +5993,11 @@ RM${formatPrice(
 📌 Final Limit Entry:
 RM${formatPrice(
           entry.coin,
-          lockedEntryPrice
+          plan.entryPrice
         )}
 
 📦 Suggested Quantity:
-${lockedQuantity.toLocaleString(
+${plan.quantity.toLocaleString(
           "en-MY"
         )} ${entry.coin}
 
@@ -5828,13 +6009,13 @@ RM${value.toFixed(
 🎯 TP:
 RM${formatPrice(
           entry.coin,
-          lockedRisk.tp
+          plan.risk.tp
         )}
 
 🛑 SL:
 RM${formatPrice(
           entry.coin,
-          lockedRisk.sl
+          plan.risk.sl
         )}
 
 💰 Target Net Profit:
@@ -5846,7 +6027,11 @@ RM${targetProfit.toFixed(
 ${fillText}
 
 📌 Entry Source:
-${finalDepthSelection.source}
+${
+  plan.depthSelection
+    ?.source ||
+  "TECHNICAL ENTRY"
+}
 
 ━━━━━━━━━━━━━━
 
@@ -5892,14 +6077,13 @@ PLACE ORDER?`,
         );
 
       /*
-        THIS fixes previous bug:
-
-        "abc" is NOT treated as 0.
+        "abc" tidak akan jadi 0.
       */
 
       if (
         !parsed.valid ||
-        parsed.value < 0
+        parsed.value <
+          0
       ) {
         await replyTelegram(
           chatId,
@@ -5925,9 +6109,7 @@ Atau:
           state.coin
         ];
 
-      if (
-        !entry
-      ) {
+      if (!entry) {
         delete USER_STATE[
           chatId
         ];
@@ -5941,11 +6123,12 @@ Atau:
       }
 
       /* ====================================================
-         ZERO = ORDER NOT MATCHED
+         ZERO MATCH
       ==================================================== */
 
       if (
-        matchedQuantity === 0
+        matchedQuantity ===
+        0
       ) {
         const coin =
           state.coin;
@@ -5959,8 +6142,8 @@ Atau:
         ];
 
         /*
-          No trade happened.
-          Release cooldown.
+          No trade happened,
+          release entry cooldown.
         */
 
         delete LAST_SIGNAL[
@@ -6030,7 +6213,8 @@ RM${formatPrice(
           ? (
               adjustedProfit /
               state.targetProfit
-            ) * 100
+            ) *
+            100
           : 0;
 
       ACTIVE_TRADES[
@@ -6144,7 +6328,8 @@ RM${state.targetProfit.toFixed(
 ${formatMoney(
           adjustedProfit
         )}${
-          adjustedProfit < 0
+          adjustedProfit <
+          0
             ? " ⚠️"
             : ""
         }
@@ -6183,7 +6368,8 @@ ${targetAchievement.toFixed(
 
       if (
         !parsed.valid ||
-        parsed.value <= 0
+        parsed.value <=
+          0
       ) {
         await replyTelegram(
           chatId,
@@ -6201,9 +6387,7 @@ ${targetAchievement.toFixed(
           state.coin
         ];
 
-      if (
-        !trade
-      ) {
+      if (!trade) {
         delete USER_STATE[
           chatId
         ];
@@ -6265,7 +6449,8 @@ ${sellFeeUnit.toFixed(
         )} ${state.coin}
 
 📊 Net ${
-          pnl >= 0
+          pnl >=
+            0
             ? "Profit"
             : "Loss"
         }:
@@ -6290,6 +6475,7 @@ ${formatMoney(
     }
   }
 );
+
 /* ============================================================
    MANUAL COMMANDS
 ============================================================ */
@@ -6393,13 +6579,15 @@ bot.onText(
       }
 
       const ratioText =
-        analysis.relativeVolume.ratio !==
-          null &&
-        analysis.relativeVolume.ratio !==
-          undefined
-          ? analysis.relativeVolume.ratio.toFixed(
-              2
-            )
+        analysis.relativeVolume
+          .ratio !== null &&
+        analysis.relativeVolume
+          .ratio !== undefined
+          ? analysis.relativeVolume
+              .ratio
+              .toFixed(
+                2
+              )
           : "N/A";
 
       lines.push(
@@ -6417,7 +6605,8 @@ ${analysis.priceTrend.direction} ${formatPercent(
 
 Volume:
 ${ratioText}x ${
-          analysis.relativeVolume.label ||
+          analysis.relativeVolume
+            .label ||
           ""
         }`
       );
@@ -6499,7 +6688,7 @@ ${lines.join(
 bot.onText(
   /\/status/i,
   async (msg) => {
-    const status =
+    const stored =
       CORE_COINS.map(
         (coin) =>
           `${coin}: ${
@@ -6525,7 +6714,7 @@ bot.onText(
       msg.chat.id,
       `✅ BOT ACTIVE
 
-${status}
+${stored}
 
 📡 Price Alert:
 5 MIN
@@ -6533,8 +6722,20 @@ ${status}
 📊 Market Structure:
 15 MIN
 
+🟢 Support:
+LIVE ORDERBOOK BUY WALL
+
+🔴 Resistance:
+LIVE ORDERBOOK SELL WALL
+
+⭐ Wall Rating:
+1–10 RELATIVE DEPTH
+
 👀 Breakout Watch:
 EXECUTED-TRADE BASED
+
+🧾 Anti Fake Breakout:
+ACTIVE
 
 📚 Orderbook Entry:
 QUANTITY-AWARE
@@ -6598,8 +6799,17 @@ app.get(
         marketStructure:
           "15 minutes",
 
+        supportResistance:
+          "live orderbook first",
+
+        wallRating:
+          "relative depth 1-10",
+
         breakoutWatch:
           "executed-trade based",
+
+        antiFakeBreakout:
+          true,
 
         scalpingScan:
           "1 minute",
@@ -6809,6 +7019,76 @@ app.get(
 );
 
 /* ============================================================
+   ORDERBOOK STRUCTURE ENDPOINT
+============================================================ */
+
+app.get(
+  "/book-structure/:coin",
+  async (
+    req,
+    res
+  ) => {
+    const coin =
+      String(
+        req.params.coin ||
+          ""
+      ).toUpperCase();
+
+    if (
+      !SCAN_COINS.includes(
+        coin
+      )
+    ) {
+      return res
+        .status(
+          400
+        )
+        .json({
+          error:
+            "Unsupported coin",
+        });
+    }
+
+    const ticker =
+      await getTicker(
+        coin
+      );
+
+    if (
+      !ticker
+    ) {
+      return res
+        .status(
+          502
+        )
+        .json({
+          error:
+            "Unable to fetch ticker",
+        });
+    }
+
+    const structure =
+      await getOrderBookStructure(
+        coin,
+        ticker.currentPrice
+      );
+
+    return res.json({
+      ready:
+        Boolean(
+          structure
+        ),
+
+      currentPrice:
+        ticker.currentPrice,
+
+      data:
+        structure,
+    });
+  }
+);
+
+/* ============================================================
    MARKET STRUCTURE ENDPOINT
 ============================================================ */
 
@@ -6851,6 +7131,72 @@ app.get(
         ),
 
       data,
+    });
+  }
+);
+
+/* ============================================================
+   NEXT RESISTANCE ENDPOINT
+============================================================ */
+
+app.get(
+  "/next-resistance/:coin",
+  async (
+    req,
+    res
+  ) => {
+    const coin =
+      String(
+        req.params.coin ||
+          ""
+      ).toUpperCase();
+
+    if (
+      !SCAN_COINS.includes(
+        coin
+      )
+    ) {
+      return res
+        .status(
+          400
+        )
+        .json({
+          error:
+            "Unsupported coin",
+        });
+    }
+
+    const ticker =
+      await getTicker(
+        coin
+      );
+
+    if (
+      !ticker
+    ) {
+      return res
+        .status(
+          502
+        )
+        .json({
+          error:
+            "Unable to fetch ticker",
+        });
+    }
+
+    const resistance =
+      await findNextOrderBookResistance(
+        coin,
+        ticker.currentPrice
+      );
+
+    return res.json({
+      coin,
+
+      currentPrice:
+        ticker.currentPrice,
+
+      resistance,
     });
   }
 );
@@ -7121,12 +7467,46 @@ app.listen(
     );
 
     /*
-      Start data collection immediately.
+      Start collectors immediately.
     */
 
     await collectTradeHistory();
 
     await updateMemory();
+
+    /*
+      Test orderbook structure immediately.
+      Tidak perlu tunggu 15 minit
+      untuk support/resistance.
+    */
+
+    for (
+      const coin of
+      CORE_COINS
+    ) {
+      const ticker =
+        await getTicker(
+          coin
+        );
+
+      if (
+        ticker
+      ) {
+        const structure =
+          await getOrderBookStructure(
+            coin,
+            ticker.currentPrice
+          );
+
+        if (
+          structure
+        ) {
+          console.log(
+            `${coin} ORDERBOOK STRUCTURE READY`
+          );
+        }
+      }
+    }
 
     await sendTelegram(
       `✅ BOT ONLINE
@@ -7139,7 +7519,16 @@ app.listen(
 📊 MARKET STRUCTURE:
 15 MIN
 
-👀 ANTI-FAKE BREAKOUT WATCH:
+🟢 SUPPORT:
+LIVE BUY WALL
+
+🔴 RESISTANCE:
+LIVE SELL WALL
+
+⭐ WALL RATING:
+RELATIVE DEPTH 1–10
+
+👀 ANTI-FAKE BREAKOUT:
 ACTIVE
 
 🧾 EXECUTED TRADE CONFIRMATION:
@@ -7175,8 +7564,6 @@ BACKGROUND ONLY`
 /* ============================================================
    EXECUTED TRADE COLLECTOR
    EVERY 5 SECONDS
-
-   Breakout confirmation is event-based.
 ============================================================ */
 
 setInterval(
@@ -7187,6 +7574,8 @@ setInterval(
 /* ============================================================
    PRICE MEMORY
    EVERY 15 SECONDS
+
+   Used for trend/momentum only.
 ============================================================ */
 
 setInterval(
@@ -7195,7 +7584,7 @@ setInterval(
 );
 
 /* ============================================================
-   GENERAL SCALPING SCANNER
+   GENERAL SCALPING SCAN
    EVERY 1 MINUTE
 ============================================================ */
 
@@ -7217,6 +7606,9 @@ setInterval(
 /* ============================================================
    MARKET STRUCTURE
    EVERY 15 MINUTES
+
+   Support/Resistance read live
+   from orderbook on every run.
 ============================================================ */
 
 setInterval(
@@ -7227,8 +7619,8 @@ setInterval(
 /* ============================================================
    NO SCHEDULED 2H TELEGRAM ALERT
 
-   2H analysis kekal untuk:
-   - hidden safety
+   2H still used for:
+   - hidden scalper safety
    - /flow
    - /flow/:coin
 ============================================================ */
