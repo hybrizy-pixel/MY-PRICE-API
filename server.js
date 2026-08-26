@@ -123,6 +123,9 @@ let LAST_GRT_BUY_NOW_SIGNAL = 0;
 let LAST_TUNING_SUGGESTION_COUNT = 0;
 let GRT_DYNAMIC_BUY_VOLUME_MIN_PCT = 55;
 
+let LAST_BTC_SURGE_STATE =
+  "BUY_SURGE_OFF";
+
 /* ============================================================
    TRADE HISTORY
 ============================================================ */
@@ -268,6 +271,18 @@ const MAX_ENTRY_CHASE_PCT =
 const MIN_GROSS_ROOM_PCT =
   1.30;
 
+const GRT_MIN_PRACTICAL_TP_ROOM_PCT =
+  0.90;
+
+const TP_RESISTANCE_BUFFER_PCT =
+  0.25;
+
+const MEANINGFUL_RESISTANCE_MIN_RATING =
+  5;
+
+const MEANINGFUL_RESISTANCE_MIN_RATIO =
+  1.35;
+
 /* ============================================================
    DEFAULT TP
 ============================================================ */
@@ -340,6 +355,7 @@ const GRT_MA_NEAR_CROSS_PCT =
 
 const BTC_BUY_SURGE_MIN_BUY_PCT = 55;
 const BTC_BUY_SURGE_MIN_PRICE_RESPONSE_PCT = 0.03;
+const BTC_BUY_SURGE_CONFIRM_MIN_AGE_SEC = 120;
 
 const GRT_EARLY_MIN_BUY_VOLUME_PCT = 52;
 const GRT_EARLY_MIN_PRICE_RESPONSE_PCT = 0.03;
@@ -736,6 +752,7 @@ function updateDailyWatchTrade(
       trade.volume;
   }
 }
+
 /* ============================================================
    BASIC HELPERS
 ============================================================ */
@@ -911,6 +928,7 @@ function getPair(
 
   return `${coin}MYR`;
 }
+
 /* ============================================================
    TELEGRAM HELPERS
 ============================================================ */
@@ -959,7 +977,6 @@ async function replyTelegram(
     return null;
   }
 }
-
 /* ============================================================
    LUNO TICKER
 ============================================================ */
@@ -1006,7 +1023,8 @@ async function getTicker(
       );
 
     if (
-      currentPrice <= 0
+      currentPrice <=
+      0
     ) {
       return null;
     }
@@ -1017,6 +1035,7 @@ async function getTicker(
       currentPrice,
       bid,
       ask,
+
       timestamp:
         Date.now(),
     };
@@ -1130,6 +1149,7 @@ async function getTopOrderBook(
       pair,
       bids,
       asks,
+
       timestamp:
         Date.now(),
     };
@@ -1623,6 +1643,7 @@ async function backfillTradeHistory() {
       false;
   }
 }
+
 /* ============================================================
    TRADE WINDOW
 ============================================================ */
@@ -1706,7 +1727,8 @@ function getExecutedFlowSummary(
     sellCount;
 
   const buyVolumePct =
-    totalVolume > 0
+    totalVolume >
+      0
       ? (
           buyVolume /
           totalVolume
@@ -1714,7 +1736,8 @@ function getExecutedFlowSummary(
       : 0;
 
   const sellVolumePct =
-    totalVolume > 0
+    totalVolume >
+      0
       ? (
           sellVolume /
           totalVolume
@@ -1722,7 +1745,8 @@ function getExecutedFlowSummary(
       : 0;
 
   const buyFrequencyPct =
-    totalCount > 0
+    totalCount >
+      0
       ? (
           buyCount /
           totalCount
@@ -1730,7 +1754,8 @@ function getExecutedFlowSummary(
       : 0;
 
   const sellFrequencyPct =
-    totalCount > 0
+    totalCount >
+      0
       ? (
           sellCount /
           totalCount
@@ -2072,6 +2097,7 @@ async function getLunoCandles(
 
           params: {
             pair,
+
             duration:
               durationSec,
 
@@ -2126,6 +2152,10 @@ async function getLunoCandles(
           candle.open >
             0 &&
           candle.close >
+            0 &&
+          candle.high >
+            0 &&
+          candle.low >
             0
       )
       .sort(
@@ -2143,6 +2173,94 @@ async function getLunoCandles(
     );
 
     return [];
+  }
+}
+
+/* ============================================================
+   GRT ROLLING 24H MARKET STATS
+============================================================ */
+
+const GRT_24H_SNAPSHOT_FILE =
+  process.env.GRT_24H_SNAPSHOT_FILE ||
+  "/tmp/grt-24h-snapshot.json";
+
+let GRT_24H_PREVIOUS_SNAPSHOT =
+  null;
+
+
+/* ============================================================
+   24H SNAPSHOT SAVE / LOAD
+============================================================ */
+
+function saveGRT24hSnapshot(
+  snapshot
+) {
+  if (
+    !snapshot
+  ) {
+    return;
+  }
+
+  try {
+    fs.writeFileSync(
+      GRT_24H_SNAPSHOT_FILE,
+      JSON.stringify(
+        snapshot,
+        null,
+        2
+      )
+    );
+  } catch (
+    error
+  ) {
+    console.log(
+      "GRT 24H snapshot save error:",
+      error.message
+    );
+  }
+}
+
+function loadGRT24hSnapshot() {
+  try {
+    if (
+      !fs.existsSync(
+        GRT_24H_SNAPSHOT_FILE
+      )
+    ) {
+      return;
+    }
+
+    const raw =
+      fs.readFileSync(
+        GRT_24H_SNAPSHOT_FILE,
+        "utf8"
+      );
+
+    if (
+      !raw
+    ) {
+      return;
+    }
+
+    const parsed =
+      JSON.parse(
+        raw
+      );
+
+    if (
+      parsed &&
+      parsed.timestamp
+    ) {
+      GRT_24H_PREVIOUS_SNAPSHOT =
+        parsed;
+    }
+  } catch (
+    error
+  ) {
+    console.log(
+      "GRT 24H snapshot load error:",
+      error.message
+    );
   }
 }
 
@@ -2196,8 +2314,10 @@ function calculateRSI(
     0;
 
   for (
-    let i = 1;
-    i <= period;
+    let i =
+      1;
+    i <=
+      period;
     i++
   ) {
     const change =
@@ -2207,7 +2327,8 @@ function calculateRSI(
       ];
 
     if (
-      change >= 0
+      change >=
+      0
     ) {
       gains +=
         change;
@@ -2229,7 +2350,8 @@ function calculateRSI(
 
   for (
     let i =
-      period + 1;
+      period +
+      1;
     i <
     closes.length;
     i++
@@ -2241,12 +2363,14 @@ function calculateRSI(
       ];
 
     const gain =
-      change > 0
+      change >
+        0
         ? change
         : 0;
 
     const loss =
-      change < 0
+      change <
+        0
         ? Math.abs(
             change
           )
@@ -2322,6 +2446,228 @@ function calculateSMA(
   return average(
     slice
   );
+}
+
+/* ============================================================
+   CANDLE TECHNICAL HELPER
+============================================================ */
+
+function analyzeCandle(
+  candle
+) {
+  if (
+    !candle ||
+    candle.open <=
+      0 ||
+    candle.high <=
+      0 ||
+    candle.low <=
+      0 ||
+    candle.close <=
+      0
+  ) {
+    return {
+      ready:
+        false,
+    };
+  }
+
+  const bodyPct =
+    percentChange(
+      candle.open,
+      candle.close
+    );
+
+  const range =
+    candle.high -
+    candle.low;
+
+  const closePositionPct =
+    range >
+      0
+      ? (
+          (
+            candle.close -
+            candle.low
+          ) /
+          range
+        ) * 100
+      : 50;
+
+  const bullish =
+    candle.close >
+    candle.open;
+
+  const bearish =
+    candle.close <
+    candle.open;
+
+  const strongBullish =
+    bullish &&
+    bodyPct >=
+      0.20 &&
+    closePositionPct >=
+      65;
+
+  const strongBearish =
+    bearish &&
+    bodyPct <=
+      -0.20 &&
+    closePositionPct <=
+      35;
+
+  let direction =
+    "NEUTRAL";
+
+  if (
+    strongBullish
+  ) {
+    direction =
+      "STRONG BULLISH";
+  } else if (
+    bullish
+  ) {
+    direction =
+      "BULLISH";
+  } else if (
+    strongBearish
+  ) {
+    direction =
+      "STRONG BEARISH";
+  } else if (
+    bearish
+  ) {
+    direction =
+      "BEARISH";
+  }
+
+  return {
+    ready:
+      true,
+
+    open:
+      candle.open,
+
+    high:
+      candle.high,
+
+    low:
+      candle.low,
+
+    close:
+      candle.close,
+
+    bodyPct,
+
+    closePositionPct,
+
+    bullish,
+    bearish,
+
+    strongBullish,
+    strongBearish,
+
+    direction,
+  };
+}
+
+/* ============================================================
+   GRT 5M CANDLE MOMENTUM
+
+   5M is the fast trigger.
+============================================================ */
+
+async function getGRT5mCandleMomentum() {
+  const candles =
+    await getLunoCandles(
+      "GRT",
+      300,
+      8
+    );
+
+  if (
+    !candles.length
+  ) {
+    return {
+      ready:
+        false,
+    };
+  }
+
+  const now =
+    Date.now();
+
+  const durationMs =
+    300 *
+    1000;
+
+  const completed =
+    getCompletedCandles(
+      candles,
+      300
+    );
+
+  const live =
+    candles.find(
+      (candle) =>
+        candle.timestamp +
+          durationMs >
+        now
+    );
+
+  const liveAgeSec =
+    live
+      ? (
+          now -
+          live.timestamp
+        ) /
+        1000
+      : 0;
+
+  let selected =
+    null;
+
+  let usingLive =
+    false;
+
+  if (
+    live &&
+    liveAgeSec >=
+      MOMENTUM_MIN_CURRENT_CANDLE_AGE_SEC
+  ) {
+    selected =
+      live;
+
+    usingLive =
+      true;
+  } else if (
+    completed.length
+  ) {
+    selected =
+      completed[
+        completed.length -
+          1
+      ];
+  }
+
+  if (
+    !selected
+  ) {
+    return {
+      ready:
+        false,
+    };
+  }
+
+  return {
+    ...analyzeCandle(
+      selected
+    ),
+
+    usingLive,
+
+    liveAgeSec,
+  };
 }
 
 /* ============================================================
@@ -2534,7 +2880,8 @@ async function getGRT1hMA() {
   }
 
   const gapPct =
-    ma50 > 0
+    ma50 >
+      0
       ? (
           (
             ma9 -
@@ -2583,6 +2930,165 @@ async function getGRT1hMA() {
       GRT_MA_NEAR_CROSS_PCT,
   };
 }
+
+/* ============================================================
+   GRT 1H CANDLE TREND PERMISSION
+
+   1H does NOT trigger the entry.
+   It decides whether the wider trend
+   allows the 5M momentum to push higher.
+============================================================ */
+
+async function getGRT1hCandleTrend() {
+  const candles =
+    await getLunoCandles(
+      "GRT",
+      3600,
+      8
+    );
+
+  const completed =
+    getCompletedCandles(
+      candles,
+      3600
+    );
+
+  if (
+    !completed.length
+  ) {
+    return {
+      ready:
+        false,
+    };
+  }
+
+  const latest =
+    completed[
+      completed.length -
+        1
+    ];
+
+  const analysis =
+    analyzeCandle(
+      latest
+    );
+
+  if (
+    !analysis.ready
+  ) {
+    return {
+      ready:
+        false,
+    };
+  }
+
+  return {
+    ...analysis,
+
+    timestamp:
+      latest.timestamp,
+
+    permission:
+      analysis.strongBearish
+        ? "BLOCK"
+        : analysis.strongBullish
+          ? "BULLISH"
+          : "NEUTRAL",
+  };
+}
+
+/* ============================================================
+   GRT MULTI-TIMEFRAME TREND PERMISSION
+============================================================ */
+
+async function getGRTTrendPermission() {
+  const [
+    candle5m,
+    rsi5m,
+    candle1h,
+    ma1h,
+  ] =
+    await Promise.all([
+      getGRT5mCandleMomentum(),
+      getGRT5mRSI(),
+      getGRT1hCandleTrend(),
+      getGRT1hMA(),
+    ]);
+
+  if (
+    !candle5m.ready ||
+    !rsi5m.ready ||
+    !candle1h.ready ||
+    !ma1h.ready
+  ) {
+    return {
+      ready:
+        false,
+
+      status:
+        "VALIDATING",
+
+      candle5m,
+      rsi5m,
+      candle1h,
+      ma1h,
+    };
+  }
+
+  const fiveMinutePositive =
+    (
+      candle5m.bullish ||
+      candle5m.strongBullish
+    ) &&
+    rsi5m.direction ===
+      "RISING";
+
+  const oneHourBlocked =
+    candle1h.strongBearish &&
+    !ma1h.bullish &&
+    !ma1h.nearCross;
+
+  const oneHourSupportive =
+    !oneHourBlocked &&
+    (
+      ma1h.bullish ||
+      ma1h.nearCross ||
+      candle1h.bullish ||
+      candle1h.strongBullish
+    );
+
+  let status =
+    "VALIDATING";
+
+  if (
+    oneHourBlocked
+  ) {
+    status =
+      "DONT_BUY";
+  } else if (
+    fiveMinutePositive &&
+    oneHourSupportive
+  ) {
+    status =
+      "UPWARD_ALLOWED";
+  }
+
+  return {
+    ready:
+      true,
+
+    status,
+
+    fiveMinutePositive,
+    oneHourBlocked,
+    oneHourSupportive,
+
+    candle5m,
+    rsi5m,
+    candle1h,
+    ma1h,
+  };
+}
 /* ============================================================
    5M EXECUTED VOLUME WINDOWS
 ============================================================ */
@@ -2603,12 +3109,14 @@ function getExecuted5mWindows(
     ) *
     windowMs;
 
-  const windows = [];
+  const windows =
+    [];
 
   for (
     let index =
       numberOfWindows;
-    index >= 1;
+    index >=
+      1;
     index--
   ) {
     const start =
@@ -2713,7 +3221,7 @@ function getCurrentExecuted5mWindow(
       (trade) =>
         trade.timestamp >=
         start
-  );
+    );
 
   let buyVolume =
     0;
@@ -2815,12 +3323,11 @@ function getCurrentExecuted5mWindow(
 /* ============================================================
    BUY VOLUME BASELINE
 
-   IMPORTANT:
-   We compare CURRENT EXECUTED BUY volume
-   against previous completed 5M BUY volumes.
+   Current executed BUY volume is compared
+   against previous completed 5M windows.
 
-   We no longer treat total volume alone
-   as a positive momentum signal.
+   Total candle volume alone is NOT treated
+   as a bullish signal.
 ============================================================ */
 
 async function getBuyVolumeBaseline(
@@ -2859,17 +3366,6 @@ async function getBuyVolumeBaseline(
     ).slice(
       -MOMENTUM_BASELINE_WINDOWS
     );
-
-  /*
-    Candle volume from Luno does not tell
-    BUY vs SELL direction.
-
-    Therefore authenticated candles are used
-    only as a secondary total-volume reference.
-
-    Positive BUY surge must still come from
-    executed trades collected by the bot.
-  */
 
   const localWindows =
     getExecuted5mWindows(
@@ -2923,11 +3419,6 @@ async function getBuyVolumeBaseline(
           0
       );
 
-  /*
-    BUY baseline needs at least 3 local windows.
-    Total-volume baseline may come from Luno candles.
-  */
-
   const buyBaselineReady =
     validLocalBuyVolumes.length >=
     MOMENTUM_MIN_BASELINE_WINDOWS;
@@ -2960,18 +3451,18 @@ async function getBuyVolumeBaseline(
         )
       : null;
 
-const buyIncreasePct =
-  buyBaselineAverage &&
-  buyBaselineAverage >
-    0
-    ? (
-        (
-          projectedBuyVolume -
+  const buyIncreasePct =
+    buyBaselineAverage &&
+    buyBaselineAverage >
+      0
+      ? (
+          (
+            projectedBuyVolume -
+            buyBaselineAverage
+          ) /
           buyBaselineAverage
-        ) /
-        buyBaselineAverage
-      ) * 100
-    : null;
+        ) * 100
+      : null;
 
   const totalIncreasePct =
     totalBaselineAverage &&
@@ -2995,7 +3486,6 @@ const buyIncreasePct =
     current,
 
     buyBaselineAverage,
-
     totalBaselineAverage,
 
     buyBaselineWindows:
@@ -3005,7 +3495,6 @@ const buyIncreasePct =
       totalBaselineSource.length,
 
     buyIncreasePct,
-
     totalIncreasePct,
   };
 }
@@ -3076,7 +3565,8 @@ function clusterOrderBook(
   orders,
   tolerancePct
 ) {
-  const clusters = [];
+  const clusters =
+    [];
 
   for (
     const order of
@@ -3232,10 +3722,6 @@ function calculateWallStrength(
             10;
         }
 
-        /*
-          Nearby walls matter more.
-        */
-
         if (
           distancePct <=
           0.20
@@ -3248,7 +3734,6 @@ function calculateWallStrength(
           ...cluster,
 
           ratio,
-
           distancePct,
 
           rating:
@@ -3324,6 +3809,56 @@ function selectRelevantWall(
         a.rating
       )
   )[0];
+}
+
+/* ============================================================
+   SELECT MEANINGFUL RESISTANCE FOR TP
+
+   TP engine does NOT blindly use
+   the nearest ask wall.
+
+   Weak / minor walls may be skipped.
+============================================================ */
+
+function selectMeaningfulResistance(
+  askWalls,
+  currentPrice
+) {
+  if (
+    !Array.isArray(
+      askWalls
+    ) ||
+    !askWalls.length
+  ) {
+    return null;
+  }
+
+  const valid =
+    askWalls
+      .filter(
+        (wall) =>
+          wall.price >
+            currentPrice &&
+          (
+            wall.rating >=
+              MEANINGFUL_RESISTANCE_MIN_RATING ||
+            wall.ratio >=
+              MEANINGFUL_RESISTANCE_MIN_RATIO
+          )
+      )
+      .sort(
+        (a, b) =>
+          a.price -
+          b.price
+      );
+
+  if (
+    !valid.length
+  ) {
+    return null;
+  }
+
+  return valid[0];
 }
 
 /* ============================================================
@@ -3407,6 +3942,12 @@ async function getOrderBookStructure(
       askWalls
     );
 
+  const meaningfulResistance =
+    selectMeaningfulResistance(
+      askWalls,
+      currentPrice
+    );
+
   const totalBidLiquidity =
     nearbyBids.reduce(
       (
@@ -3456,6 +3997,7 @@ async function getOrderBookStructure(
 
     support,
     resistance,
+    meaningfulResistance,
 
     bidWalls,
     askWalls,
@@ -3575,6 +4117,10 @@ async function getGRTLiquidityAnalysis(
     support,
     resistance,
 
+    meaningfulResistance:
+      structure
+        .meaningfulResistance,
+
     bidLiquidityPct:
       structure.bidLiquidityPct,
 
@@ -3586,18 +4132,20 @@ async function getGRTLiquidityAnalysis(
 }
 
 /* ============================================================
-   BTC BUY SURGE RADAR
+   BTC BUY SURGE STATE
 
-   BTC IS NOT A TRADE SIGNAL.
+   BTC IS ONLY A MARKET LEAD INDICATOR.
 
-   Trigger only when:
-   1. Executed BUY activity is unusually high.
-   2. Buyer dominance is positive.
-   3. Price starts responding positively.
+   Only 3 display states:
+   VALIDATING
+   BUY SURGE ON
+   BUY SURGE OFF
 
-   Large volume while price is falling
-   is intentionally NOT announced.
+   BTC NEVER triggers BUY NOW or scalping.
 ============================================================ */
+
+let BTC_SURGE_CANDIDATE_STARTED_AT =
+  null;
 
 async function getBTCBuySurge() {
   const baseline =
@@ -3608,18 +4156,26 @@ async function getBTCBuySurge() {
   const priceResponse =
     getExecutedPriceResponse(
       "BTC",
-      5 * 60 * 1000
+      5 *
+        60 *
+        1000
     );
 
   if (
     !baseline.ready
   ) {
+    BTC_SURGE_CANDIDATE_STARTED_AT =
+      null;
+
+    LAST_BTC_SURGE_STATE =
+      "VALIDATING";
+
     return {
       status:
-        "COLLECTING",
+        "VALIDATING",
 
       text:
-        "⚪ COLLECTING DATA",
+        "🟡 VALIDATING",
     };
   }
 
@@ -3645,22 +4201,26 @@ async function getBTCBuySurge() {
     priceResponse.changePct >=
       BTC_BUY_SURGE_MIN_PRICE_RESPONSE_PCT;
 
-  if (
+  const candidate =
     unusualBuy &&
     buyerDominant &&
-    positivePrice
+    positivePrice;
+
+  if (
+    !candidate
   ) {
+    BTC_SURGE_CANDIDATE_STARTED_AT =
+      null;
+
+    LAST_BTC_SURGE_STATE =
+      "BUY_SURGE_OFF";
+
     return {
       status:
-        "BUY_SURGE",
+        "BUY_SURGE_OFF",
 
       text:
-        `🟢 BUY SURGE +${Math.max(
-          0,
-          buyIncreasePct
-        ).toFixed(
-          0
-        )}%`,
+        "🔴 BUY SURGE OFF",
 
       buyIncreasePct,
 
@@ -3672,12 +4232,74 @@ async function getBTCBuySurge() {
     };
   }
 
+  if (
+    !BTC_SURGE_CANDIDATE_STARTED_AT
+  ) {
+    BTC_SURGE_CANDIDATE_STARTED_AT =
+      Date.now();
+
+    LAST_BTC_SURGE_STATE =
+      "VALIDATING";
+
+    return {
+      status:
+        "VALIDATING",
+
+      text:
+        "🟡 VALIDATING",
+
+      buyIncreasePct,
+
+      buyVolumePct:
+        current.buyVolumePct,
+
+      priceResponsePct:
+        priceResponse.changePct,
+    };
+  }
+
+  const candidateAgeSec =
+    (
+      Date.now() -
+      BTC_SURGE_CANDIDATE_STARTED_AT
+    ) /
+    1000;
+
+  if (
+    candidateAgeSec <
+    BTC_BUY_SURGE_CONFIRM_MIN_AGE_SEC
+  ) {
+    LAST_BTC_SURGE_STATE =
+      "VALIDATING";
+
+    return {
+      status:
+        "VALIDATING",
+
+      text:
+        "🟡 VALIDATING",
+
+      buyIncreasePct,
+
+      buyVolumePct:
+        current.buyVolumePct,
+
+      priceResponsePct:
+        priceResponse.changePct,
+
+      candidateAgeSec,
+    };
+  }
+
+  LAST_BTC_SURGE_STATE =
+    "BUY_SURGE_ON";
+
   return {
     status:
-      "NO_SURGE",
+      "BUY_SURGE_ON",
 
     text:
-      "🔴 NO BUY SURGE",
+      "🟢 BUY SURGE ON",
 
     buyIncreasePct,
 
@@ -3686,19 +4308,27 @@ async function getBTCBuySurge() {
 
     priceResponsePct:
       priceResponse.changePct,
+
+    candidateAgeSec,
   };
 }
 
 /* ============================================================
    GRT MOMENTUM RAW ANALYSIS
 
-   This is the main 5M early-entry detector.
+   GRT has ONLY 3 final states:
 
-   IMPORTANT:
-   - Abnormal volume alone is NOT enough.
-   - SELL spike is ignored.
-   - Price must show early positive response.
-   - RSI / orderbook / MA are supporting filters.
+   VALIDATING
+   BUY NOW
+   DON'T BUY
+
+   BUY NOW requires:
+   - unusual executed BUY
+   - buyer dominance
+   - positive price response
+   - 5M candle / RSI confirmation
+   - 1H candle + MA permission
+   - liquidity / orderbook support
 ============================================================ */
 
 async function analyzeGRTMomentum(
@@ -3706,8 +4336,7 @@ async function analyzeGRTMomentum(
 ) {
   const [
     baseline,
-    rsi,
-    ma,
+    trend,
     liquidity,
   ] =
     await Promise.all([
@@ -3715,9 +4344,7 @@ async function analyzeGRTMomentum(
         "GRT"
       ),
 
-      getGRT5mRSI(),
-
-      getGRT1hMA(),
+      getGRTTrendPermission(),
 
       getGRTLiquidityAnalysis(
         ticker.currentPrice
@@ -3727,23 +4354,43 @@ async function analyzeGRTMomentum(
   const priceResponse =
     getExecutedPriceResponse(
       "GRT",
-      5 * 60 * 1000
+      5 *
+        60 *
+        1000
     );
 
   if (
-    !baseline.ready
+    !baseline.ready ||
+    !trend.ready
   ) {
     return {
       ready:
         false,
 
       status:
-        "COLLECTING",
+        "VALIDATING",
+
+      baseline,
+      trend,
+      liquidity,
+      priceResponse,
     };
   }
 
   const flow =
     baseline.current;
+
+  const rsi =
+    trend.rsi5m;
+
+  const ma =
+    trend.ma1h;
+
+  const candle5m =
+    trend.candle5m;
+
+  const candle1h =
+    trend.candle1h;
 
   const buyIncreasePct =
     safeNumber(
@@ -3777,35 +4424,14 @@ async function analyzeGRTMomentum(
     flow.buyFrequencyPct >=
     52;
 
-  const rsiImproving =
-    rsi.ready &&
-    (
-      rsi.direction ===
-        "RISING" ||
-      (
-        rsi.oversold &&
-        rsi.change >
-        0
-      )
-    );
+  const fiveMinuteTechnicalSupport =
+    trend.fiveMinutePositive;
 
-  const rsiDanger =
-    rsi.ready &&
-    rsi.overbought &&
-    rsi.direction ===
-      "FALLING";
+  const oneHourPermission =
+    trend.oneHourSupportive;
 
-  const maSupport =
-    !ma.ready ||
-    ma.bullish ||
-    ma.nearCross;
-
-  const maStrongBearish =
-    ma.ready &&
-    !ma.bullish &&
-    !ma.nearCross &&
-    ma.gapPct <
-      -0.50;
+  const oneHourBlocked =
+    trend.oneHourBlocked;
 
   const liquiditySupport =
     !liquidity.ready ||
@@ -3814,10 +4440,6 @@ async function analyzeGRTMomentum(
   const resistanceBlocking =
     liquidity.ready &&
     liquidity.resistanceBlocking;
-
-  /*
-    Hard veto conditions.
-  */
 
   const sellDominant =
     flow.sellVolumePct >=
@@ -3828,17 +4450,18 @@ async function analyzeGRTMomentum(
     priceResponse.changePct <=
       -0.10;
 
+  const rsiDanger =
+    rsi.ready &&
+    rsi.overbought &&
+    rsi.direction ===
+      "FALLING";
+
   const hardVeto =
     sellDominant ||
     meaningfulPriceDrop ||
     resistanceBlocking ||
-    rsiDanger;
-
-  /*
-    Positive confluence scoring.
-
-    This is deliberately NOT 6/6 rigid.
-  */
+    rsiDanger ||
+    oneHourBlocked;
 
   let score =
     0;
@@ -3882,14 +4505,14 @@ async function analyzeGRTMomentum(
   }
 
   if (
-    rsiImproving
+    fiveMinuteTechnicalSupport
   ) {
     score +=
-      1;
+      2;
   }
 
   if (
-    maSupport
+    oneHourPermission
   ) {
     score +=
       1;
@@ -3902,18 +4525,7 @@ async function analyzeGRTMomentum(
       1;
   }
 
-  /*
-    VERIFYING BUY:
-    early positive setup.
-
-    BUY NOW:
-    stronger confluence + positive price response.
-
-    BUY NOW still needs user visual confirmation
-    on the Luno chart.
-  */
-
-  const verifyingBuy =
+  const validating =
     !hardVeto &&
     unusualBuy &&
     buyerDominant &&
@@ -3922,32 +4534,33 @@ async function analyzeGRTMomentum(
       5;
 
   let buyNowThreshold =
-    8;
+    9;
 
   if (
     ma.ready &&
     ma.bullish
   ) {
     buyNowThreshold =
-      7;
+      8;
   }
 
   const buyNow =
-    verifyingBuy &&
+    validating &&
     positivePrice &&
     buyerStrong &&
+    fiveMinuteTechnicalSupport &&
+    oneHourPermission &&
     score >=
-      buyNowThreshold &&
-    !maStrongBearish;
+      buyNowThreshold;
 
   let status =
-    "NO_ENTRY";
+    "DONT_BUY";
 
   if (
-    verifyingBuy
+    validating
   ) {
     status =
-      "VERIFYING";
+      "VALIDATING";
   }
 
   if (
@@ -3966,45 +4579,56 @@ async function analyzeGRTMomentum(
     score,
 
     buyNow,
-
-    verifyingBuy,
-
+    validating,
     hardVeto,
 
     unusualBuy,
-
     buyIncreasePct,
 
     flow,
-
     priceResponse,
 
     rsi,
-
     ma,
 
+    candle5m,
+    candle1h,
+
+    trend,
     liquidity,
+
+    btcContext:
+      LAST_BTC_SURGE_STATE,
 
     reasons: {
       buyerDominant,
       buyerStrong,
       frequencySupport,
+
       positivePrice,
       priceNotFalling,
-      rsiImproving,
-      maSupport,
+
+      fiveMinuteTechnicalSupport,
+      oneHourPermission,
+      oneHourBlocked,
+
       liquiditySupport,
+      resistanceBlocking,
+
       sellDominant,
       meaningfulPriceDrop,
-      resistanceBlocking,
       rsiDanger,
-      maStrongBearish,
     },
   };
 }
 
 /* ============================================================
    GRT MOMENTUM DISPLAY DECISION
+
+   DISPLAY ONLY:
+   BUY NOW
+   DON'T BUY
+   VALIDATING
 ============================================================ */
 
 async function getGRTMomentumDecision(
@@ -4016,14 +4640,16 @@ async function getGRTMomentumDecision(
     );
 
   if (
-    !analysis.ready
+    !analysis.ready ||
+    analysis.status ===
+      "VALIDATING"
   ) {
     return {
       status:
-        "COLLECTING",
+        "VALIDATING",
 
       momentumText:
-        "⚪ COLLECTING DATA",
+        "🟡 VALIDATING",
 
       actionText:
         "",
@@ -4050,30 +4676,12 @@ async function getGRTMomentumDecision(
     };
   }
 
-  if (
-    analysis.status ===
-    "VERIFYING"
-  ) {
-    return {
-      status:
-        "VERIFYING",
-
-      momentumText:
-        "🟡 VERIFYING BUY...",
-
-      actionText:
-        "",
-
-      analysis,
-    };
-  }
-
   return {
     status:
-      "NO_ENTRY",
+      "DONT_BUY",
 
     momentumText:
-      "🔴 NO ENTRY SIGNAL",
+      "🔴 DON'T BUY",
 
     actionText:
       "",
@@ -4085,8 +4693,13 @@ async function getGRTMomentumDecision(
 /* ============================================================
    5M PRICE ALERT FORMAT
 
-   BUY NOW trigger itself will be connected
-   to Scalping Entry in a later PART.
+   BTC:
+   VALIDATING / BUY SURGE ON / BUY SURGE OFF
+
+   GRT:
+   VALIDATING / BUY NOW / DON'T BUY
+
+   GRT BUY NOW will trigger Scalping Entry.
 ============================================================ */
 
 async function sendPriceAlert() {
@@ -4123,15 +4736,15 @@ async function sendPriceAlert() {
       ),
     ]);
 
-const previousBTC =
-  LAST_ALERT_PRICE[
-    "BTC"
-  ];
+  const previousBTC =
+    LAST_ALERT_PRICE[
+      "BTC"
+    ];
 
-const previousGRT =
-  LAST_ALERT_PRICE[
-    "GRT"
-  ];
+  const previousGRT =
+    LAST_ALERT_PRICE[
+      "GRT"
+    ];
 
   const btcMove =
     previousBTC >
@@ -4151,15 +4764,15 @@ const previousGRT =
         )
       : 0;
 
-LAST_ALERT_PRICE[
-  "BTC"
-] =
-  btc.currentPrice;
+  LAST_ALERT_PRICE[
+    "BTC"
+  ] =
+    btc.currentPrice;
 
-LAST_ALERT_PRICE[
-  "GRT"
-] =
-  grt.currentPrice;
+  LAST_ALERT_PRICE[
+    "GRT"
+  ] =
+    grt.currentPrice;
 
   const btcMoveText =
     Math.abs(
@@ -4206,14 +4819,6 @@ LAST_ALERT_PRICE[
     )}${grtMoveText}
 ⚡ MOMENTUM: ${grtMomentum.momentumText}`
   );
-
-  /*
-    We call the dedicated BUY NOW handler
-    only when the GRT momentum engine
-    actually confirms BUY NOW.
-
-    Function is defined in later PART.
-  */
 
   if (
     grtMomentum.status ===
@@ -4686,13 +5291,17 @@ async function analyzeMarketStructure(
   const snapshot15m =
     getPriceSnapshot(
       coin,
-      15 * 60 * 1000
+      15 *
+        60 *
+        1000
     );
 
   const snapshot60m =
     getPriceSnapshot(
       coin,
-      60 * 60 * 1000
+      60 *
+        60 *
+        1000
     );
 
   const directionChange =
@@ -4710,7 +5319,9 @@ async function analyzeMarketStructure(
   const flow =
     getExecutedFlowSummary(
       coin,
-      15 * 60 * 1000
+      15 *
+        60 *
+        1000
     );
 
   const pressure =
@@ -4727,6 +5338,11 @@ async function analyzeMarketStructure(
 
   const resistance =
     structure.resistance;
+
+  const meaningfulResistance =
+    structure
+      .meaningfulResistance ||
+    null;
 
   const fakeBreakout =
     getRecentFakeBreakout(
@@ -4860,6 +5476,21 @@ async function analyzeMarketStructure(
         ?.distancePct ??
       null,
 
+    meaningfulResistancePrice:
+      meaningfulResistance
+        ?.price ||
+      null,
+
+    meaningfulResistanceRating:
+      meaningfulResistance
+        ?.rating ||
+      0,
+
+    meaningfulResistanceDistancePct:
+      meaningfulResistance
+        ?.distancePct ??
+      null,
+
     bidLiquidityPct:
       structure.bidLiquidityPct,
 
@@ -4922,7 +5553,8 @@ function buildMarketStructureSection(
 ============================================================ */
 
 async function sendMarketStructure() {
-  const sections = [];
+  const sections =
+    [];
 
   for (
     const coin of
@@ -4994,7 +5626,7 @@ function getMedianTradeVolume(
   const middle =
     Math.floor(
       volumes.length /
-      2
+        2
     );
 
   if (
@@ -5056,9 +5688,6 @@ function getTradeEvidenceWeight(
 
 /* ============================================================
    BREAKOUT EXECUTED-TRADE PROCESSOR
-
-   This function is called by collectTradeHistory()
-   from PART 2.
 ============================================================ */
 
 async function processBreakoutTrade(
@@ -5125,10 +5754,6 @@ async function processBreakoutTrade(
         100
     );
 
-  /* ========================================================
-     EXECUTED ABOVE RESISTANCE
-  ======================================================== */
-
   if (
     trade.price >=
     breakoutPrice
@@ -5191,11 +5816,6 @@ async function processBreakoutTrade(
           false,
       };
 
-      /*
-        Dedicated breakout scalping trigger
-        is defined in a later PART.
-      */
-
       await triggerBreakoutScalpingEntry(
         coin,
         watch,
@@ -5210,20 +5830,12 @@ async function processBreakoutTrade(
     return;
   }
 
-  /* ========================================================
-     STILL WITHIN NORMAL PULLBACK
-  ======================================================== */
-
   if (
     trade.price >=
     failurePrice
   ) {
     return;
   }
-
-  /* ========================================================
-     FAILURE EVIDENCE
-  ======================================================== */
 
   watch.failureScore +=
     trade.isBuy
@@ -5393,7 +6005,11 @@ async function getTwoHourSafety(
 }
 
 /* ============================================================
-   NEXT RESISTANCE
+   NEXT MEANINGFUL RESISTANCE
+
+   IMPORTANT:
+   Do not automatically choose the closest
+   weak ask wall as TP resistance.
 ============================================================ */
 
 async function findNextOrderBookResistance(
@@ -5437,40 +6053,143 @@ async function findNextOrderBookResistance(
     candidates.find(
       (wall) =>
         wall.rating >=
-          4 ||
+          MEANINGFUL_RESISTANCE_MIN_RATING ||
         wall.ratio >=
-          MIN_WALL_RELATIVE_RATIO
+          MEANINGFUL_RESISTANCE_MIN_RATIO
     );
 
-  const selected =
-    meaningful ||
-    candidates[0];
+  if (
+    !meaningful
+  ) {
+    return null;
+  }
 
   return {
     price:
-      selected.price,
+      meaningful.price,
 
     volume:
-      selected.volume,
+      meaningful.volume,
 
     distancePct:
       percentChange(
         currentPrice,
-        selected.price
+        meaningful.price
       ),
 
     strength: {
       rating:
-        selected.rating,
+        meaningful.rating,
 
       ratio:
-        selected.ratio,
+        meaningful.ratio,
     },
   };
 }
 
 /* ============================================================
+   TP BREAKOUT PERMISSION
+
+   5M:
+   validates immediate momentum.
+
+   1H:
+   decides whether price has enough
+   technical permission to push through
+   resistance.
+
+   BTC is context only and NEVER blocks
+   GRT by itself.
+============================================================ */
+
+async function getGRTTPBreakoutPermission() {
+  const trend =
+    await getGRTTrendPermission();
+
+  if (
+    !trend.ready
+  ) {
+    return {
+      ready:
+        false,
+
+      allowed:
+        false,
+
+      strong:
+        false,
+
+      reason:
+        "TREND VALIDATING",
+    };
+  }
+
+  const fiveMinutePositive =
+    trend.fiveMinutePositive;
+
+  const oneHourSupportive =
+    trend.oneHourSupportive;
+
+  const oneHourBlocked =
+    trend.oneHourBlocked;
+
+  const ma =
+    trend.ma1h;
+
+  const strong =
+    fiveMinutePositive &&
+    oneHourSupportive &&
+    ma.ready &&
+    ma.bullish &&
+    !oneHourBlocked;
+
+  const allowed =
+    fiveMinutePositive &&
+    oneHourSupportive &&
+    !oneHourBlocked;
+
+  return {
+    ready:
+      true,
+
+    allowed,
+
+    strong,
+
+    fiveMinutePositive,
+    oneHourSupportive,
+    oneHourBlocked,
+
+    ma,
+
+    reason:
+      allowed
+        ? strong
+          ? "STRONG BREAKOUT PERMISSION"
+          : "BREAKOUT PERMISSION"
+        : "NO BREAKOUT PERMISSION",
+  };
+}
+
+/* ============================================================
    ROOM TO TP
+
+   NEW LOGIC:
+
+   1. Quantity does NOT determine whether
+      technical room exists.
+
+   2. Weak nearby resistance does NOT
+      automatically cancel entry.
+
+   3. Strong nearby resistance requires
+      technical breakout permission.
+
+   4. TP may be ABOVE resistance when
+      5M + 1H + MA support continuation.
+
+   5. There must still be a minimum
+      sensible gross room/buffer.
 ============================================================ */
 
 async function evaluateRoomToTP(
@@ -5500,6 +6219,9 @@ async function evaluateRoomToTP(
       allowed:
         true,
 
+      breakoutAllowed:
+        true,
+
       nextResistance:
         null,
 
@@ -5507,79 +6229,163 @@ async function evaluateRoomToTP(
         defaultTarget,
 
       reason:
-        "NO STRONG WALL ABOVE",
+        "NO MEANINGFUL WALL ABOVE",
     };
   }
 
-  if (
+  const roomPct =
     nextResistance
-      .distancePct <
+      .distancePct;
+
+  /*
+    Resistance has enough natural room.
+    Normal TP can remain below the wall.
+  */
+
+  if (
+    roomPct >=
     MIN_GROSS_ROOM_PCT
   ) {
-    return {
-      allowed:
-        false,
+    const beforeWall =
+      nextResistance.price *
+      (
+        1 -
+        TP_RESISTANCE_BUFFER_PCT /
+          100
+      );
 
-      nextResistance,
+    const maxTargetPrice =
+      Math.min(
+        defaultTarget,
+        beforeWall
+      );
 
-      maxTargetPrice:
-        null,
+    const usableRoomPct =
+      percentChange(
+        entryPrice,
+        maxTargetPrice
+      );
 
-      reason:
-        "ROOM TOO SMALL",
-    };
+    if (
+      usableRoomPct >=
+      MIN_GROSS_ROOM_PCT
+    ) {
+      return {
+        allowed:
+          true,
+
+        breakoutAllowed:
+          false,
+
+        nextResistance,
+
+        maxTargetPrice,
+
+        reason:
+          "NORMAL TP BEFORE RESISTANCE",
+      };
+    }
   }
 
+  /*
+    Wall is close.
+
+    Instead of immediately returning
+    ROOM TOO SMALL, validate whether
+    momentum can realistically break it.
+  */
+
+  const breakoutPermission =
+    coin ===
+      "GRT"
+      ? await getGRTTPBreakoutPermission()
+      : {
+          ready:
+            true,
+
+          allowed:
+            false,
+
+          strong:
+            false,
+
+          reason:
+            "BREAKOUT TP DISABLED",
+        };
+
   if (
-    nextResistance
-      .distancePct <=
-      1.00 &&
-    nextResistance
-      .strength
-      .rating >=
-      7
+    !breakoutPermission.allowed
   ) {
     return {
       allowed:
         false,
 
+      breakoutAllowed:
+        false,
+
       nextResistance,
 
       maxTargetPrice:
         null,
 
+      breakoutPermission,
+
       reason:
-        "STRONG RESISTANCE TOO CLOSE",
+        "ROOM TOO SMALL — NO BREAKOUT PERMISSION",
     };
   }
 
-  const beforeWall =
-    nextResistance.price *
-    0.9975;
+  /*
+    Technical confirmation says price
+    may push through resistance.
 
-  const maxTargetPrice =
-    Math.min(
-      defaultTarget,
-      beforeWall
+    TP can now sit ABOVE the wall.
+  */
+
+  const breakoutBuffer =
+    breakoutPermission.strong
+      ? TP_STRONG_BREAKOUT_EXTENSION_PCT
+      : TP_BREAKOUT_EXTENSION_PCT;
+
+  const aboveWallTarget =
+    nextResistance.price *
+    (
+      1 +
+      breakoutBuffer /
+        100
     );
 
-  if (
+  const maxTargetPrice =
+    Math.max(
+      defaultTarget,
+      aboveWallTarget
+    );
+
+  const finalRoomPct =
     percentChange(
       entryPrice,
       maxTargetPrice
-    ) <
+    );
+
+  if (
+    finalRoomPct <
     MIN_GROSS_ROOM_PCT
   ) {
     return {
       allowed:
         false,
+
+      breakoutAllowed:
+        true,
 
       nextResistance,
 
       maxTargetPrice,
 
+      breakoutPermission,
+
       reason:
-        "TP SPACE TOO TIGHT",
+        "TP BUFFER STILL TOO SMALL",
     };
   }
 
@@ -5587,14 +6393,31 @@ async function evaluateRoomToTP(
     allowed:
       true,
 
+    breakoutAllowed:
+      true,
+
     nextResistance,
 
     maxTargetPrice,
 
+    breakoutPermission,
+
     reason:
-      "ROOM OK",
+      breakoutPermission.strong
+        ? "TP ABOVE RESISTANCE — STRONG MOMENTUM"
+        : "TP ABOVE RESISTANCE — MOMENTUM CONFIRMED",
   };
 }
+/* ============================================================
+   TP BREAKOUT EXTENSION CONFIG
+============================================================ */
+
+const TP_BREAKOUT_EXTENSION_PCT =
+  0.50;
+
+const TP_STRONG_BREAKOUT_EXTENSION_PCT =
+  1.00;
+
 /* ============================================================
    QUANTITY-AWARE LIMIT ENTRY
 ============================================================ */
@@ -5985,7 +6808,8 @@ function buildEntryRiskLevels({
   confidence,
 }) {
   const tp =
-    room?.maxTargetPrice ||
+    room
+      ?.maxTargetPrice ||
     entryPrice *
     (
       1 +
@@ -6019,17 +6843,6 @@ function buildEntryRiskLevels({
       ? 8
       : 6;
 
-  if (
-    coin ===
-    "BTC"
-  ) {
-    durationHours =
-      confidence ===
-        "STRONG"
-        ? 8
-        : 4;
-  }
-
   return {
     tp,
     sl,
@@ -6044,6 +6857,18 @@ function buildEntryRiskLevels({
 async function sendScalpingEntry(
   candidate
 ) {
+  /*
+    BTC is market reference only.
+    Never generate BTC scalping entry.
+  */
+
+  if (
+    candidate.coin ===
+    "BTC"
+  ) {
+    return;
+  }
+
   if (
     PENDING_ENTRIES[
       candidate.coin
@@ -6076,10 +6901,12 @@ async function sendScalpingEntry(
   ) {
     roomText = `
 
-🧱 Next Resistance:
+🧱 Next Meaningful Resistance:
 RM${formatPrice(
       candidate.coin,
-      candidate.nextResistance.price
+      candidate
+        .nextResistance
+        .price
     )} — ${
       candidate
         .nextResistance
@@ -6087,13 +6914,25 @@ RM${formatPrice(
         .rating
     }/10
 
-📏 Room:
+📏 Resistance Distance:
 ${candidate
   .nextResistance
   .distancePct
   .toFixed(
     2
   )}%`;
+  }
+
+  let tpModeText =
+    "";
+
+  if (
+    candidate.roomReason
+  ) {
+    tpModeText = `
+
+🎯 TP Logic:
+${candidate.roomReason}`;
   }
 
   await sendTelegram(
@@ -6132,7 +6971,7 @@ ${candidate.durationHours} HOURS
 ${candidate.score}% ${candidate.confidence}
 
 📊 Setup:
-${candidate.setup}${roomText}
+${candidate.setup}${roomText}${tpModeText}
 
 ━━━━━━━━━━━━━━
 
@@ -6165,15 +7004,15 @@ START ENTRY?`,
 /* ============================================================
    MOMENTUM BUY NOW -> SCALPING ENTRY
 
-   IMPORTANT:
-   BUY NOW itself is still an EARLY technical signal.
+   BUY NOW has already passed momentum
+   validation.
 
-   Before sending SCALPING ENTRY, this function re-checks:
-   - Market Structure
-   - 2H Safety
-   - Orderbook room
-   - Resistance
-   - Entry chase
+   This stage checks execution quality:
+   - structure
+   - 2H safety
+   - TP room
+   - resistance
+   - entry chase
 ============================================================ */
 
 async function triggerMomentumScalpingEntry(
@@ -6218,12 +7057,6 @@ async function triggerMomentumScalpingEntry(
     return;
   }
 
-  /*
-    Momentum BUY NOW should not be converted
-    into a scalping entry if market structure
-    has already turned strongly bearish.
-  */
-
   if (
     structure.pressure ===
       "TEKANAN JUAL KUAT" ||
@@ -6265,19 +7098,29 @@ async function triggerMomentumScalpingEntry(
   if (
     !room.allowed
   ) {
+    /*
+      Important:
+      No useless SCALPING ENTRY is sent.
+      Bot simply waits for a better setup.
+    */
+
     return;
   }
 
   const snapshot15m =
     getPriceSnapshot(
       coin,
-      15 * 60 * 1000
+      15 *
+        60 *
+        1000
     );
 
   const snapshot60m =
     getPriceSnapshot(
       coin,
-      60 * 60 * 1000
+      60 *
+        60 *
+        1000
     );
 
   let score =
@@ -6299,13 +7142,10 @@ async function triggerMomentumScalpingEntry(
         structure.supportPrice,
 
       resistance:
+        structure
+          .meaningfulResistancePrice ||
         structure.resistancePrice,
     });
-
-  /*
-    Momentum engine already confirmed BUY NOW.
-    Give a controlled bonus, not an automatic 100%.
-  */
 
   score +=
     Math.min(
@@ -6313,6 +7153,28 @@ async function triggerMomentumScalpingEntry(
         2,
       18
     );
+
+  /*
+    Multi-timeframe technical bonus.
+  */
+
+  if (
+    momentumAnalysis
+      .reasons
+      ?.fiveMinuteTechnicalSupport
+  ) {
+    score +=
+      4;
+  }
+
+  if (
+    momentumAnalysis
+      .reasons
+      ?.oneHourPermission
+  ) {
+    score +=
+      3;
+  }
 
   score =
     Math.round(
@@ -6322,11 +7184,6 @@ async function triggerMomentumScalpingEntry(
         100
       )
     );
-
-  /*
-    Momentum BUY NOW should not create
-    a weak scalping entry.
-  */
 
   if (
     score <
@@ -6385,6 +7242,12 @@ async function triggerMomentumScalpingEntry(
     nextResistance:
       room.nextResistance,
 
+    roomReason:
+      room.reason,
+
+    breakoutAllowed:
+      room.breakoutAllowed,
+
     momentumSnapshot:
       momentumAnalysis,
   });
@@ -6392,13 +7255,6 @@ async function triggerMomentumScalpingEntry(
 
 /* ============================================================
    HANDLE GRT BUY NOW SIGNAL
-
-   Called directly by sendPriceAlert() in PART 3.
-
-   Responsibilities:
-   1. Prevent duplicate BUY NOW records.
-   2. Record the signal for learning.
-   3. Trigger scalping-entry safety engine.
 ============================================================ */
 
 async function handleGRTBuyNowSignal(
@@ -6416,22 +7272,14 @@ async function handleGRTBuyNowSignal(
     Date.now() -
     LAST_GRT_BUY_NOW_SIGNAL;
 
-  /*
-    Do not create another learning record
-    every 5 minutes if the same momentum
-    condition remains active.
-
-    15-minute cooldown keeps tests cleaner.
-  */
-
   if (
     elapsed <
     GRT_BUY_NOW_COOLDOWN_MS
   ) {
     /*
-      Even during learning cooldown,
-      scalping trigger may still be checked
-      if there is no active/pending entry.
+      Learning record is on cooldown,
+      but a valid missing scalping entry
+      may still be checked.
     */
 
     await triggerMomentumScalpingEntry(
@@ -6444,10 +7292,6 @@ async function handleGRTBuyNowSignal(
 
   LAST_GRT_BUY_NOW_SIGNAL =
     Date.now();
-
-  /*
-    Defined in PART 7.
-  */
 
   recordGRTBuyNowSignal(
     ticker,
@@ -6469,6 +7313,18 @@ async function triggerBreakoutScalpingEntry(
   watch,
   trade
 ) {
+  /*
+    BTC breakout may still be analysed
+    by market structure, but NEVER traded.
+  */
+
+  if (
+    coin ===
+    "BTC"
+  ) {
+    return;
+  }
+
   if (
     ACTIVE_TRADES[
       coin
@@ -6541,6 +7397,27 @@ async function triggerBreakoutScalpingEntry(
     }
   }
 
+  /*
+    For GRT breakout, re-check
+    multi-timeframe trend permission.
+  */
+
+  if (
+    coin ===
+    "GRT"
+  ) {
+    const trend =
+      await getGRTTrendPermission();
+
+    if (
+      !trend.ready ||
+      trend.oneHourBlocked ||
+      !trend.fiveMinutePositive
+    ) {
+      return;
+    }
+  }
+
   const technicalEntry =
     trade.price;
 
@@ -6583,13 +7460,17 @@ async function triggerBreakoutScalpingEntry(
   const snapshot15m =
     getPriceSnapshot(
       coin,
-      15 * 60 * 1000
+      15 *
+        60 *
+        1000
     );
 
   const snapshot60m =
     getPriceSnapshot(
       coin,
-      60 * 60 * 1000
+      60 *
+        60 *
+        1000
     );
 
   const baseScore =
@@ -6611,6 +7492,8 @@ async function triggerBreakoutScalpingEntry(
         structure.supportPrice,
 
       resistance:
+        structure
+          .meaningfulResistancePrice ||
         structure.resistancePrice,
     });
 
@@ -6702,11 +7585,19 @@ async function triggerBreakoutScalpingEntry(
 
     nextResistance:
       room.nextResistance,
+
+    roomReason:
+      room.reason,
+
+    breakoutAllowed:
+      room.breakoutAllowed,
   });
 }
 
 /* ============================================================
    GENERAL 1-MINUTE SCALPING SCANNER
+
+   BTC is deliberately excluded.
 ============================================================ */
 
 async function scanSignals() {
@@ -6718,12 +7609,24 @@ async function scanSignals() {
     return;
   }
 
-  const candidates = [];
+  const candidates =
+    [];
 
   for (
     const coin of
     SCAN_COINS
   ) {
+    /*
+      BTC is market indicator only.
+    */
+
+    if (
+      coin ===
+      "BTC"
+    ) {
+      continue;
+    }
+
     if (
       ACTIVE_TRADES[
         coin
@@ -6782,9 +7685,27 @@ async function scanSignals() {
     }
 
     /*
-      For BTC/GRT near resistance,
-      breakout engine gets priority.
+      GRT must not receive a general
+      scalping entry while its dedicated
+      BUY NOW engine says DON'T BUY.
     */
+
+    if (
+      coin ===
+      "GRT"
+    ) {
+      const momentum =
+        await getGRTMomentumDecision(
+          ticker
+        );
+
+      if (
+        momentum.status !==
+        "BUY_NOW"
+      ) {
+        continue;
+      }
+    }
 
     if (
       CORE_COINS.includes(
@@ -6803,13 +7724,17 @@ async function scanSignals() {
     const snapshot15m =
       getPriceSnapshot(
         coin,
-        15 * 60 * 1000
+        15 *
+          60 *
+          1000
       );
 
     const snapshot60m =
       getPriceSnapshot(
         coin,
-        60 * 60 * 1000
+        60 *
+          60 *
+          1000
       );
 
     if (
@@ -6838,6 +7763,8 @@ async function scanSignals() {
           structure.supportPrice,
 
         resistance:
+          structure
+            .meaningfulResistancePrice ||
           structure.resistancePrice,
       });
 
@@ -6906,12 +7833,25 @@ async function scanSignals() {
         confidence,
       });
 
+    /*
+      GRT uses the new practical room rule.
+
+      Other coins retain existing
+      gross-room protection.
+    */
+
+    const minimumRoom =
+      coin ===
+        "GRT"
+        ? GRT_MIN_PRACTICAL_TP_ROOM_PCT
+        : MIN_GROSS_ROOM_PCT;
+
     if (
       percentChange(
         preliminary.entryPrice,
         risk.tp
       ) <
-      MIN_GROSS_ROOM_PCT
+      minimumRoom
     ) {
       continue;
     }
@@ -6951,6 +7891,12 @@ async function scanSignals() {
 
       nextResistance:
         room.nextResistance,
+
+      roomReason:
+        room.reason,
+
+      breakoutAllowed:
+        room.breakoutAllowed,
     });
   }
 
@@ -6973,6 +7919,17 @@ async function scanSignals() {
 
 /* ============================================================
    FINAL ORDER PLAN
+
+   FLEXIBLE QUANTITY LOGIC
+
+   The target RM does NOT move TP blindly.
+
+   1. Technical engine selects realistic TP.
+   2. Fees are deducted.
+   3. Quantity increases/decreases to meet
+      requested NET profit.
+   4. Orderbook depth may move final entry.
+   5. Room is recalculated after that move.
 ============================================================ */
 
 async function resolveFinalOrderPlan(
@@ -7035,6 +7992,31 @@ async function resolveFinalOrderPlan(
           entry.confidence,
       });
 
+    const grossRoomPct =
+      percentChange(
+        entryPrice,
+        risk.tp
+      );
+
+    const minimumPracticalRoom =
+      entry.coin ===
+        "GRT"
+        ? GRT_MIN_PRACTICAL_TP_ROOM_PCT
+        : MIN_GROSS_ROOM_PCT;
+
+    if (
+      grossRoomPct <
+      minimumPracticalRoom
+    ) {
+      return {
+        allowed:
+          false,
+
+        reason:
+          "TP RANGE NOT PRACTICAL",
+      };
+    }
+
     const netProfitPerGrossUnit =
       risk.tp *
         sellableUnitFactor -
@@ -7053,11 +8035,37 @@ async function resolveFinalOrderPlan(
       };
     }
 
+    /*
+      FLEXIBLE QUANTITY:
+
+      Smaller net profit per unit
+      automatically requires more units.
+
+      Larger target RM
+      automatically requires more units.
+    */
+
     const quantity =
       Math.ceil(
         targetProfit /
         netProfitPerGrossUnit
       );
+
+    if (
+      !Number.isFinite(
+        quantity
+      ) ||
+      quantity <=
+        0
+    ) {
+      return {
+        allowed:
+          false,
+
+        reason:
+          "INVALID QUANTITY",
+      };
+    }
 
     const depth =
       await chooseQuantityAwareLimitEntry({
@@ -7075,12 +8083,29 @@ async function resolveFinalOrderPlan(
       depth.finalEntry;
 
     if (
+      depth.chasePct >
+      MAX_ENTRY_CHASE_PCT
+    ) {
+      return {
+        allowed:
+          false,
+
+        reason:
+          "ENTRY CHASE TOO HIGH",
+      };
+    }
+
+    if (
       Math.abs(
         nextEntry -
         entryPrice
       ) <
       0.0000000001
     ) {
+      const estimatedNetProfit =
+        quantity *
+        netProfitPerGrossUnit;
+
       return {
         allowed:
           true,
@@ -7093,12 +8118,23 @@ async function resolveFinalOrderPlan(
 
         risk,
 
+        grossRoomPct,
+
         netProfitPerGrossUnit,
+
+        estimatedNetProfit,
 
         depthSelection:
           depth,
       };
     }
+
+    /*
+      Orderbook depth moved entry.
+
+      Loop again and recalculate:
+      TP room + fees + quantity.
+    */
 
     entryPrice =
       nextEntry;
@@ -7136,6 +8172,10 @@ async function monitorTrades() {
     ) {
       continue;
     }
+
+    /* ========================================================
+       TAKE PROFIT REACHED
+    ======================================================== */
 
     if (
       !trade.tpReached &&
@@ -7220,6 +8260,10 @@ SELL NOW?`,
       );
     }
 
+    /* ========================================================
+       STOP LOSS REACHED
+    ======================================================== */
+
     if (
       !trade.slReached &&
       ticker.currentPrice <=
@@ -7281,6 +8325,10 @@ SELL NOW?`,
         }
       );
     }
+
+    /* ========================================================
+       TRADE DURATION REACHED
+    ======================================================== */
 
     const expired =
       Date.now() -
@@ -7639,6 +8687,12 @@ bot.on(
       return;
     }
 
+    /*
+      Ignore Telegram commands.
+
+      Commands are handled separately.
+    */
+
     if (
       typeof msg.text ===
         "string" &&
@@ -7705,6 +8759,18 @@ bot.on(
         return;
       }
 
+      /*
+        Final order planning:
+
+        Technical TP remains technical.
+
+        Target RM controls quantity.
+
+        Larger target profit therefore
+        increases suggested quantity
+        automatically.
+      */
+
       const plan =
         await resolveFinalOrderPlan(
           entry,
@@ -7721,6 +8787,12 @@ bot.on(
         delete PENDING_ENTRIES[
           state.coin
         ];
+
+        /*
+          This cancellation should normally
+          only happen if conditions changed
+          AFTER the original entry signal.
+        */
 
         await replyTelegram(
           chatId,
@@ -7761,15 +8833,29 @@ bot.on(
           chatId,
           `⚠️ REQUIRED CAPITAL TOO HIGH
 
-Required:
+🪙 ${entry.coin}
+
+💰 Target Net Profit:
+RM${targetProfit.toFixed(
+            2
+          )}
+
+📦 Required Quantity:
+${plan.quantity.toLocaleString(
+            "en-MY"
+          )} ${entry.coin}
+
+💵 Required:
 RM${value.toFixed(
             2
           )}
 
-Maximum:
+Maximum For ${entry.confidence} Setup:
 RM${maxCapital.toFixed(
             2
-          )}`
+          )}
+
+📡 Monitoring Next Entry...`
         );
 
         return;
@@ -7790,6 +8876,12 @@ RM${maxCapital.toFixed(
         value,
 
         targetProfit,
+
+        estimatedNetProfit:
+          plan.estimatedNetProfit,
+
+        grossRoomPct:
+          plan.grossRoomPct,
 
         entryPrice:
           plan.entryPrice,
@@ -7817,6 +8909,11 @@ RM${maxCapital.toFixed(
           plan.depthSelection
             ?.source ||
           "TECHNICAL ENTRY",
+
+        tpLogic:
+          plan.room
+            ?.reason ||
+          "TECHNICAL TP",
       };
 
       const fillText =
@@ -7859,6 +8956,14 @@ RM${formatPrice(
           plan.risk.tp
         )}
 
+📈 Gross TP Room:
+${plan.grossRoomPct.toFixed(
+          2
+        )}%
+
+🧠 TP Logic:
+${plan.room.reason}
+
 🛑 SL:
 RM${formatPrice(
           entry.coin,
@@ -7867,6 +8972,11 @@ RM${formatPrice(
 
 💰 Target Net Profit:
 RM${targetProfit.toFixed(
+          2
+        )}
+
+💵 Estimated Net Profit:
+RM${plan.estimatedNetProfit.toFixed(
           2
         )}
 
@@ -7972,6 +9082,10 @@ Atau:
         return;
       }
 
+      /* ====================================================
+         ORDER NOT MATCHED
+      ==================================================== */
+
       if (
         matchedQuantity ===
         0
@@ -7986,6 +9100,11 @@ Atau:
         delete USER_STATE[
           chatId
         ];
+
+        /*
+          Reset signal cooldown because
+          no actual trade took place.
+        */
 
         delete LAST_SIGNAL[
           coin
@@ -8016,6 +9135,10 @@ RM${formatPrice(
 
         return;
       }
+
+      /* ====================================================
+         BUY FEE + ACTUAL TRADE SIZE
+      ==================================================== */
 
       const buyFeeUnit =
         matchedQuantity *
@@ -8054,6 +9177,10 @@ RM${formatPrice(
             ) *
             100
           : 0;
+
+      /* ====================================================
+         ACTIVATE TRADE MONITOR
+      ==================================================== */
 
       ACTIVE_TRADES[
         state.coin
@@ -8100,6 +9227,21 @@ RM${formatPrice(
 
         durationAlertSent:
           false,
+
+        setup:
+          entry.setup,
+
+        confidence:
+          entry.confidence,
+
+        score:
+          entry.score,
+
+        tpLogic:
+          state.tpLogic,
+
+        grossRoomPct:
+          state.grossRoomPct,
       };
 
       const matchType =
@@ -8150,6 +9292,9 @@ RM${formatPrice(
           state.coin,
           state.tp
         )}
+
+🧠 TP Logic:
+${state.tpLogic}
 
 🛑 SL:
 RM${formatPrice(
@@ -8258,11 +9403,27 @@ ${targetAchievement.toFixed(
         netSellValue -
         trade.totalBuyCost;
 
+      const pnlPct =
+        trade.totalBuyCost >
+          0
+          ? (
+              pnl /
+              trade.totalBuyCost
+            ) *
+            100
+          : 0;
+
       await replyTelegram(
         chatId,
         `✅ SELL TRADE CONFIRMED
 
 🪙 ${state.coin}
+
+💵 Buy Price:
+RM${formatPrice(
+          state.coin,
+          trade.buyPrice
+        )}
 
 💵 Matched Sell Price:
 RM${formatPrice(
@@ -8300,6 +9461,11 @@ RM${pnl.toFixed(
           2
         )}
 
+📈 Return:
+${formatPercent(
+          pnlPct
+        )}
+
 📡 Realtime Monitoring Stopped
 
 ✅ Trade Closed`
@@ -8312,6 +9478,17 @@ RM${pnl.toFixed(
       delete USER_STATE[
         chatId
       ];
+
+      /*
+        A completed trade releases the
+        global scanner immediately.
+
+        Per-coin cooldown remains controlled
+        by LAST_SIGNAL.
+      */
+
+      LAST_GLOBAL_SIGNAL =
+        0;
 
       return;
     }
@@ -8479,11 +9656,6 @@ function loadGRTTuning() {
         GRT_DYNAMIC_BUY_VOLUME_MIN_PCT
       );
 
-    /*
-      Safety range.
-      Never allow absurd automatic thresholds.
-    */
-
     if (
       saved >=
         50 &&
@@ -8520,8 +9692,8 @@ function createGRTSignalId() {
 /* ============================================================
    RECORD GRT BUY NOW SIGNAL
 
-   Called by handleGRTBuyNowSignal()
-   from PART 5.
+   Store full technical context at
+   the exact moment BUY NOW fires.
 ============================================================ */
 
 function recordGRTBuyNowSignal(
@@ -8534,6 +9706,11 @@ function recordGRTBuyNowSignal(
   ) {
     return null;
   }
+
+  const meaningfulResistance =
+    analysis.liquidity
+      ?.meaningfulResistance ||
+    null;
 
   const signal = {
     id:
@@ -8551,9 +9728,9 @@ function recordGRTBuyNowSignal(
     result:
       "MONITORING",
 
-    /*
-      Snapshot of indicators when BUY NOW fired.
-    */
+    /* ========================================================
+       MOMENTUM SNAPSHOT
+    ======================================================== */
 
     score:
       safeNumber(
@@ -8595,6 +9772,10 @@ function recordGRTBuyNowSignal(
           ?.changePct
       ),
 
+    /* ========================================================
+       RSI 5M
+    ======================================================== */
+
     rsi:
       analysis.rsi
         ?.ready
@@ -8603,10 +9784,91 @@ function recordGRTBuyNowSignal(
           )
         : null,
 
+    previousRSI:
+      analysis.rsi
+        ?.ready
+        ? safeNumber(
+            analysis.rsi.previous
+          )
+        : null,
+
+    rsiChange:
+      analysis.rsi
+        ?.ready
+        ? safeNumber(
+            analysis.rsi.change
+          )
+        : null,
+
     rsiDirection:
       analysis.rsi
         ?.direction ||
       "UNKNOWN",
+
+    /* ========================================================
+       5M CANDLE CONTEXT
+    ======================================================== */
+
+    candle5mDirection:
+      analysis.candle5m
+        ?.direction ||
+      "UNKNOWN",
+
+    candle5mBodyPct:
+      analysis.candle5m
+        ?.ready
+        ? safeNumber(
+            analysis.candle5m.bodyPct
+          )
+        : null,
+
+    candle5mClosePositionPct:
+      analysis.candle5m
+        ?.ready
+        ? safeNumber(
+            analysis.candle5m
+              .closePositionPct
+          )
+        : null,
+
+    candle5mStrongBullish:
+      Boolean(
+        analysis.candle5m
+          ?.strongBullish
+      ),
+
+    /* ========================================================
+       1H CANDLE CONTEXT
+    ======================================================== */
+
+    candle1hDirection:
+      analysis.candle1h
+        ?.direction ||
+      "UNKNOWN",
+
+    candle1hBodyPct:
+      analysis.candle1h
+        ?.ready
+        ? safeNumber(
+            analysis.candle1h.bodyPct
+          )
+        : null,
+
+    candle1hStrongBullish:
+      Boolean(
+        analysis.candle1h
+          ?.strongBullish
+      ),
+
+    candle1hStrongBearish:
+      Boolean(
+        analysis.candle1h
+          ?.strongBearish
+      ),
+
+    /* ========================================================
+       MA 1H
+    ======================================================== */
 
     ma9:
       analysis.ma
@@ -8624,10 +9886,44 @@ function recordGRTBuyNowSignal(
           )
         : null,
 
+    maGapPct:
+      analysis.ma
+        ?.ready
+        ? safeNumber(
+            analysis.ma.gapPct
+          )
+        : null,
+
     maCondition:
       analysis.ma
         ?.condition ||
       "UNKNOWN",
+
+    /* ========================================================
+       MULTI-TIMEFRAME PERMISSION
+    ======================================================== */
+
+    fiveMinuteTechnicalSupport:
+      Boolean(
+        analysis.reasons
+          ?.fiveMinuteTechnicalSupport
+      ),
+
+    oneHourPermission:
+      Boolean(
+        analysis.reasons
+          ?.oneHourPermission
+      ),
+
+    oneHourBlocked:
+      Boolean(
+        analysis.reasons
+          ?.oneHourBlocked
+      ),
+
+    /* ========================================================
+       ORDERBOOK CONTEXT
+    ======================================================== */
 
     bidLiquidityPct:
       analysis.liquidity
@@ -8671,9 +9967,42 @@ function recordGRTBuyNowSignal(
         ?.rating ||
       null,
 
-    /*
-      Future outcome snapshots.
-    */
+    meaningfulResistance:
+      meaningfulResistance
+        ?.price ||
+      null,
+
+    meaningfulResistanceRating:
+      meaningfulResistance
+        ?.rating ||
+      null,
+
+    meaningfulResistanceDistancePct:
+      meaningfulResistance
+        ?.distancePct ??
+      null,
+
+    resistanceBlocking:
+      Boolean(
+        analysis.reasons
+          ?.resistanceBlocking
+      ),
+
+    /* ========================================================
+       BTC CONTEXT
+
+       BTC never blocks BUY NOW.
+       We only store its state for learning.
+    ======================================================== */
+
+    btcState:
+      analysis.btcContext ||
+      LAST_BTC_SURGE_STATE ||
+      "UNKNOWN",
+
+    /* ========================================================
+       FUTURE OUTCOME
+    ======================================================== */
 
     price5m:
       null,
@@ -8735,7 +10064,8 @@ function findClosestPricePoint(
   coin,
   targetTime,
   toleranceMs =
-    90 * 1000
+    90 *
+    1000
 ) {
   const memory =
     PRICE_MEMORY[
@@ -8891,14 +10221,14 @@ function updateGRTSignalExtremes(
    CLASSIFY GRT BUY NOW RESULT
 
    SUCCESS:
-   price managed at least +0.30% within 15m.
+   +0.30% or better within 15 minutes.
 
    FALSE:
-   price fell at least -0.30% without first
-   producing meaningful positive movement.
+   -0.30% or worse without first reaching
+   meaningful positive movement.
 
    MIXED:
-   neither clearly succeeded nor failed.
+   neither clearly succeeds nor fails.
 ============================================================ */
 
 function classifyGRTBuyNowSignal(
@@ -8931,9 +10261,6 @@ function classifyGRTBuyNowSignal(
 
 /* ============================================================
    MONITOR BUY NOW OUTCOMES
-
-   Uses existing ticker / price memory.
-   No fast extra polling is required.
 ============================================================ */
 
 async function monitorGRTBuyNowSignals() {
@@ -8969,7 +10296,7 @@ async function monitorGRTBuyNowSignals() {
   let changed =
     false;
 
-    for (
+  for (
     const signal of
     activeSignals
   ) {
@@ -8989,7 +10316,9 @@ async function monitorGRTBuyNowSignals() {
 
     if (
       elapsed >=
-        5 * 60 * 1000 &&
+        5 *
+          60 *
+          1000 &&
       signal.price5m ===
         null
     ) {
@@ -9026,7 +10355,9 @@ async function monitorGRTBuyNowSignals() {
 
     if (
       elapsed >=
-        10 * 60 * 1000 &&
+        10 *
+          60 *
+          1000 &&
       signal.price10m ===
         null
     ) {
@@ -9063,7 +10394,9 @@ async function monitorGRTBuyNowSignals() {
 
     if (
       elapsed >=
-        15 * 60 * 1000 &&
+        15 *
+          60 *
+          1000 &&
       signal.price15m ===
         null
     ) {
@@ -9212,7 +10545,8 @@ function getGRTBuyNowPerformance() {
       (
         success /
         total
-      ) * 100,
+      ) *
+      100,
 
     average5m:
       average(
@@ -9262,6 +10596,132 @@ function getGRTBuyNowPerformance() {
               signal.worstMovePct
             )
         )
+      ),
+  };
+}
+
+/* ============================================================
+   CONTEXT PERFORMANCE HELPER
+============================================================ */
+
+function getContextPerformance(
+  signals,
+  predicate
+) {
+  const selected =
+    signals.filter(
+      predicate
+    );
+
+  if (
+    !selected.length
+  ) {
+    return {
+      total:
+        0,
+
+      success:
+        0,
+
+      accuracy:
+        0,
+    };
+  }
+
+  const success =
+    selected.filter(
+      (signal) =>
+        signal.result ===
+        "SUCCESS"
+    ).length;
+
+  return {
+    total:
+      selected.length,
+
+    success,
+
+    accuracy:
+      (
+        success /
+        selected.length
+      ) *
+      100,
+  };
+}
+
+/* ============================================================
+   BTC CONTEXT LEARNING
+
+   This does NOT influence BUY NOW directly.
+   It only tells us later whether BTC context
+   historically helped GRT.
+============================================================ */
+
+function getGRTBTCContextPerformance() {
+  const completed =
+    getCompletedGRTBuyNowSignals();
+
+  return {
+    surgeOn:
+      getContextPerformance(
+        completed,
+        (signal) =>
+          signal.btcState ===
+          "BUY_SURGE_ON"
+      ),
+
+    surgeOff:
+      getContextPerformance(
+        completed,
+        (signal) =>
+          signal.btcState ===
+          "BUY_SURGE_OFF"
+      ),
+
+    validating:
+      getContextPerformance(
+        completed,
+        (signal) =>
+          signal.btcState ===
+          "VALIDATING"
+      ),
+  };
+}
+
+/* ============================================================
+   MULTI-TIMEFRAME CONTEXT LEARNING
+============================================================ */
+
+function getGRTTechnicalContextPerformance() {
+  const completed =
+    getCompletedGRTBuyNowSignals();
+
+  return {
+    fiveMinuteStrong:
+      getContextPerformance(
+        completed,
+        (signal) =>
+          signal.candle5mStrongBullish ===
+          true
+      ),
+
+    oneHourBullish:
+      getContextPerformance(
+        completed,
+        (signal) =>
+          signal.candle1hStrongBullish ===
+            true ||
+          signal.maCondition ===
+            "BULLISH"
+      ),
+
+    oneHourNearCross:
+      getContextPerformance(
+        completed,
+        (signal) =>
+          signal.maCondition ===
+          "NEAR CROSS"
       ),
   };
 }
@@ -9319,14 +10779,15 @@ function testBuyVolumeThreshold(
       (
         success /
         selected.length
-      ) * 100,
+      ) *
+      100,
   };
 }
 
 /* ============================================================
    GENERATE TUNING SUGGESTION
 
-   Bot does NOT apply this automatically.
+   Bot does NOT apply tuning automatically.
 ============================================================ */
 
 function generateGRTTuningSuggestion() {
@@ -9357,11 +10818,6 @@ function generateGRTTuningSuggestion() {
           threshold
         )
     );
-
-  /*
-    Require enough examples at the new threshold.
-    Avoid recommending based on 1 or 2 lucky signals.
-  */
 
   const minimumSample =
     Math.max(
@@ -9402,14 +10858,9 @@ function generateGRTTuningSuggestion() {
   const best =
     usable[0];
 
-  /*
-    Only suggest if historical improvement
-    is meaningful.
-  */
-
   if (
     best.threshold ===
-      GRT_DYNAMIC_BUY_VOLUME_MIN_PCT
+    GRT_DYNAMIC_BUY_VOLUME_MIN_PCT
   ) {
     return null;
   }
@@ -9461,15 +10912,10 @@ async function maybeSuggestGRTTuning() {
     return;
   }
 
-  /*
-    Do not spam a suggestion after every signal.
-    Re-evaluate after every additional 10 completed signals.
-  */
-
   if (
     completed.length <
-    LAST_TUNING_SUGGESTION_COUNT +
-      10 &&
+      LAST_TUNING_SUGGESTION_COUNT +
+        10 &&
     LAST_TUNING_SUGGESTION_COUNT >
       0
   ) {
@@ -9734,6 +11180,9 @@ bot.onText(
     const last =
       getLastGRTBuyNowSignal();
 
+    const btcContext =
+      getGRTBTCContextPerformance();
+
     if (
       GRT_BUY_NOW_HISTORY.length ===
       0
@@ -9803,6 +11252,22 @@ ${GRT_DYNAMIC_BUY_VOLUME_MIN_PCT.toFixed(
         0
       )}%
 
+₿ BTC CONTEXT
+SURGE ON:
+${btcContext.surgeOn.total} signals — ${btcContext.surgeOn.accuracy.toFixed(
+        1
+      )}%
+
+SURGE OFF:
+${btcContext.surgeOff.total} signals — ${btcContext.surgeOff.accuracy.toFixed(
+        1
+      )}%
+
+VALIDATING:
+${btcContext.validating.total} signals — ${btcContext.validating.accuracy.toFixed(
+        1
+      )}%
+
 ━━━━━━━━━━━━━━
 
 ${formatLearningSignal(
@@ -9860,7 +11325,7 @@ ${formatPercent(
   last.priceResponsePct
 )}
 
-RSI:
+RSI 5M:
 ${
   last.rsi !==
     null
@@ -9870,8 +11335,30 @@ ${
     : "N/A"
 }
 
+5M Candle:
+${last.candle5mDirection ||
+"UNKNOWN"}
+
+1H Candle:
+${last.candle1hDirection ||
+"UNKNOWN"}
+
 1H MA:
 ${last.maCondition}
+
+BTC Context:
+${last.btcState ||
+"UNKNOWN"}
+
+Meaningful Resistance:
+${
+  last.meaningfulResistance
+    ? `RM${formatPrice(
+        "GRT",
+        last.meaningfulResistance
+      )}`
+    : "N/A"
+}
 
 Signal Score:
 ${last.score}`
@@ -10214,6 +11701,27 @@ function formatLargeNumber(
 }
 
 /* ============================================================
+   FULL VOLUME FORMAT FOR 24H MARKET
+============================================================ */
+
+function formatFullVolume(
+  value
+) {
+  return safeNumber(
+    value
+  ).toLocaleString(
+    "en-MY",
+    {
+      minimumFractionDigits:
+        2,
+
+      maximumFractionDigits:
+        2,
+    }
+  );
+}
+
+/* ============================================================
    PREVIOUS DAILY SUMMARY
 ============================================================ */
 
@@ -10285,14 +11793,14 @@ function getDailyPriceTrend(
 
   if (
     metrics.grtChangePct >
-      previous.grtChangePct
+    previous.grtChangePct
   ) {
     return "STRENGTHENING ↑";
   }
 
   if (
     metrics.grtChangePct <
-      previous.grtChangePct
+    previous.grtChangePct
   ) {
     return "WEAKENING ↓";
   }
@@ -10677,116 +12185,570 @@ function finalizeDailySummary(
 }
 
 /* ============================================================
-   BUILD DAILY REPORT
+   CALCULATE MARKET STATS FROM CANDLE WINDOW
 ============================================================ */
 
-function buildGRTDailyReport(
+function calculateCandleWindowStats(
+  candles
+) {
+  if (
+    !Array.isArray(
+      candles
+    ) ||
+    candles.length <
+    2
+  ) {
+    return null;
+  }
+
+  const sorted = [
+    ...candles,
+  ].sort(
+    (a, b) =>
+      a.timestamp -
+      b.timestamp
+  );
+
+  const open =
+    sorted[0].open;
+
+  const close =
+    sorted[
+      sorted.length -
+        1
+    ].close;
+
+  const high =
+    Math.max(
+      ...sorted.map(
+        (candle) =>
+          candle.high
+      )
+    );
+
+  const low =
+    Math.min(
+      ...sorted.map(
+        (candle) =>
+          candle.low
+      )
+    );
+
+  const volume =
+    sorted.reduce(
+      (
+        total,
+        candle
+      ) =>
+        total +
+        candle.volume,
+      0
+    );
+
+  return {
+    open,
+    close,
+    high,
+    low,
+    volume,
+
+    changePct:
+      percentChange(
+        open,
+        close
+      ),
+  };
+}
+
+/* ============================================================
+   EXACT 24H VS PREVIOUS 24H MARKET WINDOWS
+
+   CURRENT:
+   now - 24H -> now
+
+   PREVIOUS:
+   now - 48H -> now - 24H
+
+   This prevents comparison against
+   week-old or stale market prices.
+============================================================ */
+
+async function getGRT24hMarketWindows() {
+  /*
+    5-minute candles.
+
+    48H = 576 candles.
+    Request a few extra for boundary safety.
+  */
+
+  const candles =
+    await getLunoCandles(
+      "GRT",
+      300,
+      590
+    );
+
+  if (
+    !candles.length
+  ) {
+    return null;
+  }
+
+  const now =
+    Date.now();
+
+  const currentStart =
+    now -
+    TWENTY_FOUR_HOURS;
+
+  const previousStart =
+    now -
+    2 *
+      TWENTY_FOUR_HOURS;
+
+  const currentCandles =
+    candles.filter(
+      (candle) =>
+        candle.timestamp >=
+          currentStart &&
+        candle.timestamp <=
+          now
+    );
+
+  const previousCandles =
+    candles.filter(
+      (candle) =>
+        candle.timestamp >=
+          previousStart &&
+        candle.timestamp <
+          currentStart
+    );
+
+  const current =
+    calculateCandleWindowStats(
+      currentCandles
+    );
+
+  const previous =
+    calculateCandleWindowStats(
+      previousCandles
+    );
+
+  if (
+    !current
+  ) {
+    return null;
+  }
+
+  const comparison =
+    previous
+      ? {
+          ready:
+            true,
+
+          highChangePct:
+            percentChange(
+              previous.high,
+              current.high
+            ),
+
+          lowChangePct:
+            percentChange(
+              previous.low,
+              current.low
+            ),
+
+          volumeChangePct:
+            percentChange(
+              previous.volume,
+              current.volume
+            ),
+        }
+      : {
+          ready:
+            false,
+
+          highChangePct:
+            null,
+
+          lowChangePct:
+            null,
+
+          volumeChangePct:
+            null,
+        };
+
+  /*
+    Keep latest state on disk as fallback /
+    diagnostic reference.
+
+    Main comparison remains exact
+    current 24H vs previous 24H window.
+  */
+
+  GRT_24H_PREVIOUS_SNAPSHOT = {
+    timestamp:
+      now,
+
+    ...current,
+  };
+
+  saveGRT24hSnapshot(
+    GRT_24H_PREVIOUS_SNAPSHOT
+  );
+
+  return {
+    current,
+
+    previous,
+
+    comparison,
+  };
+}
+
+/* ============================================================
+   24H COMPARISON TEXT
+============================================================ */
+
+function format24hComparison(
+  value
+) {
+  if (
+    value ===
+      null ||
+    value ===
+      undefined ||
+    !Number.isFinite(
+      Number(value)
+    )
+  ) {
+    return "";
+  }
+
+  return ` (${formatPercent(
+    value
+  )})`;
+}
+
+/* ============================================================
+   BTC / GRT RELATIONSHIP INTERPRETATION
+============================================================ */
+
+function getBTCGRTRelationship({
+  grtChangePct,
+  btcChangePct,
+}) {
+  const outperformance =
+    grtChangePct -
+    btcChangePct;
+
+  if (
+    grtChangePct >
+      0 &&
+    btcChangePct <
+      0 &&
+    outperformance >=
+      2
+  ) {
+    return {
+      strength:
+        "GRT STRONG VS BTC",
+
+      rotation:
+        "POSSIBLE ALTCOIN ROTATION",
+
+      description:
+        "GRT naik ketika BTC melemah. Relative strength GRT jelas positif.",
+    };
+  }
+
+  if (
+    grtChangePct >
+      0 &&
+    btcChangePct <=
+      0
+  ) {
+    return {
+      strength:
+        "GRT OUTPERFORMING BTC",
+
+      rotation:
+        "ROTATION WATCH",
+
+      description:
+        "GRT bertahan atau naik ketika BTC lemah/sideway.",
+    };
+  }
+
+  if (
+    grtChangePct >
+      btcChangePct &&
+    outperformance >=
+      1
+  ) {
+    return {
+      strength:
+        "GRT OUTPERFORMING BTC",
+
+      rotation:
+        "RELATIVE STRENGTH POSITIVE",
+
+      description:
+        "Kedua-dua market bergerak, tetapi GRT lebih kuat daripada BTC.",
+    };
+  }
+
+  if (
+    btcChangePct >
+      0 &&
+    grtChangePct <
+      0
+  ) {
+    return {
+      strength:
+        "GRT WEAK VS BTC",
+
+      rotation:
+        "NO CLEAR ROTATION INTO GRT",
+
+      description:
+        "BTC menguat tetapi GRT melemah. Relative strength GRT masih lemah.",
+    };
+  }
+
+  if (
+    grtChangePct <
+      0 &&
+    btcChangePct <
+      0
+  ) {
+    return {
+      strength:
+        outperformance >
+          0
+          ? "GRT LESS WEAK THAN BTC"
+          : "GRT WEAK WITH BTC",
+
+      rotation:
+        "RISK-OFF / NO CLEAR ROTATION",
+
+      description:
+        outperformance >
+          0
+          ? "Kedua-duanya turun, tetapi GRT menahan penurunan lebih baik."
+          : "BTC dan GRT sama-sama lemah.",
+    };
+  }
+
+  return {
+    strength:
+      Math.abs(
+        outperformance
+      ) <
+        0.50
+        ? "GRT TRACKING BTC"
+        : outperformance >
+            0
+          ? "GRT SLIGHTLY STRONGER"
+          : "GRT SLIGHTLY WEAKER",
+
+    rotation:
+      "NO STRONG ROTATION SIGNAL",
+
+    description:
+      "Hubungan BTC dan GRT masih belum menunjukkan divergence yang kuat.",
+  };
+}
+
+/* ============================================================
+   BUILD DAILY REPORT
+
+   MARKET 24H section uses TRUE rolling
+   Luno 24H data.
+
+   Executed analytics section retains
+   existing daily collector analytics.
+============================================================ */
+
+async function buildGRTDailyReport(
   summary,
   live =
     false
 ) {
-  const previous =
-    getPreviousDailySummary();
+  const market24h =
+    await getGRT24hMarketWindows();
 
-  let comparison =
-    "";
+  let marketSection =
+    `📊 LUNO ROLLING 24H
+24H DATA UNAVAILABLE`;
+
+  let relationship =
+    null;
 
   if (
-    previous
+    market24h
+      ?.current
   ) {
-    comparison = `
+    const current =
+      market24h.current;
 
-📊 VS PREVIOUS DAY
-Price:
+    const comparison =
+      market24h.comparison;
+
+    marketSection =
+      `📊 LUNO ROLLING 24H
+
+24H CHANGE:
 ${formatPercent(
-      previous.grtChangePct
-    )} → ${formatPercent(
-      summary.grtChangePct
-    )}
+        current.changePct
+      )}
 
-BUY Frequency:
-${previous.buyFrequencyPct.toFixed(
-      1
-    )}% → ${summary.buyFrequencyPct.toFixed(
-      1
-    )}%
+24H HIGH:
+RM${formatPrice(
+        "GRT",
+        current.high
+      )}${comparison.ready
+        ? format24hComparison(
+            comparison.highChangePct
+          )
+        : ""}
 
-BUY Volume:
-${previous.buyVolumePct.toFixed(
-      1
-    )}% → ${summary.buyVolumePct.toFixed(
-      1
-    )}%`;
+24H LOW:
+RM${formatPrice(
+        "GRT",
+        current.low
+      )}${comparison.ready
+        ? format24hComparison(
+            comparison.lowChangePct
+          )
+        : ""}
+
+24H VOLUME:
+${formatFullVolume(
+        current.volume
+      )} GRT${comparison.ready
+        ? format24hComparison(
+            comparison.volumeChangePct
+          )
+        : ""}`;
+
+    relationship =
+      getBTCGRTRelationship({
+        grtChangePct:
+          current.changePct,
+
+        btcChangePct:
+          summary.btcChangePct,
+      });
   }
+
+  const relationshipSection =
+    relationship
+      ? `
+
+₿ GRT VS BTC
+
+GRT 24H:
+${formatPercent(
+          market24h.current.changePct
+        )}
+
+BTC:
+${formatPercent(
+          summary.btcChangePct
+        )}
+
+Relative Strength:
+${formatPercent(
+          market24h.current.changePct -
+          summary.btcChangePct
+        )}
+
+🧠 ${relationship.strength}
+🔄 ${relationship.rotation}
+
+${relationship.description}`
+      : `
+
+₿ GRT VS BTC
+
+GRT:
+${formatPercent(
+          summary.grtChangePct
+        )}
+
+BTC:
+${formatPercent(
+          summary.btcChangePct
+        )}
+
+Relative Strength:
+${formatPercent(
+          summary.grtOutperformance
+        )}`;
 
   return `🌙 GRT 24H DAILY REPORT
 ${formatMalaysiaDateLabel(
     summary.dateKey
   )}
 ${live
-  ? "12AM → NOW MYT"
-  : "12AM → 12AM MYT"}
+  ? "LIVE REPORT"
+  : "DAILY CLOSE REPORT"}
 
-💵 PRICE
-Open: RM${formatPrice(
-    "GRT",
-    summary.grtOpen
-  )}
-Close: RM${formatPrice(
-    "GRT",
-    summary.grtClose
-  )}
-24H: ${formatPercent(
-    summary.grtChangePct
-  )}
-High: RM${formatPrice(
-    "GRT",
-    summary.grtHigh
-  )}
-Low: RM${formatPrice(
-    "GRT",
-    summary.grtLow
-  )}
+${marketSection}
 
-🧾 TRADE FREQUENCY
-🟢 BUY: ${summary.buyFrequencyPct.toFixed(
+━━━━━━━━━━━━━━
+
+🧾 EXECUTED TRADE ANALYTICS
+
+BUY Frequency:
+🟢 ${summary.buyFrequencyPct.toFixed(
     1
   )}%
-🔴 SELL: ${summary.sellFrequencyPct.toFixed(
+
+SELL Frequency:
+🔴 ${summary.sellFrequencyPct.toFixed(
     1
   )}%
 
 📦 EXECUTED VOLUME
-🟢 BUY: ${formatLargeNumber(
+
+🟢 BUY:
+${formatLargeNumber(
     summary.buyVolume
   )} — ${summary.buyVolumePct.toFixed(
     1
   )}%
-🔴 SELL: ${formatLargeNumber(
+
+🔴 SELL:
+${formatLargeNumber(
     summary.sellVolume
   )} — ${summary.sellVolumePct.toFixed(
     1
   )}%
 
-₿ GRT VS BTC
-GRT: ${formatPercent(
-    summary.grtChangePct
-  )}
-BTC: ${formatPercent(
-    summary.btcChangePct
-  )}
-Outperform: ${formatPercent(
-    summary.grtOutperformance
-  )}
+${relationshipSection}
+
+━━━━━━━━━━━━━━
 
 📈 TREND
-Price: ${summary.priceTrend}
-Buy Activity: ${summary.buyTrend}
-7-Day: ${summary.sevenDayTrend}
+
+Price:
+${summary.priceTrend}
+
+Buy Activity:
+${summary.buyTrend}
+
+7-Day:
+${summary.sevenDayTrend}
 
 🧠 SUMMARY
-GRT MOMENTUM: ${summary.momentum}
-ALTCOIN ROTATION: ${summary.rotation}${comparison}`;
+
+GRT MOMENTUM:
+${summary.momentum}
+
+ALTCOIN ROTATION:
+${summary.rotation}`;
 }
 
 /* ============================================================
@@ -10822,7 +12784,7 @@ async function checkDailyWatchRollover() {
       summary.grtClose
     ) {
       await sendTelegram(
-        buildGRTDailyReport(
+        await buildGRTDailyReport(
           summary,
           false
         )
@@ -10901,7 +12863,7 @@ async function buildCurrentGRTDailyReport() {
     return null;
   }
 
-  return buildGRTDailyReport(
+  return await buildGRTDailyReport(
     summary,
     true
   );
@@ -10978,7 +12940,8 @@ bot.onText(
 bot.onText(
   /\/structure/i,
   async (msg) => {
-    const sections = [];
+    const sections =
+      [];
 
     for (
       const coin of
@@ -11034,7 +12997,8 @@ bot.onText(
           ]
         : CORE_COINS;
 
-    const sections = [];
+    const sections =
+      [];
 
     for (
       const coin of
@@ -11129,21 +13093,50 @@ bot.onText(
 📡 Price Alert:
 5 MIN
 
-₿ BTC:
-BUY SURGE RADAR
+₿ BTC MOMENTUM:
+🟡 VALIDATING
+🟢 BUY SURGE ON
+🔴 BUY SURGE OFF
 
-🪙 GRT:
-NO ENTRY SIGNAL
-→ VERIFYING BUY
-→ BUY NOW
+BTC Trading:
+DISABLED — MARKET REFERENCE ONLY
 
-⚡ BUY Surge Threshold:
+🪙 GRT MOMENTUM:
+🟡 VALIDATING
+🟢 BUY NOW
+🔴 DON'T BUY
+
+🟢 BUY NOW:
+TRIGGERS SCALPING ENTRY
+
+⚡ BUY Activity Threshold:
 +${MOMENTUM_SPIKE_THRESHOLD_PCT}%
 
 🎯 Dynamic GRT BUY Threshold:
 ${GRT_DYNAMIC_BUY_VOLUME_MIN_PCT.toFixed(
         0
       )}%
+
+📈 GRT Technical:
+5M Candle + RSI
+1H Candle + MA9 / MA50
+Executed BUY
+Price Response
+Orderbook
+Meaningful Resistance
+
+🎯 TP Engine:
+MEANINGFUL RESISTANCE
++ BREAKOUT PERMISSION
+
+🧪 BUY NOW Learning:
+ACTIVE
+
+🧪 BUY NOW Records:
+${GRT_BUY_NOW_HISTORY.length}
+
+🌙 Luno Rolling 24H:
+ACTIVE
 
 🔐 Luno Candle API:
 ${candleAuth}
@@ -11153,15 +13146,6 @@ ${candleAuth}
 
 🚀 Scalping Scan:
 1 MIN
-
-🧠 BUY NOW Learning:
-ACTIVE
-
-🧪 BUY NOW Records:
-${GRT_BUY_NOW_HISTORY.length}
-
-🌙 Daily Watch:
-ACTIVE
 
 📈 Active Trades:
 ${
@@ -11202,16 +13186,36 @@ app.get(
 
       momentum: {
         btc:
-          "BUY SURGE RADAR",
+          "VALIDATING -> BUY SURGE ON / BUY SURGE OFF",
 
         grt:
-          "NO ENTRY -> VERIFYING -> BUY NOW",
+          "VALIDATING -> BUY NOW / DON'T BUY",
+
+        btcTrading:
+          false,
 
         buyIncreaseThreshold:
           MOMENTUM_SPIKE_THRESHOLD_PCT,
 
         grtDynamicBuyVolumePct:
           GRT_DYNAMIC_BUY_VOLUME_MIN_PCT,
+      },
+
+      tpEngine: {
+        meaningfulResistance:
+          true,
+
+        breakoutPermission:
+          true,
+
+        candle5m:
+          true,
+
+        candle1h:
+          true,
+
+        ma1h:
+          true,
       },
 
       learning: {
@@ -11367,8 +13371,38 @@ app.get(
       stats:
         getGRTBuyNowPerformance(),
 
+      btcContext:
+        getGRTBTCContextPerformance(),
+
+      technicalContext:
+        getGRTTechnicalContextPerformance(),
+
       history:
         GRT_BUY_NOW_HISTORY,
+    });
+  }
+);
+
+/* ============================================================
+   GRT 24H ENDPOINT
+============================================================ */
+
+app.get(
+  "/grt24",
+  async (
+    req,
+    res
+  ) => {
+    const data =
+      await getGRT24hMarketWindows();
+
+    return res.json({
+      ready:
+        Boolean(
+          data
+        ),
+
+      data,
     });
   }
 );
@@ -11496,10 +13530,9 @@ app.listen(
       `RUNNING ${PORT} ${SERVICE_CODE}`
     );
 
-    /*
-      Load stored state before
-      starting the monitoring engines.
-    */
+    /* ========================================================
+       LOAD STORED STATE
+    ======================================================== */
 
     loadDailyWatchSnapshot();
 
@@ -11507,11 +13540,13 @@ app.listen(
 
     loadGRTTuning();
 
+    loadGRT24hSnapshot();
+
     ensureDailyWatchState();
 
-    /*
-      Prime local data.
-    */
+    /* ========================================================
+       PRIME EXECUTED DATA
+    ======================================================== */
 
     await backfillTradeHistory();
 
@@ -11590,51 +13625,79 @@ app.listen(
       }
     }
 
+    /* ========================================================
+       24H MARKET TEST
+    ======================================================== */
+
+    const market24h =
+      await getGRT24hMarketWindows();
+
+    if (
+      market24h
+        ?.current
+    ) {
+      console.log(
+        `GRT 24H MARKET READY — HIGH ${market24h.current.high} LOW ${market24h.current.low} VOL ${market24h.current.volume}`
+      );
+    } else {
+      console.log(
+        "GRT 24H MARKET DATA NOT READY"
+      );
+    }
+
+    /* ========================================================
+       ONLINE MESSAGE
+    ======================================================== */
+
     await sendTelegram(
       `✅ BOT ONLINE
 
 📡 PRICE ALERT:
 5 MIN
 
-₿ BTC:
-BUY SURGE RADAR
-Executed BUY + Positive Price Response
+₿ BTC MOMENTUM:
+🟡 VALIDATING
+🟢 BUY SURGE ON
+🔴 BUY SURGE OFF
+
+BTC:
+MARKET REFERENCE ONLY
+NO SCALPING ENTRY
 
 🪙 GRT MOMENTUM:
-🔴 NO ENTRY SIGNAL
-🟡 VERIFYING BUY
+🟡 VALIDATING
 🟢 BUY NOW
+🔴 DON'T BUY
 
 🟢 BUY NOW:
-TRIGGERS SCALPING ENTRY SAFETY CHECK
+→ SCALPING ENTRY
 
-⚡ BUY ACTIVITY THRESHOLD:
-+${MOMENTUM_SPIKE_THRESHOLD_PCT}%
-
-🎯 GRT BUY DOMINANCE:
-${GRT_DYNAMIC_BUY_VOLUME_MIN_PCT.toFixed(
-        0
-      )}%
-
-📈 GRT FILTERS:
+📈 GRT VALIDATION:
+5M Candle
 RSI 5M
+1H Candle
 MA9 / MA50 1H
 Executed BUY
 Price Response
 Orderbook
-Liquidity
-Support / Resistance
+
+🎯 TP ENGINE:
+Meaningful Resistance
+Breakout Permission
+5M + 1H + MA Validation
+Flexible Quantity
+
+🌙 GRT ROLLING 24H:
+CHANGE
+HIGH vs PREVIOUS 24H
+LOW vs PREVIOUS 24H
+VOLUME vs PREVIOUS 24H
 
 🧪 BUY NOW LEARNING:
 ACTIVE
 
-Outcome:
-5M / 10M / 15M
-Best Move / Worst Move
-
-🧠 SEMI-AUTO TUNING:
+₿ BTC CONTEXT LEARNING:
 ACTIVE
-USER APPROVAL REQUIRED
 
 🔐 LUNO CANDLE API:
 ${candleStatus}
@@ -11643,9 +13706,6 @@ ${candleStatus}
 15 MIN
 
 🚀 SCALPING:
-ACTIVE
-
-🌙 GRT DAILY WATCH:
 ACTIVE`
     );
 
@@ -11827,5 +13887,6 @@ setInterval(
 
 setInterval(
   saveGRTBuyNowHistory,
-  60 * 1000
+  60 *
+    1000
 );
