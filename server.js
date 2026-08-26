@@ -12431,6 +12431,49 @@ function format24hComparison(
 }
 
 /* ============================================================
+   BTC ROLLING 24H MARKET STATS
+
+   Uses the same 24H candle window
+   as GRT so relative strength is
+   always apples-to-apples.
+============================================================ */
+
+async function getBTC24hMarketStats() {
+  const candles =
+    await getLunoCandles(
+      "BTC",
+      300,
+      294
+    );
+
+  if (
+    !candles.length
+  ) {
+    return null;
+  }
+
+  const now =
+    Date.now();
+
+  const cutoff =
+    now -
+    TWENTY_FOUR_HOURS;
+
+  const rolling =
+    candles.filter(
+      (candle) =>
+        candle.timestamp >=
+          cutoff &&
+        candle.timestamp <=
+          now
+    );
+
+  return calculateCandleWindowStats(
+    rolling
+  );
+}
+
+/* ============================================================
    BTC / GRT RELATIONSHIP INTERPRETATION
 ============================================================ */
 
@@ -12575,8 +12618,14 @@ async function buildGRTDailyReport(
   live =
     false
 ) {
-  const market24h =
-    await getGRT24hMarketWindows();
+  const [
+    market24h,
+    btc24h,
+  ] =
+    await Promise.all([
+      getGRT24hMarketWindows(),
+      getBTC24hMarketStats(),
+    ]);
 
   let marketSection =
     `📊 LUNO ROLLING 24H
@@ -12631,14 +12680,22 @@ ${formatFullVolume(
             comparison.volumeChangePct
           )
         : ""}`;
+  }
 
+  if (
+    market24h
+      ?.current &&
+    btc24h
+  ) {
     relationship =
       getBTCGRTRelationship({
         grtChangePct:
-          current.changePct,
+          market24h
+            .current
+            .changePct,
 
         btcChangePct:
-          summary.btcChangePct,
+          btc24h.changePct,
       });
   }
 
@@ -12650,18 +12707,22 @@ ${formatFullVolume(
 
 GRT 24H:
 ${formatPercent(
-          market24h.current.changePct
+          market24h
+            .current
+            .changePct
         )}
 
-BTC:
+BTC 24H:
 ${formatPercent(
-          summary.btcChangePct
+          btc24h.changePct
         )}
 
 Relative Strength:
 ${formatPercent(
-          market24h.current.changePct -
-          summary.btcChangePct
+          market24h
+            .current
+            .changePct -
+          btc24h.changePct
         )}
 
 🧠 ${relationship.strength}
@@ -12672,20 +12733,14 @@ ${relationship.description}`
 
 ₿ GRT VS BTC
 
-GRT:
-${formatPercent(
-          summary.grtChangePct
-        )}
+⚠️ BTC 24H DATA VALIDATING
 
-BTC:
-${formatPercent(
-          summary.btcChangePct
-        )}
+Relative strength belum boleh dikira dengan tepat.`;
 
-Relative Strength:
-${formatPercent(
-          summary.grtOutperformance
-        )}`;
+  const reportRotation =
+    relationship
+      ? relationship.rotation
+      : "VALIDATING";
 
   return `🌙 GRT 24H DAILY REPORT
 ${formatMalaysiaDateLabel(
@@ -12748,7 +12803,7 @@ GRT MOMENTUM:
 ${summary.momentum}
 
 ALTCOIN ROTATION:
-${summary.rotation}`;
+${reportRotation}`;
 }
 
 /* ============================================================
