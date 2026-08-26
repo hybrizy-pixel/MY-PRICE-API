@@ -65,6 +65,7 @@ const USER_STATE = {};
 
 const LAST_SIGNAL = {};
 const LAST_PRICE = {};
+const LAST_ALERT_PRICE = {};
 
 const PRICE_MEMORY = {};
 
@@ -72,6 +73,15 @@ const BREAKOUT_WATCH = {};
 
 const LAST_FAKE_BREAKOUT = {};
 const LAST_CONFIRMED_BREAKOUT = {};
+
+/* ============================================================
+   GRT BUY NOW LEARNING STATE
+============================================================ */
+
+let GRT_BUY_NOW_HISTORY = [];
+let LAST_GRT_BUY_NOW_SIGNAL = 0;
+let LAST_TUNING_SUGGESTION_COUNT = 0;
+let GRT_DYNAMIC_BUY_VOLUME_MIN_PCT = 55;
 
 /* ============================================================
    TRADE HISTORY
@@ -90,6 +100,8 @@ const SEEN_TRADE_SEQUENCES = Object.fromEntries(
     new Set(),
   ])
 );
+
+let TRADE_HISTORY_BUSY = false;
 
 /* ============================================================
    SERVER TIME
@@ -281,6 +293,31 @@ const GRT_MA_SLOW =
 
 const GRT_MA_NEAR_CROSS_PCT =
   0.20;
+
+/* ============================================================
+   MOMENTUM ENTRY + LEARNING CONFIG
+============================================================ */
+
+const BTC_BUY_SURGE_MIN_BUY_PCT = 55;
+const BTC_BUY_SURGE_MIN_PRICE_RESPONSE_PCT = 0.03;
+
+const GRT_EARLY_MIN_BUY_VOLUME_PCT = 52;
+const GRT_EARLY_MIN_PRICE_RESPONSE_PCT = 0.03;
+const GRT_BUY_NOW_COOLDOWN_MS = 15 * 60 * 1000;
+
+const GRT_BUY_NOW_HISTORY_LIMIT = 250;
+const GRT_BUY_NOW_SUCCESS_PCT = 0.30;
+const GRT_BUY_NOW_FALSE_PCT = -0.30;
+const GRT_BUY_NOW_MONITOR_INTERVAL = 60 * 1000;
+const GRT_TUNING_MIN_COMPLETED_SIGNALS = 20;
+
+const GRT_BUY_NOW_FILE =
+  process.env.GRT_BUY_NOW_FILE ||
+  "/tmp/grt-buy-now-history.json";
+
+const GRT_TUNING_FILE =
+  process.env.GRT_TUNING_FILE ||
+  "/tmp/grt-momentum-tuning.json";
 
 /* ============================================================
    GRT DAILY WATCH CONFIG
@@ -659,106 +696,14 @@ function updateDailyWatchTrade(
       trade.volume;
   }
 }
-
-/* ============================================================
-   DAILY WATCH SNAPSHOT
-============================================================ */
-
-function saveDailyWatchSnapshot() {
-  try {
-    fs.writeFileSync(
-      DAILY_WATCH_FILE,
-      JSON.stringify(
-        {
-          state:
-            GRT_DAILY_STATE,
-
-          history:
-            GRT_DAILY_HISTORY,
-
-          lastReportKey:
-            LAST_DAILY_REPORT_KEY,
-        },
-        null,
-        2
-      )
-    );
-  } catch (error) {
-    console.log(
-      "Daily watch save error:",
-      error.message
-    );
-  }
-}
-
-function loadDailyWatchSnapshot() {
-  try {
-    if (
-      !fs.existsSync(
-        DAILY_WATCH_FILE
-      )
-    ) {
-      return;
-    }
-
-    const raw =
-      fs.readFileSync(
-        DAILY_WATCH_FILE,
-        "utf8"
-      );
-
-    if (
-      !raw
-    ) {
-      return;
-    }
-
-    const parsed =
-      JSON.parse(
-        raw
-      );
-
-    if (
-      parsed.state
-    ) {
-      GRT_DAILY_STATE =
-        parsed.state;
-    }
-
-    if (
-      Array.isArray(
-        parsed.history
-      )
-    ) {
-      GRT_DAILY_HISTORY =
-        parsed.history.slice(
-          -GRT_DAILY_HISTORY_DAYS
-        );
-    }
-
-    if (
-      parsed.lastReportKey
-    ) {
-      LAST_DAILY_REPORT_KEY =
-        parsed.lastReportKey;
-    }
-  } catch (error) {
-    console.log(
-      "Daily watch load error:",
-      error.message
-    );
-  }
-}
-
 /* ============================================================
    BASIC HELPERS
 ============================================================ */
 
-function now() {
-  return Date.now();
-}
-
-function safeNumber(value) {
+function safeNumber(
+  value,
+  fallback = 0
+) {
   const number =
     Number(value);
 
@@ -766,200 +711,64 @@ function safeNumber(value) {
     number
   )
     ? number
-    : 0;
-}
-
-function clamp(
-  value,
-  min,
-  max
-) {
-  return Math.min(
-    Math.max(
-      value,
-      min
-    ),
-    max
-  );
-}
-
-function percentChange(
-  from,
-  to
-) {
-  if (
-    !from
-  ) {
-    return 0;
-  }
-
-  return (
-    (
-      to -
-      from
-    ) /
-    from
-  ) * 100;
+    : fallback;
 }
 
 function average(
   values
 ) {
+  const clean =
+    values.filter(
+      (value) =>
+        Number.isFinite(
+          Number(value)
+        )
+    );
+
   if (
-    !values.length
+    !clean.length
   ) {
     return 0;
   }
 
   return (
-    values.reduce(
-      (
-        total,
-        value
-      ) =>
-        total +
-        value,
+    clean.reduce(
+      (sum, value) =>
+        sum +
+        Number(value),
       0
     ) /
-    values.length
+    clean.length
   );
 }
 
-function median(
-  values
+function percentChange(
+  oldValue,
+  newValue
 ) {
+  const oldNumber =
+    safeNumber(
+      oldValue
+    );
+
+  const newNumber =
+    safeNumber(
+      newValue
+    );
+
   if (
-    !values.length
+    oldNumber <= 0
   ) {
     return 0;
   }
 
-  const sorted = [
-    ...values,
-  ].sort(
-    (
-      a,
-      b
-    ) =>
-      a - b
-  );
-
-  const middle =
-    Math.floor(
-      sorted.length /
-      2
-    );
-
-  if (
-    sorted.length %
-    2
-  ) {
-    return sorted[
-      middle
-    ];
-  }
-
   return (
-    sorted[
-      middle - 1
-    ] +
-    sorted[
-      middle
-    ]
-  ) / 2;
-}
-
-/* ============================================================
-   INPUT VALIDATION
-============================================================ */
-
-function parseUserNumber(
-  input
-) {
-  const raw =
-    String(
-      input ?? ""
-    )
-      .replace(
-        /,/g,
-        ""
-      )
-      .trim();
-
-  if (
-    raw === ""
-  ) {
-    return {
-      valid:
-        false,
-
-      value:
-        null,
-    };
-  }
-
-  const value =
-    Number(raw);
-
-  if (
-    !Number.isFinite(
-      value
-    )
-  ) {
-    return {
-      valid:
-        false,
-
-      value:
-        null,
-    };
-  }
-
-  return {
-    valid:
-      true,
-
-    value,
-  };
-}
-
-/* ============================================================
-   FORMAT
-============================================================ */
-
-function pairForCoin(
-  coin
-) {
-  if (
-    coin ===
-    "BTC"
-  ) {
-    return "XBTMYR";
-  }
-
-  return `${coin}MYR`;
-}
-
-function formatPrice(
-  coin,
-  value
-) {
-  if (
-    coin ===
-    "BTC"
-  ) {
-    return safeNumber(
-      value
-    ).toFixed(
-      2
-    );
-  }
-
-  return safeNumber(
-    value
-  ).toFixed(
-    4
-  );
+    (
+      newNumber -
+      oldNumber
+    ) /
+    oldNumber
+  ) * 100;
 }
 
 function formatPercent(
@@ -971,57 +780,117 @@ function formatPercent(
       value
     );
 
-  return `${
-    number >= 0
+  const sign =
+    number > 0
       ? "+"
-      : ""
-  }${number.toFixed(
+      : "";
+
+  return `${sign}${number.toFixed(
     digits
   )}%`;
 }
 
-function formatMoney(
-  value
+function formatPrice(
+  coin,
+  price
 ) {
-  const number =
+  const value =
     safeNumber(
-      value
+      price
     );
 
   if (
-    number >= 0
+    coin === "BTC"
   ) {
-    return `RM${number.toFixed(
+    return value.toFixed(
       2
-    )}`;
+    );
   }
 
-  return `-RM${Math.abs(
-    number
-  ).toFixed(
+  if (
+    [
+      "GRT",
+      "XLM",
+    ].includes(
+      coin
+    )
+  ) {
+    return value.toFixed(
+      4
+    );
+  }
+
+  if (
+    coin === "CRV"
+  ) {
+    return value.toFixed(
+      3
+    );
+  }
+
+  return value.toFixed(
     2
-  )}`;
+  );
 }
 
+function clamp(
+  value,
+  min,
+  max
+) {
+  return Math.min(
+    max,
+    Math.max(
+      min,
+      value
+    )
+  );
+}
+
+function sleep(
+  ms
+) {
+  return new Promise(
+    (resolve) =>
+      setTimeout(
+        resolve,
+        ms
+      )
+  );
+}
+
+function getPair(
+  coin
+) {
+  if (
+    coin ===
+    "BTC"
+  ) {
+    return "XBTMYR";
+  }
+
+  return `${coin}MYR`;
+}
 /* ============================================================
    TELEGRAM HELPERS
 ============================================================ */
 
 async function sendTelegram(
-  message,
+  text,
   options = {}
 ) {
   try {
     return await bot.sendMessage(
       CHAT_ID,
-      `${SERVICE_CODE}\n\n${message}`,
+      `${SERVICE_CODE}\n\n${text}`,
       options
     );
-  } catch (error) {
+  } catch (
+    error
+  ) {
     console.log(
-      "Telegram error:",
-      error.response?.data ||
-        error.message
+      "Telegram send error:",
+      error.message
     );
 
     return null;
@@ -1030,20 +899,21 @@ async function sendTelegram(
 
 async function replyTelegram(
   chatId,
-  message,
+  text,
   options = {}
 ) {
   try {
     return await bot.sendMessage(
       chatId,
-      `${SERVICE_CODE}\n\n${message}`,
+      `${SERVICE_CODE}\n\n${text}`,
       options
     );
-  } catch (error) {
+  } catch (
+    error
+  ) {
     console.log(
       "Telegram reply error:",
-      error.response?.data ||
-        error.message
+      error.message
     );
 
     return null;
@@ -1058,15 +928,17 @@ async function getTicker(
   coin
 ) {
   try {
+    const pair =
+      getPair(
+        coin
+      );
+
     const response =
       await axios.get(
         "https://api.luno.com/api/1/ticker",
         {
           params: {
-            pair:
-              pairForCoin(
-                coin
-              ),
+            pair,
           },
 
           timeout:
@@ -1074,39 +946,43 @@ async function getTicker(
         }
       );
 
+    const data =
+      response.data ||
+      {};
+
+    const currentPrice =
+      safeNumber(
+        data.last_trade
+      );
+
+    const bid =
+      safeNumber(
+        data.bid
+      );
+
+    const ask =
+      safeNumber(
+        data.ask
+      );
+
+    if (
+      currentPrice <= 0
+    ) {
+      return null;
+    }
+
     return {
       coin,
-
-      currentPrice:
-        safeNumber(
-          response
-            .data
-            .last_trade
-        ),
-
-      bestAsk:
-        safeNumber(
-          response
-            .data
-            .ask
-        ),
-
-      bestBid:
-        safeNumber(
-          response
-            .data
-            .bid
-        ),
-
+      pair,
+      currentPrice,
+      bid,
+      ask,
       timestamp:
-        safeNumber(
-          response
-            .data
-            .timestamp
-        ) ||
-        now(),
+        Date.now(),
     };
-  } catch (error) {
+  } catch (
+    error
+  ) {
     console.log(
       `Ticker ${coin}:`,
       error.response?.data ||
@@ -1118,22 +994,24 @@ async function getTicker(
 }
 
 /* ============================================================
-   LUNO TOP ORDERBOOK
+   LUNO ORDERBOOK
 ============================================================ */
 
 async function getTopOrderBook(
   coin
 ) {
   try {
+    const pair =
+      getPair(
+        coin
+      );
+
     const response =
       await axios.get(
         "https://api.luno.com/api/1/orderbook_top",
         {
           params: {
-            pair:
-              pairForCoin(
-                coin
-              ),
+            pair,
           },
 
           timeout:
@@ -1141,91 +1019,83 @@ async function getTopOrderBook(
         }
       );
 
-    const asks =
-      Array.isArray(
-        response.data
-          ?.asks
-      )
-        ? response.data.asks
-            .map(
-              (order) => ({
-                price:
-                  safeNumber(
-                    order.price
-                  ),
-
-                volume:
-                  safeNumber(
-                    order.volume
-                  ),
-              })
-            )
-            .filter(
-              (order) =>
-                order.price >
-                  0 &&
-                order.volume >
-                  0
-            )
-            .sort(
-              (
-                a,
-                b
-              ) =>
-                a.price -
-                b.price
-            )
-        : [];
+    const data =
+      response.data ||
+      {};
 
     const bids =
-      Array.isArray(
-        response.data
-          ?.bids
+      (
+        data.bids ||
+        []
       )
-        ? response.data.bids
-            .map(
-              (order) => ({
-                price:
-                  safeNumber(
-                    order.price
-                  ),
+        .map(
+          (item) => ({
+            price:
+              safeNumber(
+                item.price
+              ),
 
-                volume:
-                  safeNumber(
-                    order.volume
-                  ),
-              })
-            )
-            .filter(
-              (order) =>
-                order.price >
-                  0 &&
-                order.volume >
-                  0
-            )
-            .sort(
-              (
-                a,
-                b
-              ) =>
-                b.price -
-                a.price
-            )
-        : [];
+            volume:
+              safeNumber(
+                item.volume
+              ),
+          })
+        )
+        .filter(
+          (item) =>
+            item.price >
+              0 &&
+            item.volume >
+              0
+        )
+        .sort(
+          (a, b) =>
+            b.price -
+            a.price
+        );
+
+    const asks =
+      (
+        data.asks ||
+        []
+      )
+        .map(
+          (item) => ({
+            price:
+              safeNumber(
+                item.price
+              ),
+
+            volume:
+              safeNumber(
+                item.volume
+              ),
+          })
+        )
+        .filter(
+          (item) =>
+            item.price >
+              0 &&
+            item.volume >
+              0
+        )
+        .sort(
+          (a, b) =>
+            a.price -
+            b.price
+        );
 
     return {
       coin,
-      asks,
+      pair,
       bids,
-
+      asks,
       timestamp:
-        safeNumber(
-          response.data
-            ?.timestamp
-        ) ||
-        now(),
+        Date.now(),
     };
-  } catch (error) {
+  } catch (
+    error
+  ) {
     console.log(
       `Orderbook ${coin}:`,
       error.response?.data ||
@@ -1242,83 +1112,188 @@ async function getTopOrderBook(
 
 async function getRecentTrades(
   coin,
-  since = null
+  since = null,
+  maxPages = 1
 ) {
   try {
-    const params = {
-      pair:
-        pairForCoin(
-          coin
-        ),
-    };
+    const pair =
+      getPair(
+        coin
+      );
 
-    if (
-      since
+    const allTrades =
+      [];
+
+    let nextSince =
+      since;
+
+    for (
+      let page =
+        0;
+      page <
+        maxPages;
+      page++
     ) {
-      params.since =
-        since;
+      const params = {
+        pair,
+      };
+
+      if (
+        nextSince !==
+          null &&
+        nextSince !==
+          undefined
+      ) {
+        params.since =
+          nextSince;
+      }
+
+      const response =
+        await axios.get(
+          "https://api.luno.com/api/1/trades",
+          {
+            params,
+
+            timeout:
+              10000,
+          }
+        );
+
+      const rawTrades =
+        response.data
+          ?.trades ||
+        [];
+
+      if (
+        !rawTrades.length
+      ) {
+        break;
+      }
+
+      const parsedTrades =
+        rawTrades
+          .map(
+            (trade) => {
+              const timestamp =
+                safeNumber(
+                  trade.timestamp
+                );
+
+              const price =
+                safeNumber(
+                  trade.price
+                );
+
+              const volume =
+                safeNumber(
+                  trade.volume
+                );
+
+              const sequence =
+                String(
+                  trade.sequence ||
+                    `${timestamp}-${price}-${volume}`
+                );
+
+              const isBuy =
+                trade.is_buy ===
+                  true ||
+                trade.is_buy ===
+                  "true";
+
+              return {
+                timestamp,
+                price,
+                volume,
+                sequence,
+                isBuy,
+              };
+            }
+          )
+          .filter(
+            (trade) =>
+              trade.timestamp >
+                0 &&
+              trade.price >
+                0 &&
+              trade.volume >
+                0
+          )
+          .sort(
+            (a, b) =>
+              a.timestamp -
+              b.timestamp
+          );
+
+      if (
+        !parsedTrades.length
+      ) {
+        break;
+      }
+
+      allTrades.push(
+        ...parsedTrades
+      );
+
+      const lastTrade =
+        parsedTrades[
+          parsedTrades.length -
+            1
+        ];
+
+      const newSince =
+        lastTrade.timestamp +
+        1;
+
+      if (
+        nextSince !==
+          null &&
+        nextSince !==
+          undefined &&
+        newSince <=
+          nextSince
+      ) {
+        break;
+      }
+
+      nextSince =
+        newSince;
+
+      if (
+        rawTrades.length <
+        100
+      ) {
+        break;
+      }
+
+      await sleep(
+        100
+      );
     }
 
-    const response =
-      await axios.get(
-        "https://api.luno.com/api/1/trades",
-        {
-          params,
+    const unique =
+      new Map();
 
-          timeout:
-            10000,
-        }
+    for (
+      const trade of
+      allTrades
+    ) {
+      unique.set(
+        trade.sequence,
+        trade
       );
+    }
 
-    const trades =
-      Array.isArray(
-        response.data
-          ?.trades
-      )
-        ? response.data
-            .trades
-        : [];
-
-    return trades
-      .map(
-        (trade) => ({
-          sequence:
-            String(
-              trade.sequence
-            ),
-
-          timestamp:
-            safeNumber(
-              trade.timestamp
-            ),
-
-          price:
-            safeNumber(
-              trade.price
-            ),
-
-          volume:
-            safeNumber(
-              trade.volume
-            ),
-
-          isBuy:
-            trade.is_buy ===
-              true ||
-            trade.is_buy ===
-              "true",
-        })
-      )
-      .filter(
-        (trade) =>
-          trade.timestamp >
-            0 &&
-          trade.price >
-            0 &&
-          trade.volume >
-            0
-      );
-  } catch (error) {
+    return [
+      ...unique.values(),
+    ].sort(
+      (a, b) =>
+        a.timestamp -
+        b.timestamp
+    );
+  } catch (
+    error
+  ) {
     console.log(
       `Trades ${coin}:`,
       error.response?.data ||
@@ -1330,13 +1305,487 @@ async function getRecentTrades(
 }
 
 /* ============================================================
+   TRADE HISTORY CLEANUP
+============================================================ */
+
+function cleanTradeHistory(
+  coin
+) {
+  const cutoff =
+    Date.now() -
+    HISTORY_KEEP_MS;
+
+  TRADE_HISTORY[
+    coin
+  ] =
+    TRADE_HISTORY[
+      coin
+    ].filter(
+      (trade) =>
+        trade.timestamp >=
+        cutoff
+    );
+
+  const activeSequences =
+    new Set(
+      TRADE_HISTORY[
+        coin
+      ].map(
+        (trade) =>
+          trade.sequence
+      )
+    );
+
+  SEEN_TRADE_SEQUENCES[
+    coin
+  ] =
+    activeSequences;
+}
+
+/* ============================================================
+   EXECUTED TRADE COLLECTOR
+============================================================ */
+
+async function collectTradeHistory() {
+  if (
+    TRADE_HISTORY_BUSY
+  ) {
+    return;
+  }
+
+  TRADE_HISTORY_BUSY =
+    true;
+
+  try {
+    for (
+      const coin of
+      SCAN_COINS
+    ) {
+      try {
+        const history =
+          TRADE_HISTORY[
+            coin
+          ];
+
+        const latestTimestamp =
+          history.length
+            ? history[
+                history.length -
+                  1
+              ].timestamp
+            : Date.now() -
+              TWO_HOURS;
+
+        const trades =
+          await getRecentTrades(
+            coin,
+            latestTimestamp
+          );
+
+        if (
+          !trades.length
+        ) {
+          cleanTradeHistory(
+            coin
+          );
+
+          continue;
+        }
+
+        trades.sort(
+          (a, b) =>
+            a.timestamp -
+            b.timestamp
+        );
+
+        for (
+          const trade of
+          trades
+        ) {
+          if (
+            SEEN_TRADE_SEQUENCES[
+              coin
+            ].has(
+              trade.sequence
+            )
+          ) {
+            continue;
+          }
+
+          SEEN_TRADE_SEQUENCES[
+            coin
+          ].add(
+            trade.sequence
+          );
+
+          TRADE_HISTORY[
+            coin
+          ].push(
+            trade
+          );
+
+          if (
+            coin ===
+            "GRT"
+          ) {
+            updateDailyWatchTrade(
+              coin,
+              trade
+            );
+          }
+
+          await processBreakoutTrade(
+            coin,
+            trade
+          );
+        }
+
+        TRADE_HISTORY[
+          coin
+        ].sort(
+          (a, b) =>
+            a.timestamp -
+            b.timestamp
+        );
+
+        cleanTradeHistory(
+          coin
+        );
+      } catch (
+        error
+      ) {
+        console.log(
+          `Trade collector ${coin}:`,
+          error.message
+        );
+      }
+
+      await sleep(
+        100
+      );
+    }
+  } finally {
+    TRADE_HISTORY_BUSY =
+      false;
+  }
+}
+
+/* ============================================================
+   STARTUP TRADE HISTORY BACKFILL
+============================================================ */
+
+async function backfillTradeHistory() {
+  if (
+    TRADE_HISTORY_BUSY
+  ) {
+    return;
+  }
+
+  TRADE_HISTORY_BUSY =
+    true;
+
+  try {
+    for (
+      const coin of
+      SCAN_COINS
+    ) {
+      try {
+        const since =
+          Date.now() -
+          TWO_HOURS;
+
+        const trades =
+          await getRecentTrades(
+            coin,
+            since,
+            8
+          );
+
+        if (
+          !trades.length
+        ) {
+          console.log(
+            `${coin} BACKFILL — NO DATA`
+          );
+
+          continue;
+        }
+
+        for (
+          const trade of
+          trades
+        ) {
+          if (
+            SEEN_TRADE_SEQUENCES[
+              coin
+            ].has(
+              trade.sequence
+            )
+          ) {
+            continue;
+          }
+
+          SEEN_TRADE_SEQUENCES[
+            coin
+          ].add(
+            trade.sequence
+          );
+
+          TRADE_HISTORY[
+            coin
+          ].push(
+            trade
+          );
+
+          if (
+            coin ===
+            "GRT"
+          ) {
+            updateDailyWatchTrade(
+              coin,
+              trade
+            );
+          }
+        }
+
+        TRADE_HISTORY[
+          coin
+        ].sort(
+          (a, b) =>
+            a.timestamp -
+            b.timestamp
+        );
+
+        cleanTradeHistory(
+          coin
+        );
+
+        console.log(
+          `${coin} BACKFILL READY — ${TRADE_HISTORY[
+            coin
+          ].length} trades`
+        );
+      } catch (
+        error
+      ) {
+        console.log(
+          `Backfill ${coin}:`,
+          error.message
+        );
+      }
+
+      await sleep(
+        150
+      );
+    }
+  } finally {
+    TRADE_HISTORY_BUSY =
+      false;
+  }
+}
+/* ============================================================
+   TRADE WINDOW
+============================================================ */
+
+function getTradesInWindow(
+  coin,
+  windowMs,
+  endTime =
+    Date.now()
+) {
+  const startTime =
+    endTime -
+    windowMs;
+
+  return (
+    TRADE_HISTORY[
+      coin
+    ] ||
+    []
+  ).filter(
+    (trade) =>
+      trade.timestamp >=
+        startTime &&
+      trade.timestamp <=
+        endTime
+  );
+}
+
+/* ============================================================
+   EXECUTED FLOW SUMMARY
+============================================================ */
+
+function getExecutedFlowSummary(
+  coin,
+  windowMs =
+    5 * 60 * 1000
+) {
+  const trades =
+    getTradesInWindow(
+      coin,
+      windowMs
+    );
+
+  let buyVolume =
+    0;
+
+  let sellVolume =
+    0;
+
+  let buyCount =
+    0;
+
+  let sellCount =
+    0;
+
+  for (
+    const trade of
+    trades
+  ) {
+    if (
+      trade.isBuy
+    ) {
+      buyVolume +=
+        trade.volume;
+
+      buyCount++;
+    } else {
+      sellVolume +=
+        trade.volume;
+
+      sellCount++;
+    }
+  }
+
+  const totalVolume =
+    buyVolume +
+    sellVolume;
+
+  const totalCount =
+    buyCount +
+    sellCount;
+
+  const buyVolumePct =
+    totalVolume > 0
+      ? (
+          buyVolume /
+          totalVolume
+        ) * 100
+      : 0;
+
+  const sellVolumePct =
+    totalVolume > 0
+      ? (
+          sellVolume /
+          totalVolume
+        ) * 100
+      : 0;
+
+  const buyFrequencyPct =
+    totalCount > 0
+      ? (
+          buyCount /
+          totalCount
+        ) * 100
+      : 0;
+
+  const sellFrequencyPct =
+    totalCount > 0
+      ? (
+          sellCount /
+          totalCount
+        ) * 100
+      : 0;
+
+  return {
+    trades:
+      trades.length,
+
+    buyVolume,
+    sellVolume,
+    totalVolume,
+
+    buyCount,
+    sellCount,
+    totalCount,
+
+    buyVolumePct,
+    sellVolumePct,
+
+    buyFrequencyPct,
+    sellFrequencyPct,
+  };
+}
+
+/* ============================================================
+   PRICE RESPONSE FROM EXECUTED TRADES
+============================================================ */
+
+function getExecutedPriceResponse(
+  coin,
+  windowMs =
+    5 * 60 * 1000
+) {
+  const trades =
+    getTradesInWindow(
+      coin,
+      windowMs
+    ).sort(
+      (a, b) =>
+        a.timestamp -
+        b.timestamp
+    );
+
+  if (
+    trades.length <
+    2
+  ) {
+    return {
+      ready:
+        false,
+
+      open:
+        null,
+
+      close:
+        null,
+
+      changePct:
+        0,
+    };
+  }
+
+  const open =
+    trades[0].price;
+
+  const close =
+    trades[
+      trades.length -
+        1
+    ].price;
+
+  return {
+    ready:
+      true,
+
+    open,
+    close,
+
+    changePct:
+      percentChange(
+        open,
+        close
+      ),
+  };
+}
+
+/* ============================================================
    PRICE MEMORY
 ============================================================ */
 
-function updatePriceMemory(
+function addPriceMemory(
   coin,
-  price,
-  timestamp = now()
+  price
 ) {
   if (
     !PRICE_MEMORY[
@@ -1348,17 +1797,23 @@ function updatePriceMemory(
     ] = [];
   }
 
+  const now =
+    Date.now();
+
   PRICE_MEMORY[
     coin
   ].push({
-    price,
+    timestamp:
+      now,
 
-    time:
-      timestamp,
+    price:
+      safeNumber(
+        price
+      ),
   });
 
   const cutoff =
-    now() -
+    now -
     HISTORY_KEEP_MS;
 
   PRICE_MEMORY[
@@ -1368,530 +1823,170 @@ function updatePriceMemory(
       coin
     ].filter(
       (item) =>
-        item.time >=
+        item.timestamp >=
         cutoff
     );
 }
+
+function getPriceMemoryWindow(
+  coin,
+  windowMs,
+  endTime =
+    Date.now()
+) {
+  const startTime =
+    endTime -
+    windowMs;
+
+  return (
+    PRICE_MEMORY[
+      coin
+    ] ||
+    []
+  ).filter(
+    (item) =>
+      item.timestamp >=
+        startTime &&
+      item.timestamp <=
+        endTime
+  );
+}
+
+/* ============================================================
+   PRICE CHANGE FROM MEMORY
+============================================================ */
+
+function getMemoryPriceChange(
+  coin,
+  windowMs
+) {
+  const points =
+    getPriceMemoryWindow(
+      coin,
+      windowMs
+    );
+
+  if (
+    points.length <
+    2
+  ) {
+    return {
+      ready:
+        false,
+
+      open:
+        null,
+
+      close:
+        null,
+
+      changePct:
+        0,
+    };
+  }
+
+  const open =
+    points[0].price;
+
+  const close =
+    points[
+      points.length -
+        1
+    ].price;
+
+  return {
+    ready:
+      true,
+
+    open,
+    close,
+
+    changePct:
+      percentChange(
+        open,
+        close
+      ),
+  };
+}
+
+/* ============================================================
+   UPDATE PRICE MEMORY
+============================================================ */
 
 async function updateMemory() {
   for (
     const coin of
     SCAN_COINS
   ) {
-    const ticker =
-      await getTicker(
-        coin
-      );
+    try {
+      const ticker =
+        await getTicker(
+          coin
+        );
 
-    if (
-      !ticker
-    ) {
-      continue;
-    }
+      if (
+        !ticker
+      ) {
+        continue;
+      }
 
-    updatePriceMemory(
-      coin,
-      ticker.currentPrice,
-      ticker.timestamp
-    );
-
-    if (
-      coin ===
-        "BTC" ||
-      coin ===
-        "GRT"
-    ) {
-      updateDailyWatchPrice(
+      addPriceMemory(
         coin,
         ticker.currentPrice
       );
+
+      if (
+        coin ===
+          "GRT" ||
+        coin ===
+          "BTC"
+      ) {
+        updateDailyWatchPrice(
+          coin,
+          ticker.currentPrice
+        );
+      }
+    } catch (
+      error
+    ) {
+      console.log(
+        `Memory ${coin}:`,
+        error.message
+      );
     }
+
+    await sleep(
+      100
+    );
   }
 }
 
-function getPriceMemoryWindow(
-  coin,
-  durationMs
-) {
-  const cutoff =
-    now() -
-    durationMs;
+/* ============================================================
+   AUTHENTICATED LUNO REQUEST
+============================================================ */
 
-  return (
-    PRICE_MEMORY[
-      coin
-    ] || []
-  ).filter(
-    (item) =>
-      item.time >=
-      cutoff
-  );
-}
-
-function getPriceSnapshot(
-  coin,
-  durationMs
-) {
-  const data =
-    getPriceMemoryWindow(
-      coin,
-      durationMs
-    );
-
+function getLunoAuthConfig() {
   if (
-    data.length < 2
+    !LUNO_API_KEY_ID ||
+    !LUNO_API_KEY_SECRET
   ) {
     return null;
   }
 
-  const first =
-    data[0].price;
-
-  const last =
-    data[
-      data.length - 1
-    ].price;
-
-  const prices =
-    data.map(
-      (item) =>
-        item.price
-    );
-
-  const high =
-    Math.max(
-      ...prices
-    );
-
-  const low =
-    Math.min(
-      ...prices
-    );
-
   return {
-    first,
-    last,
-    high,
-    low,
+    auth: {
+      username:
+        LUNO_API_KEY_ID,
 
-    change:
-      percentChange(
-        first,
-        last
-      ),
+      password:
+        LUNO_API_KEY_SECRET,
+    },
 
-    data,
+    timeout:
+      10000,
   };
 }
 
-/* ============================================================
-   TRADE HISTORY CLEANUP
-============================================================ */
-
-function purgeOldTrades(
-  coin
-) {
-  const cutoff =
-    now() -
-    HISTORY_KEEP_MS;
-
-  TRADE_HISTORY[
-    coin
-  ] =
-    (
-      TRADE_HISTORY[
-        coin
-      ] || []
-    ).filter(
-      (trade) =>
-        trade.timestamp >=
-        cutoff
-    );
-
-  SEEN_TRADE_SEQUENCES[
-    coin
-  ] =
-    new Set(
-      TRADE_HISTORY[
-        coin
-      ].map(
-        (trade) =>
-          trade.sequence
-      )
-    );
-}
-
-/* ============================================================
-   REAL EXECUTED TRADE COLLECTOR
-============================================================ */
-
-async function collectTradesForCoin(
-  coin
-) {
-  const existing =
-    TRADE_HISTORY[
-      coin
-    ] || [];
-
-  let since =
-    null;
-
-  if (
-    existing.length
-  ) {
-    const recent =
-      existing.slice(
-        -20
-      );
-
-    since =
-      Math.max(
-        ...recent.map(
-          (trade) =>
-            trade.timestamp
-        )
-      ) -
-      1000;
-  }
-
-  const trades =
-    await getRecentTrades(
-      coin,
-      since
-    );
-
-  if (
-    !trades.length
-  ) {
-    return;
-  }
-
-  const newTrades = [];
-
-  for (
-    const trade of
-    trades
-  ) {
-    if (
-      SEEN_TRADE_SEQUENCES[
-        coin
-      ].has(
-        trade.sequence
-      )
-    ) {
-      continue;
-    }
-
-    SEEN_TRADE_SEQUENCES[
-      coin
-    ].add(
-      trade.sequence
-    );
-
-    TRADE_HISTORY[
-      coin
-    ].push(
-      trade
-    );
-
-    newTrades.push(
-      trade
-    );
-  }
-
-  TRADE_HISTORY[
-    coin
-  ].sort(
-    (
-      a,
-      b
-    ) =>
-      a.timestamp -
-      b.timestamp
-  );
-
-  purgeOldTrades(
-    coin
-  );
-
-  newTrades.sort(
-    (
-      a,
-      b
-    ) =>
-      a.timestamp -
-      b.timestamp
-  );
-
-  for (
-    const trade of
-    newTrades
-  ) {
-    updateDailyWatchTrade(
-      coin,
-      trade
-    );
-
-    await processBreakoutWatchTrade(
-      coin,
-      trade
-    );
-  }
-}
-
-async function collectTradeHistory() {
-  for (
-    const coin of
-    SCAN_COINS
-  ) {
-    await collectTradesForCoin(
-      coin
-    );
-  }
-}
-
-/* ============================================================
-   GET TRADES IN WINDOW
-============================================================ */
-
-function getTradesInWindow(
-  coin,
-  startTime,
-  endTime
-) {
-  return (
-    TRADE_HISTORY[
-      coin
-    ] || []
-  ).filter(
-    (trade) =>
-      trade.timestamp >=
-        startTime &&
-      trade.timestamp <=
-        endTime
-  );
-}
-
-/* ============================================================
-   SUMMARIZE EXECUTED TRADES
-============================================================ */
-
-function summarizeTrades(
-  coin,
-  trades
-) {
-  if (
-    !trades.length
-  ) {
-    return null;
-  }
-
-  const sorted = [
-    ...trades,
-  ].sort(
-    (
-      a,
-      b
-    ) =>
-      a.timestamp -
-      b.timestamp
-  );
-
-  let buyVolume = 0;
-  let sellVolume = 0;
-
-  let high =
-    -Infinity;
-
-  let low =
-    Infinity;
-
-  for (
-    const trade of
-    sorted
-  ) {
-    if (
-      trade.isBuy
-    ) {
-      buyVolume +=
-        trade.volume;
-    } else {
-      sellVolume +=
-        trade.volume;
-    }
-
-    high =
-      Math.max(
-        high,
-        trade.price
-      );
-
-    low =
-      Math.min(
-        low,
-        trade.price
-      );
-  }
-
-  const totalVolume =
-    buyVolume +
-    sellVolume;
-
-  return {
-    coin,
-
-    open:
-      sorted[0].price,
-
-    close:
-      sorted[
-        sorted.length - 1
-      ].price,
-
-    high,
-    low,
-
-    buyVolume,
-    sellVolume,
-    totalVolume,
-
-    buyPct:
-      totalVolume > 0
-        ? (
-            buyVolume /
-            totalVolume
-          ) * 100
-        : 0,
-
-    sellPct:
-      totalVolume > 0
-        ? (
-            sellVolume /
-            totalVolume
-          ) * 100
-        : 0,
-
-    startTime:
-      sorted[0]
-        .timestamp,
-
-    endTime:
-      sorted[
-        sorted.length - 1
-      ].timestamp,
-
-    tradeCount:
-      sorted.length,
-  };
-}
-
-/* ============================================================
-   PRICE ALERT — 5 MIN
-============================================================ */
-
-async function sendPriceAlert() {
-  const btc =
-    await getTicker(
-      "BTC"
-    );
-
-  const grt =
-    await getTicker(
-      "GRT"
-    );
-
-  if (
-    !btc ||
-    !grt
-  ) {
-    return;
-  }
-
-  const btcMomentum =
-    await getBTCMomentumText();
-
-  const grtMomentum =
-    await getGRTMomentumDecision(
-      grt
-    );
-
-  const buildPriceMove = (
-    coin,
-    ticker
-  ) => {
-    const previous =
-      LAST_PRICE[
-        coin
-      ];
-
-    LAST_PRICE[
-      coin
-    ] =
-      ticker.currentPrice;
-
-    if (
-      !previous
-    ) {
-      return "";
-    }
-
-    const change =
-      percentChange(
-        previous,
-        ticker.currentPrice
-      );
-
-    if (
-      Math.abs(
-        change
-      ) <
-      0.005
-    ) {
-      return "";
-    }
-
-    return ` ${
-      change > 0
-        ? "⬆️"
-        : "⬇️"
-    } ${formatPercent(
-      change
-    )}`;
-  };
-
-  const btcMove =
-    buildPriceMove(
-      "BTC",
-      btc
-    );
-
-  const grtMove =
-    buildPriceMove(
-      "GRT",
-      grt
-    );
-
-  const grtAction =
-    grtMomentum.actionText
-      ? `\n${grtMomentum.actionText}`
-      : "";
-
-  await sendTelegram(
-    `📡 PRICE ALERT
-
-₿ BTC RM${formatPrice(
-      "BTC",
-      btc.currentPrice
-    )}${btcMove}
-⚡ MOMENTUM: ${btcMomentum}
-
-🪙 GRT RM${formatPrice(
-      "GRT",
-      grt.currentPrice
-    )}${grtMove}
-⚡ MOMENTUM: ${grtMomentum.momentumText}${grtAction}`
-  );
-}
 /* ============================================================
    AUTHENTICATED LUNO CANDLES
 ============================================================ */
@@ -1899,60 +1994,56 @@ async function sendPriceAlert() {
 async function getLunoCandles(
   coin,
   durationSec,
-  candleCount
+  candleCount =
+    100
 ) {
+  const authConfig =
+    getLunoAuthConfig();
+
   if (
-    !LUNO_API_KEY_ID ||
-    !LUNO_API_KEY_SECRET
+    !authConfig
   ) {
     return [];
   }
 
   try {
-    const since =
-      now() -
-      (
-        durationSec *
-        candleCount *
-        1000
+    const pair =
+      getPair(
+        coin
       );
+
+    const durationMs =
+      durationSec *
+      1000;
+
+    const since =
+      Date.now() -
+      (
+        candleCount +
+        5
+      ) *
+      durationMs;
 
     const response =
       await axios.get(
         "https://api.luno.com/api/exchange/1/candles",
         {
+          ...authConfig,
+
           params: {
-            pair:
-              pairForCoin(
-                coin
-              ),
-
-            since,
-
+            pair,
             duration:
               durationSec,
+
+            since,
           },
-
-          auth: {
-            username:
-              LUNO_API_KEY_ID,
-
-            password:
-              LUNO_API_KEY_SECRET,
-          },
-
-          timeout:
-            10000,
         }
       );
 
     const candles =
-      Array.isArray(
-        response.data
-          ?.candles
-      )
-        ? response.data.candles
-        : [];
+      response.data
+        ?.candles ||
+      [];
 
     return candles
       .map(
@@ -1992,18 +2083,19 @@ async function getLunoCandles(
         (candle) =>
           candle.timestamp >
             0 &&
+          candle.open >
+            0 &&
           candle.close >
             0
       )
       .sort(
-        (
-          a,
-          b
-        ) =>
+        (a, b) =>
           a.timestamp -
           b.timestamp
       );
-  } catch (error) {
+  } catch (
+    error
+  ) {
     console.log(
       `Candles ${coin} ${durationSec}:`,
       error.response?.data ||
@@ -2015,30 +2107,25 @@ async function getLunoCandles(
 }
 
 /* ============================================================
-   SIMPLE MOVING AVERAGE
+   COMPLETED CANDLES ONLY
 ============================================================ */
 
-function calculateSMA(
-  values,
-  period
+function getCompletedCandles(
+  candles,
+  durationSec
 ) {
-  if (
-    !Array.isArray(
-      values
-    ) ||
-    values.length <
-      period
-  ) {
-    return null;
-  }
+  const now =
+    Date.now();
 
-  const selected =
-    values.slice(
-      -period
-    );
+  const durationMs =
+    durationSec *
+    1000;
 
-  return average(
-    selected
+  return candles.filter(
+    (candle) =>
+      candle.timestamp +
+        durationMs <=
+      now
   );
 }
 
@@ -2056,53 +2143,31 @@ function calculateRSI(
       closes
     ) ||
     closes.length <
-      period + 1
+      period +
+        1
   ) {
     return null;
   }
 
-  const changes = [];
+  let gains =
+    0;
+
+  let losses =
+    0;
 
   for (
     let i = 1;
-    i <
-      closes.length;
+    i <= period;
     i++
   ) {
-    changes.push(
+    const change =
       closes[i] -
-      closes[i - 1]
-    );
-  }
+      closes[
+        i - 1
+      ];
 
-  const recentChanges =
-    changes.slice(
-      -(period + 5)
-    );
-
-  if (
-    recentChanges.length <
-    period
-  ) {
-    return null;
-  }
-
-  let gains = 0;
-  let losses = 0;
-
-  const initial =
-    recentChanges.slice(
-      0,
-      period
-    );
-
-  for (
-    const change of
-    initial
-  ) {
     if (
-      change >
-      0
+      change >= 0
     ) {
       gains +=
         change;
@@ -2124,23 +2189,24 @@ function calculateRSI(
 
   for (
     let i =
-      period;
+      period + 1;
     i <
-      recentChanges.length;
+    closes.length;
     i++
   ) {
     const change =
-      recentChanges[i];
+      closes[i] -
+      closes[
+        i - 1
+      ];
 
     const gain =
-      change >
-        0
+      change > 0
         ? change
         : 0;
 
     const loss =
-      change <
-        0
+      change < 0
         ? Math.abs(
             change
           )
@@ -2176,445 +2242,129 @@ function calculateRSI(
     return 100;
   }
 
-  const relativeStrength =
+  const rs =
     averageGain /
     averageLoss;
 
   return (
     100 -
-    (
-      100 /
+    100 /
       (
         1 +
-        relativeStrength
+        rs
       )
-    )
   );
 }
 
 /* ============================================================
-   5M COMPLETED VOLUME WINDOWS FROM EXECUTED TRADES
-
-   Used as fallback when authenticated candle history
-   is not yet available.
-
-   Current unfinished 5M window is NOT included
-   inside its own baseline.
+   SIMPLE MOVING AVERAGE
 ============================================================ */
 
-function getExecuted5MWindows(
-  coin,
-  numberOfWindows =
-    13
+function calculateSMA(
+  values,
+  period
 ) {
-  const windowMs =
-    5 *
-    60 *
-    1000;
-
-  const currentWindowStart =
-    Math.floor(
-      now() /
-      windowMs
-    ) *
-    windowMs;
-
-  const windows = [];
-
-  for (
-    let index =
-      numberOfWindows;
-    index >= 1;
-    index--
+  if (
+    !Array.isArray(
+      values
+    ) ||
+    values.length <
+      period
   ) {
-    const start =
-      currentWindowStart -
-      (
-        index *
-        windowMs
-      );
-
-    const end =
-      start +
-      windowMs -
-      1;
-
-    const trades =
-      getTradesInWindow(
-        coin,
-        start,
-        end
-      );
-
-    const totalVolume =
-      trades.reduce(
-        (
-          total,
-          trade
-        ) =>
-          total +
-          trade.volume,
-        0
-      );
-
-    windows.push({
-      start,
-      end,
-      volume:
-        totalVolume,
-    });
+    return null;
   }
 
-  return windows;
+  const slice =
+    values.slice(
+      -period
+    );
+
+  return average(
+    slice
+  );
 }
 
 /* ============================================================
-   CURRENT 5M EXECUTED VOLUME
+   GRT 5M RSI TREND
 ============================================================ */
 
-function getCurrent5MExecutedVolume(
-  coin
-) {
-  const windowMs =
-    5 *
-    60 *
-    1000;
-
-  const start =
-    Math.floor(
-      now() /
-      windowMs
-    ) *
-    windowMs;
-
-  const trades =
-    getTradesInWindow(
-      coin,
-      start,
-      now()
-    );
-
-  return {
-    start,
-
-    ageSec:
-      (
-        now() -
-        start
-      ) /
-      1000,
-
-    volume:
-      trades.reduce(
-        (
-          total,
-          trade
-        ) =>
-          total +
-          trade.volume,
-        0
-      ),
-
-    trades,
-  };
-}
-
-/* ============================================================
-   MOMENTUM VOLUME BASELINE
-
-   Rule:
-   Current 5M volume
-   VS
-   average of previous completed 5M windows.
-
-   Full baseline:
-   previous 12 windows = 1 hour.
-
-   Warm-up:
-   minimum 3 completed windows.
-============================================================ */
-
-async function getMomentumVolumeData(
-  coin
-) {
-  const current =
-    getCurrent5MExecutedVolume(
-      coin
-    );
-
-  /*
-    Prefer authenticated candle history
-    because this gives historical baseline
-    immediately after deploy.
-  */
-
-  const candles =
-    await getLunoCandles(
-      coin,
-      MOMENTUM_CANDLE_DURATION_SEC,
-      MOMENTUM_BASELINE_WINDOWS +
-        3
-    );
-
-  let baselineVolumes =
-    [];
-
-  if (
-    candles.length >=
-    MOMENTUM_MIN_BASELINE_WINDOWS
-  ) {
-    const currentWindowStart =
-      Math.floor(
-        now() /
-        (
-          MOMENTUM_CANDLE_DURATION_SEC *
-          1000
-        )
-      ) *
-      (
-        MOMENTUM_CANDLE_DURATION_SEC *
-        1000
-      );
-
-    baselineVolumes =
-      candles
-        .filter(
-          (candle) =>
-            candle.timestamp <
-            currentWindowStart
-        )
-        .slice(
-          -MOMENTUM_BASELINE_WINDOWS
-        )
-        .map(
-          (candle) =>
-            candle.volume
-        )
-        .filter(
-          (volume) =>
-            volume >
-            0
-        );
-  }
-
-  /*
-    Fallback kepada local executed history.
-  */
-
-  if (
-    baselineVolumes.length <
-    MOMENTUM_MIN_BASELINE_WINDOWS
-  ) {
-    const localWindows =
-      getExecuted5MWindows(
-        coin,
-        MOMENTUM_BASELINE_WINDOWS
-      );
-
-    baselineVolumes =
-      localWindows
-        .map(
-          (item) =>
-            item.volume
-        )
-        .filter(
-          (volume) =>
-            volume >
-            0
-        );
-  }
-
-  if (
-    baselineVolumes.length <
-    MOMENTUM_MIN_BASELINE_WINDOWS
-  ) {
-    return {
-      ready:
-        false,
-
-      currentVolume:
-        current.volume,
-
-      baselineWindowCount:
-        baselineVolumes.length,
-
-      baselineAverage:
-        null,
-
-      spikePct:
-        null,
-
-      isSpike:
-        false,
-
-      ageSec:
-        current.ageSec,
-
-      trades:
-        current.trades,
-    };
-  }
-
-  const selectedBaseline =
-    baselineVolumes.slice(
-      -MOMENTUM_BASELINE_WINDOWS
-    );
-
-  const baselineAverage =
-    average(
-      selectedBaseline
-    );
-
-  if (
-    baselineAverage <=
-    0
-  ) {
-    return {
-      ready:
-        false,
-
-      currentVolume:
-        current.volume,
-
-      baselineWindowCount:
-        selectedBaseline.length,
-
-      baselineAverage:
-        0,
-
-      spikePct:
-        null,
-
-      isSpike:
-        false,
-
-      ageSec:
-        current.ageSec,
-
-      trades:
-        current.trades,
-    };
-  }
-
-  const spikePct =
-    (
-      (
-        current.volume -
-        baselineAverage
-      ) /
-      baselineAverage
-    ) *
-    100;
-
-  const oldEnough =
-    current.ageSec >=
-    MOMENTUM_MIN_CURRENT_CANDLE_AGE_SEC;
-
-  return {
-    ready:
-      true,
-
-    currentVolume:
-      current.volume,
-
-    baselineAverage,
-
-    baselineWindowCount:
-      selectedBaseline.length,
-
-    spikePct,
-
-    isSpike:
-      oldEnough &&
-      spikePct >=
-        MOMENTUM_SPIKE_THRESHOLD_PCT,
-
-    ageSec:
-      current.ageSec,
-
-    trades:
-      current.trades,
-  };
-}
-
-/* ============================================================
-   BTC MOMENTUM TEXT
-
-   BTC is radar only.
-   BTC NEVER participates in GRT BUY NOW decision.
-============================================================ */
-
-async function getBTCMomentumText() {
-  const volumeData =
-    await getMomentumVolumeData(
-      "BTC"
-    );
-
-  if (
-    !volumeData.ready
-  ) {
-    return "⚪ COLLECTING DATA";
-  }
-
-  if (
-    !volumeData.isSpike
-  ) {
-    return "🔴 NO SPIKE";
-  }
-
-  return `🟢 SPIKE +${Math.max(
-    0,
-    volumeData.spikePct
-  ).toFixed(
-    0
-  )}%`;
-}
-
-/* ============================================================
-   GRT 5M RSI ANALYSIS
-============================================================ */
-
-async function getGRT5MRSI() {
+async function getGRT5mRSI() {
   const candles =
     await getLunoCandles(
       "GRT",
-      300,
-      30
+      MOMENTUM_CANDLE_DURATION_SEC,
+      40
+    );
+
+  const completed =
+    getCompletedCandles(
+      candles,
+      MOMENTUM_CANDLE_DURATION_SEC
     );
 
   if (
-    candles.length <
+    completed.length <
     GRT_RSI_PERIOD +
       3
   ) {
     return {
       ready:
         false,
-
-      current:
-        null,
-
-      previous:
-        null,
-
-      direction:
-        "UNKNOWN",
     };
   }
 
+  const durationMs =
+    MOMENTUM_CANDLE_DURATION_SEC *
+    1000;
+
+  const now =
+    Date.now();
+
+  const liveCandle =
+    candles.find(
+      (candle) =>
+        candle.timestamp +
+          durationMs >
+        now
+    );
+
+  const liveCandleAgeSec =
+    liveCandle
+      ? (
+          now -
+          liveCandle.timestamp
+        ) /
+        1000
+      : 0;
+
+  const useLiveCandle =
+    Boolean(
+      liveCandle &&
+      liveCandleAgeSec >=
+        MOMENTUM_MIN_CURRENT_CANDLE_AGE_SEC
+    );
+
   const closes =
-    candles.map(
+    completed.map(
       (candle) =>
         candle.close
     );
 
-  const current =
+  if (
+    useLiveCandle
+  ) {
+    closes.push(
+      liveCandle.close
+    );
+  }
+
+  const currentRSI =
     calculateRSI(
       closes,
       GRT_RSI_PERIOD
     );
 
-  const previous =
+  const previousRSI =
     calculateRSI(
       closes.slice(
         0,
@@ -2623,42 +2373,65 @@ async function getGRT5MRSI() {
       GRT_RSI_PERIOD
     );
 
+  if (
+    currentRSI ===
+      null ||
+    previousRSI ===
+      null
+  ) {
+    return {
+      ready:
+        false,
+    };
+  }
+
+  const change =
+    currentRSI -
+    previousRSI;
+
   let direction =
     "FLAT";
 
   if (
-    current !==
-      null &&
-    previous !==
-      null
+    change >=
+    1
   ) {
-    if (
-      current >
-      previous +
-        1
-    ) {
-      direction =
-        "RISING";
-    } else if (
-      current <
-      previous -
-        1
-    ) {
-      direction =
-        "FALLING";
-    }
+    direction =
+      "RISING";
+  } else if (
+    change <=
+    -1
+  ) {
+    direction =
+      "FALLING";
   }
 
   return {
     ready:
-      current !==
-      null,
+      true,
 
-    current,
+    current:
+      currentRSI,
 
-    previous,
+    previous:
+      previousRSI,
+
+    change,
 
     direction,
+
+    usingLiveCandle:
+      useLiveCandle,
+
+    liveCandleAgeSec,
+
+    oversold:
+      currentRSI <=
+      30,
+
+    overbought:
+      currentRSI >=
+      70,
   };
 }
 
@@ -2666,7 +2439,7 @@ async function getGRT5MRSI() {
    GRT 1H MA9 / MA50
 ============================================================ */
 
-async function getGRT1HMATrend() {
+async function getGRT1hMA() {
   const candles =
     await getLunoCandles(
       "GRT",
@@ -2674,34 +2447,24 @@ async function getGRT1HMATrend() {
       70
     );
 
+  const completed =
+    getCompletedCandles(
+      candles,
+      3600
+    );
+
   if (
-    candles.length <
-    GRT_MA_SLOW +
-      2
+    completed.length <
+    GRT_MA_SLOW
   ) {
     return {
       ready:
         false,
-
-      ma9:
-        null,
-
-      ma50:
-        null,
-
-      previousMA9:
-        null,
-
-      previousMA50:
-        null,
-
-      status:
-        "UNKNOWN",
     };
   }
 
   const closes =
-    candles.map(
+    completed.map(
       (candle) =>
         candle.close
     );
@@ -2718,69 +2481,37 @@ async function getGRT1HMATrend() {
       GRT_MA_SLOW
     );
 
-  const previousCloses =
-    closes.slice(
-      0,
-      -1
-    );
-
-  const previousMA9 =
-    calculateSMA(
-      previousCloses,
-      GRT_MA_FAST
-    );
-
-  const previousMA50 =
-    calculateSMA(
-      previousCloses,
-      GRT_MA_SLOW
-    );
-
   if (
-    ma9 === null ||
-    ma50 === null
+    ma9 ===
+      null ||
+    ma50 ===
+      null
   ) {
     return {
       ready:
         false,
-
-      ma9,
-      ma50,
-
-      previousMA9,
-      previousMA50,
-
-      status:
-        "UNKNOWN",
     };
   }
 
   const gapPct =
-    percentChange(
-      ma50,
-      ma9
-    );
+    ma50 > 0
+      ? (
+          (
+            ma9 -
+            ma50
+          ) /
+          ma50
+        ) * 100
+      : 0;
 
-  let status =
+  let condition =
     "BEARISH";
 
   if (
-    previousMA9 !==
-      null &&
-    previousMA50 !==
-      null &&
-    previousMA9 <=
-      previousMA50 &&
-    ma9 >
-      ma50
-  ) {
-    status =
-      "CROSS UP";
-  } else if (
     ma9 >
     ma50
   ) {
-    status =
+    condition =
       "BULLISH";
   } else if (
     Math.abs(
@@ -2788,11 +2519,8 @@ async function getGRT1HMATrend() {
     ) <=
     GRT_MA_NEAR_CROSS_PCT
   ) {
-    status =
+    condition =
       "NEAR CROSS";
-  } else {
-    status =
-      "BEARISH";
   }
 
   return {
@@ -2801,659 +2529,151 @@ async function getGRT1HMATrend() {
 
     ma9,
     ma50,
-
-    previousMA9,
-    previousMA50,
-
     gapPct,
+    condition,
 
-    status,
+    bullish:
+      ma9 >
+      ma50,
+
+    nearCross:
+      Math.abs(
+        gapPct
+      ) <=
+      GRT_MA_NEAR_CROSS_PCT,
   };
 }
-
 /* ============================================================
-   ORDERBOOK ZONE CLUSTERING
+   5M EXECUTED VOLUME WINDOWS
 ============================================================ */
 
-function clusterOrderBookSide(
-  orders,
-  tolerancePct
+function getExecuted5mWindows(
+  coin,
+  numberOfWindows =
+    MOMENTUM_BASELINE_WINDOWS
 ) {
-  if (
-    !orders ||
-    !orders.length
-  ) {
-    return [];
-  }
+  const windowMs =
+    MOMENTUM_CANDLE_DURATION_SEC *
+    1000;
 
-  const clusters = [];
+  const currentWindowStart =
+    Math.floor(
+      Date.now() /
+      windowMs
+    ) *
+    windowMs;
+
+  const windows = [];
 
   for (
-    const order of
-    orders
+    let index =
+      numberOfWindows;
+    index >= 1;
+    index--
   ) {
-    let matchedCluster =
-      null;
+    const start =
+      currentWindowStart -
+      index *
+        windowMs;
 
-    for (
-      const cluster of
-      clusters
-    ) {
-      const distancePct =
-        Math.abs(
-          percentChange(
-            cluster.price,
-            order.price
-          )
+    const end =
+      start +
+      windowMs;
+
+    const trades =
+      (
+        TRADE_HISTORY[
+          coin
+        ] ||
+        []
+      ).filter(
+        (trade) =>
+          trade.timestamp >=
+            start &&
+          trade.timestamp <
+            end
+      );
+
+    const buyVolume =
+      trades
+        .filter(
+          (trade) =>
+            trade.isBuy
+        )
+        .reduce(
+          (
+            total,
+            trade
+          ) =>
+            total +
+            trade.volume,
+          0
         );
 
-      if (
-        distancePct <=
-        tolerancePct
-      ) {
-        matchedCluster =
-          cluster;
-
-        break;
-      }
-    }
-
-    if (
-      !matchedCluster
-    ) {
-      clusters.push({
-        price:
-          order.price,
-
-        volume:
-          order.volume,
-
-        orders: [
-          order,
-        ],
-      });
-
-      continue;
-    }
-
-    matchedCluster
-      .orders
-      .push(
-        order
-      );
-
-    matchedCluster.volume +=
-      order.volume;
-
-    const weightedValue =
-      matchedCluster.orders.reduce(
-        (
-          total,
-          item
-        ) =>
-          total +
-          (
-            item.price *
-            item.volume
-          ),
-        0
-      );
-
-    const totalVolume =
-      matchedCluster.orders.reduce(
-        (
-          total,
-          item
-        ) =>
-          total +
-          item.volume,
-        0
-      );
-
-    matchedCluster.price =
-      totalVolume >
-        0
-        ? weightedValue /
-          totalVolume
-        : matchedCluster.price;
-  }
-
-  return clusters;
-}
-
-/* ============================================================
-   FILTER RELEVANT ORDERBOOK RANGE
-============================================================ */
-
-function getRelevantOrderBookZones({
-  coin,
-  currentPrice,
-  asks,
-  bids,
-}) {
-  const rangePct =
-    ORDERBOOK_STRUCTURE_RANGE_PCT[
-      coin
-    ] || 3.00;
-
-  const clusterPct =
-    ORDERBOOK_CLUSTER_PCT[
-      coin
-    ] || 0.15;
-
-  const minPrice =
-    currentPrice *
-    (
-      1 -
-      rangePct /
-        100
-    );
-
-  const maxPrice =
-    currentPrice *
-    (
-      1 +
-      rangePct /
-        100
-    );
-
-  const relevantBids =
-    (
-      bids || []
-    ).filter(
-      (order) =>
-        order.price <
-          currentPrice &&
-        order.price >=
-          minPrice
-    );
-
-  const relevantAsks =
-    (
-      asks || []
-    ).filter(
-      (order) =>
-        order.price >
-          currentPrice &&
-        order.price <=
-          maxPrice
-    );
-
-  const bidClusters =
-    clusterOrderBookSide(
-      relevantBids,
-      clusterPct
-    );
-
-  const askClusters =
-    clusterOrderBookSide(
-      relevantAsks,
-      clusterPct
-    );
-
-  return {
-    bidClusters,
-    askClusters,
-  };
-}
-
-/* ============================================================
-   ORDERBOOK WALL STATS
-============================================================ */
-
-function getWallStats(
-  clusters
-) {
-  if (
-    !clusters.length
-  ) {
-    return {
-      medianVolume:
-        0,
-
-      averageVolume:
-        0,
-
-      maxVolume:
-        0,
-    };
-  }
-
-  const volumes =
-    clusters.map(
-      (cluster) =>
-        cluster.volume
-    );
-
-  return {
-    medianVolume:
-      median(
-        volumes
-      ),
-
-    averageVolume:
-      average(
-        volumes
-      ),
-
-    maxVolume:
-      Math.max(
-        ...volumes
-      ),
-  };
-}
-
-/* ============================================================
-   WALL RATING 1–10
-============================================================ */
-
-function rateOrderBookWall({
-  cluster,
-  stats,
-  currentPrice,
-}) {
-  if (
-    !cluster ||
-    !stats ||
-    !stats.medianVolume
-  ) {
-    return {
-      rating:
-        1,
-
-      ratio:
-        1,
-
-      distancePct:
-        cluster
-          ? Math.abs(
-              percentChange(
-                currentPrice,
-                cluster.price
-              )
-            )
-          : null,
-    };
-  }
-
-  const ratio =
-    cluster.volume /
-    stats.medianVolume;
-
-  let rating =
-    1;
-
-  if (
-    ratio >= 1.2
-  ) {
-    rating =
-      2;
-  }
-
-  if (
-    ratio >= 1.5
-  ) {
-    rating =
-      3;
-  }
-
-  if (
-    ratio >= 2
-  ) {
-    rating =
-      4;
-  }
-
-  if (
-    ratio >= 3
-  ) {
-    rating =
-      5;
-  }
-
-  if (
-    ratio >= 4
-  ) {
-    rating =
-      6;
-  }
-
-  if (
-    ratio >= 6
-  ) {
-    rating =
-      7;
-  }
-
-  if (
-    ratio >= 8
-  ) {
-    rating =
-      8;
-  }
-
-  if (
-    ratio >= 12
-  ) {
-    rating =
-      9;
-  }
-
-  if (
-    ratio >= 18
-  ) {
-    rating =
-      10;
-  }
-
-  const distancePct =
-    Math.abs(
-      percentChange(
-        currentPrice,
-        cluster.price
-      )
-    );
-
-  if (
-    distancePct <=
-    0.30
-  ) {
-    rating +=
-      1;
-  }
-
-  rating =
-    Math.round(
-      clamp(
-        rating,
-        1,
-        10
-      )
-    );
-
-  return {
-    rating,
-    ratio,
-    distancePct,
-  };
-}
-
-/* ============================================================
-   SELECT BEST CURRENT WALL
-============================================================ */
-
-function selectBestOrderBookWall({
-  clusters,
-  currentPrice,
-}) {
-  if (
-    !clusters.length
-  ) {
-    return null;
-  }
-
-  const stats =
-    getWallStats(
-      clusters
-    );
-
-  const candidates =
-    clusters
-      .map(
-        (cluster) => {
-          const strength =
-            rateOrderBookWall({
-              cluster,
-              stats,
-              currentPrice,
-            });
-
-          const validWall =
-            clusters.length <=
-              2 ||
-            strength.ratio >=
-              MIN_WALL_RELATIVE_RATIO;
-
-          const score =
-            (
-              strength.rating *
-              10
-            ) -
-            (
-              strength.distancePct *
-              WALL_DISTANCE_WEIGHT *
-              10
-            );
-
-          return {
-            ...cluster,
-
-            strength,
-
-            score,
-
-            validWall,
-          };
-        }
-      )
-      .filter(
-        (item) =>
-          item.validWall
-      )
-      .sort(
-        (
-          a,
-          b
-        ) =>
-          b.score -
-          a.score
-      );
-
-  if (
-    !candidates.length
-  ) {
-    return [
-      ...clusters,
-    ].sort(
-      (
-        a,
-        b
-      ) =>
-        Math.abs(
-          percentChange(
-            currentPrice,
-            a.price
-          )
-        ) -
-        Math.abs(
-          percentChange(
-            currentPrice,
-            b.price
-          )
+    const sellVolume =
+      trades
+        .filter(
+          (trade) =>
+            !trade.isBuy
         )
-    )[0];
+        .reduce(
+          (
+            total,
+            trade
+          ) =>
+            total +
+            trade.volume,
+          0
+        );
+
+    windows.push({
+      start,
+      end,
+
+      buyVolume,
+      sellVolume,
+
+      totalVolume:
+        buyVolume +
+        sellVolume,
+
+      tradeCount:
+        trades.length,
+    });
   }
 
-  return candidates[0];
+  return windows;
 }
 
 /* ============================================================
-   LIVE ORDERBOOK MARKET STRUCTURE
+   CURRENT 5M EXECUTED WINDOW
 ============================================================ */
 
-async function getOrderBookStructure(
-  coin,
-  currentPrice
+function getCurrentExecuted5mWindow(
+  coin
 ) {
-  const orderBook =
-    await getTopOrderBook(
-      coin
-    );
+  const windowMs =
+    MOMENTUM_CANDLE_DURATION_SEC *
+    1000;
 
-  if (
-    !orderBook
-  ) {
-    return null;
-  }
-
-  const zones =
-    getRelevantOrderBookZones({
-      coin,
-
-      currentPrice,
-
-      asks:
-        orderBook.asks,
-
-      bids:
-        orderBook.bids,
-    });
-
-  const supportCluster =
-    selectBestOrderBookWall({
-      clusters:
-        zones.bidClusters,
-
-      currentPrice,
-    });
-
-  const resistanceCluster =
-    selectBestOrderBookWall({
-      clusters:
-        zones.askClusters,
-
-      currentPrice,
-    });
-
-  const bidStats =
-    getWallStats(
-      zones.bidClusters
-    );
-
-  const askStats =
-    getWallStats(
-      zones.askClusters
-    );
-
-  let support =
-    null;
-
-  let resistance =
-    null;
-
-  if (
-    supportCluster
-  ) {
-    const supportStrength =
-      rateOrderBookWall({
-        cluster:
-          supportCluster,
-
-        stats:
-          bidStats,
-
-        currentPrice,
-      });
-
-    support = {
-      price:
-        supportCluster.price,
-
-      volume:
-        supportCluster.volume,
-
-      rating:
-        supportStrength.rating,
-
-      ratio:
-        supportStrength.ratio,
-
-      distancePct:
-        Math.abs(
-          percentChange(
-            currentPrice,
-            supportCluster.price
-          )
-        ),
-
-      orderCount:
-        supportCluster
-          .orders
-          ?.length ||
-        1,
-    };
-  }
-
-  if (
-    resistanceCluster
-  ) {
-    const resistanceStrength =
-      rateOrderBookWall({
-        cluster:
-          resistanceCluster,
-
-        stats:
-          askStats,
-
-        currentPrice,
-      });
-
-    resistance = {
-      price:
-        resistanceCluster.price,
-
-      volume:
-        resistanceCluster.volume,
-
-      rating:
-        resistanceStrength.rating,
-
-      ratio:
-        resistanceStrength.ratio,
-
-      distancePct:
-        Math.abs(
-          percentChange(
-            currentPrice,
-            resistanceCluster.price
-          )
-        ),
-
-      orderCount:
-        resistanceCluster
-          .orders
-          ?.length ||
-        1,
-    };
-  }
-
-  return {
-    support,
-    resistance,
-
-    bidZones:
-      zones.bidClusters,
-
-    askZones:
-      zones.askClusters,
-
-    timestamp:
-      orderBook.timestamp,
-  };
-}
-
-/* ============================================================
-   GRT EXECUTED FLOW INSIDE CURRENT 5M
-============================================================ */
-
-function getGRTCurrent5MFlow() {
-  const current =
-    getCurrent5MExecutedVolume(
-      "GRT"
-    );
+  const start =
+    Math.floor(
+      Date.now() /
+      windowMs
+    ) *
+    windowMs;
 
   const trades =
-    current.trades;
+    (
+      TRADE_HISTORY[
+        coin
+      ] ||
+      []
+    ).filter(
+      (trade) =>
+        trade.timestamp >=
+        start
+  );
 
   let buyVolume =
     0;
@@ -3495,13 +2715,24 @@ function getGRTCurrent5MFlow() {
     sellCount;
 
   return {
-    buyVolume,
+    start,
 
+    ageSec:
+      (
+        Date.now() -
+        start
+      ) /
+      1000,
+
+    trades,
+
+    buyVolume,
     sellVolume,
+    totalVolume,
 
     buyCount,
-
     sellCount,
+    totalCount,
 
     buyVolumePct:
       totalVolume >
@@ -3509,9 +2740,17 @@ function getGRTCurrent5MFlow() {
         ? (
             buyVolume /
             totalVolume
-          ) *
-          100
-        : 50,
+          ) * 100
+        : 0,
+
+    sellVolumePct:
+      totalVolume >
+        0
+        ? (
+            sellVolume /
+            totalVolume
+          ) * 100
+        : 0,
 
     buyFrequencyPct:
       totalCount >
@@ -3519,84 +2758,691 @@ function getGRTCurrent5MFlow() {
         ? (
             buyCount /
             totalCount
-          ) *
-          100
-        : 50,
+          ) * 100
+        : 0,
+
+    sellFrequencyPct:
+      totalCount >
+        0
+        ? (
+            sellCount /
+            totalCount
+          ) * 100
+        : 0,
   };
 }
 
 /* ============================================================
-   GRT PRICE RESPONSE
+   BUY VOLUME BASELINE
+
+   IMPORTANT:
+   We compare CURRENT EXECUTED BUY volume
+   against previous completed 5M BUY volumes.
+
+   We no longer treat total volume alone
+   as a positive momentum signal.
 ============================================================ */
 
-function getGRT5MPriceResponse() {
+async function getBuyVolumeBaseline(
+  coin
+) {
   const current =
-    getCurrent5MExecutedVolume(
-      "GRT"
+    getCurrentExecuted5mWindow(
+      coin
     );
 
-  if (
-    !current.trades.length
-  ) {
-    return {
-      ready:
-        false,
+  const usableAgeSec =
+    Math.max(
+      current.ageSec,
+      MOMENTUM_MIN_CURRENT_CANDLE_AGE_SEC
+    );
 
-      changePct:
-        0,
-
-      rising:
-        false,
-    };
-  }
-
-  const sorted = [
-    ...current.trades,
-  ].sort(
+  const projectedBuyVolume =
+    current.buyVolume *
     (
-      a,
-      b
-    ) =>
-      a.timestamp -
-      b.timestamp
-  );
-
-  const firstPrice =
-    sorted[0].price;
-
-  const lastPrice =
-    sorted[
-      sorted.length -
-      1
-    ].price;
-
-  const changePct =
-    percentChange(
-      firstPrice,
-      lastPrice
+      MOMENTUM_CANDLE_DURATION_SEC /
+      usableAgeSec
     );
+
+  const candles =
+    await getLunoCandles(
+      coin,
+      MOMENTUM_CANDLE_DURATION_SEC,
+      MOMENTUM_BASELINE_WINDOWS +
+        5
+    );
+
+  const completedCandles =
+    getCompletedCandles(
+      candles,
+      MOMENTUM_CANDLE_DURATION_SEC
+    ).slice(
+      -MOMENTUM_BASELINE_WINDOWS
+    );
+
+  /*
+    Candle volume from Luno does not tell
+    BUY vs SELL direction.
+
+    Therefore authenticated candles are used
+    only as a secondary total-volume reference.
+
+    Positive BUY surge must still come from
+    executed trades collected by the bot.
+  */
+
+  const localWindows =
+    getExecuted5mWindows(
+      coin,
+      MOMENTUM_BASELINE_WINDOWS
+    );
+
+  const validLocalBuyVolumes =
+    localWindows
+      .filter(
+        (window) =>
+          window.tradeCount >
+          0
+      )
+      .map(
+        (window) =>
+          window.buyVolume
+      )
+      .filter(
+        (volume) =>
+          volume >
+          0
+      );
+
+  const validLocalTotalVolumes =
+    localWindows
+      .filter(
+        (window) =>
+          window.tradeCount >
+          0
+      )
+      .map(
+        (window) =>
+          window.totalVolume
+      )
+      .filter(
+        (volume) =>
+          volume >
+          0
+      );
+
+  const candleVolumes =
+    completedCandles
+      .map(
+        (candle) =>
+          candle.volume
+      )
+      .filter(
+        (volume) =>
+          volume >
+          0
+      );
+
+  /*
+    BUY baseline needs at least 3 local windows.
+    Total-volume baseline may come from Luno candles.
+  */
+
+  const buyBaselineReady =
+    validLocalBuyVolumes.length >=
+    MOMENTUM_MIN_BASELINE_WINDOWS;
+
+  const totalBaselineSource =
+    candleVolumes.length >=
+      MOMENTUM_MIN_BASELINE_WINDOWS
+      ? candleVolumes
+      : validLocalTotalVolumes;
+
+  const totalBaselineReady =
+    totalBaselineSource.length >=
+    MOMENTUM_MIN_BASELINE_WINDOWS;
+
+  const buyBaselineAverage =
+    buyBaselineReady
+      ? average(
+          validLocalBuyVolumes.slice(
+            -MOMENTUM_BASELINE_WINDOWS
+          )
+        )
+      : null;
+
+  const totalBaselineAverage =
+    totalBaselineReady
+      ? average(
+          totalBaselineSource.slice(
+            -MOMENTUM_BASELINE_WINDOWS
+          )
+        )
+      : null;
+
+const buyIncreasePct =
+  buyBaselineAverage &&
+  buyBaselineAverage >
+    0
+    ? (
+        (
+          projectedBuyVolume -
+          buyBaselineAverage
+        ) /
+        buyBaselineAverage
+      ) * 100
+    : null;
+
+  const totalIncreasePct =
+    totalBaselineAverage &&
+    totalBaselineAverage >
+      0
+      ? (
+          (
+            current.totalVolume -
+            totalBaselineAverage
+          ) /
+          totalBaselineAverage
+        ) * 100
+      : null;
 
   return {
     ready:
-      true,
+      buyBaselineReady,
 
-    firstPrice,
+    totalBaselineReady,
 
-    lastPrice,
+    current,
 
-    changePct,
+    buyBaselineAverage,
 
-    rising:
-      changePct >
-      0.03,
+    totalBaselineAverage,
+
+    buyBaselineWindows:
+      validLocalBuyVolumes.length,
+
+    totalBaselineWindows:
+      totalBaselineSource.length,
+
+    buyIncreasePct,
+
+    totalIncreasePct,
   };
 }
 
 /* ============================================================
-   GRT ORDERBOOK / LIQUIDITY FILTER
+   NEARBY ORDERBOOK FILTER
 ============================================================ */
 
-async function getGRTLiquidityFilter(
+function filterNearbyOrders(
+  orders,
+  currentPrice,
+  rangePct,
+  side
+) {
+  if (
+    !Array.isArray(
+      orders
+    ) ||
+    currentPrice <=
+      0
+  ) {
+    return [];
+  }
+
+  if (
+    side ===
+    "BID"
+  ) {
+    const minimumPrice =
+      currentPrice *
+      (
+        1 -
+        rangePct /
+          100
+      );
+
+    return orders.filter(
+      (order) =>
+        order.price <
+          currentPrice &&
+        order.price >=
+          minimumPrice
+    );
+  }
+
+  const maximumPrice =
+    currentPrice *
+    (
+      1 +
+      rangePct /
+        100
+    );
+
+  return orders.filter(
+    (order) =>
+      order.price >
+        currentPrice &&
+      order.price <=
+        maximumPrice
+  );
+}
+
+/* ============================================================
+   ORDERBOOK CLUSTERING
+============================================================ */
+
+function clusterOrderBook(
+  orders,
+  tolerancePct
+) {
+  const clusters = [];
+
+  for (
+    const order of
+    orders
+  ) {
+    let selected =
+      null;
+
+    for (
+      const cluster of
+      clusters
+    ) {
+      const distancePct =
+        Math.abs(
+          percentChange(
+            cluster.price,
+            order.price
+          )
+        );
+
+      if (
+        distancePct <=
+        tolerancePct
+      ) {
+        selected =
+          cluster;
+
+        break;
+      }
+    }
+
+    if (
+      !selected
+    ) {
+      clusters.push({
+        price:
+          order.price,
+
+        volume:
+          order.volume,
+
+        orderCount:
+          1,
+
+        weightedPrice:
+          order.price *
+          order.volume,
+      });
+
+      continue;
+    }
+
+    selected.volume +=
+      order.volume;
+
+    selected.orderCount++;
+
+    selected.weightedPrice +=
+      order.price *
+      order.volume;
+
+    selected.price =
+      selected.weightedPrice /
+      selected.volume;
+  }
+
+  return clusters;
+}
+
+/* ============================================================
+   WALL STRENGTH
+============================================================ */
+
+function calculateWallStrength(
+  clusters,
+  currentPrice
+) {
+  if (
+    !clusters.length
+  ) {
+    return [];
+  }
+
+  const volumes =
+    clusters.map(
+      (cluster) =>
+        cluster.volume
+    );
+
+  const normalVolume =
+    average(
+      volumes
+    );
+
+  return clusters
+    .map(
+      (cluster) => {
+        const ratio =
+          normalVolume >
+            0
+            ? cluster.volume /
+              normalVolume
+            : 1;
+
+        const distancePct =
+          Math.abs(
+            percentChange(
+              currentPrice,
+              cluster.price
+            )
+          );
+
+        let rating =
+          1;
+
+        if (
+          ratio >=
+          1.25
+        ) {
+          rating =
+            3;
+        }
+
+        if (
+          ratio >=
+          1.75
+        ) {
+          rating =
+            5;
+        }
+
+        if (
+          ratio >=
+          2.50
+        ) {
+          rating =
+            7;
+        }
+
+        if (
+          ratio >=
+          4
+        ) {
+          rating =
+            9;
+        }
+
+        if (
+          ratio >=
+          6
+        ) {
+          rating =
+            10;
+        }
+
+        /*
+          Nearby walls matter more.
+        */
+
+        if (
+          distancePct <=
+          0.20
+        ) {
+          rating +=
+            1;
+        }
+
+        return {
+          ...cluster,
+
+          ratio,
+
+          distancePct,
+
+          rating:
+            Math.round(
+              clamp(
+                rating,
+                1,
+                10
+              )
+            ),
+        };
+      }
+    )
+    .sort(
+      (a, b) =>
+        b.rating -
+          a.rating ||
+        a.distancePct -
+          b.distancePct
+    );
+}
+
+/* ============================================================
+   SELECT RELEVANT SUPPORT / RESISTANCE
+============================================================ */
+
+function selectRelevantWall(
+  walls
+) {
+  if (
+    !walls.length
+  ) {
+    return null;
+  }
+
+  const meaningful =
+    walls.filter(
+      (wall) =>
+        wall.ratio >=
+          MIN_WALL_RELATIVE_RATIO ||
+        wall.rating >=
+          4
+    );
+
+  if (
+    meaningful.length
+  ) {
+    return [
+      ...meaningful,
+    ].sort(
+      (a, b) =>
+        (
+          a.distancePct -
+          b.distancePct
+        ) ||
+        (
+          b.rating -
+          a.rating
+        )
+    )[0];
+  }
+
+  return [
+    ...walls,
+  ].sort(
+    (a, b) =>
+      (
+        a.distancePct -
+        b.distancePct
+      ) ||
+      (
+        b.rating -
+        a.rating
+      )
+  )[0];
+}
+
+/* ============================================================
+   ORDERBOOK STRUCTURE
+============================================================ */
+
+async function getOrderBookStructure(
+  coin,
+  currentPrice
+) {
+  const book =
+    await getTopOrderBook(
+      coin
+    );
+
+  if (
+    !book
+  ) {
+    return null;
+  }
+
+  const rangePct =
+    ORDERBOOK_STRUCTURE_RANGE_PCT[
+      coin
+    ] ||
+    3;
+
+  const clusterPct =
+    ORDERBOOK_CLUSTER_PCT[
+      coin
+    ] ||
+    0.15;
+
+  const nearbyBids =
+    filterNearbyOrders(
+      book.bids,
+      currentPrice,
+      rangePct,
+      "BID"
+    );
+
+  const nearbyAsks =
+    filterNearbyOrders(
+      book.asks,
+      currentPrice,
+      rangePct,
+      "ASK"
+    );
+
+  const bidClusters =
+    clusterOrderBook(
+      nearbyBids,
+      clusterPct
+    );
+
+  const askClusters =
+    clusterOrderBook(
+      nearbyAsks,
+      clusterPct
+    );
+
+  const bidWalls =
+    calculateWallStrength(
+      bidClusters,
+      currentPrice
+    );
+
+  const askWalls =
+    calculateWallStrength(
+      askClusters,
+      currentPrice
+    );
+
+  const support =
+    selectRelevantWall(
+      bidWalls
+    );
+
+  const resistance =
+    selectRelevantWall(
+      askWalls
+    );
+
+  const totalBidLiquidity =
+    nearbyBids.reduce(
+      (
+        total,
+        order
+      ) =>
+        total +
+        order.volume,
+      0
+    );
+
+  const totalAskLiquidity =
+    nearbyAsks.reduce(
+      (
+        total,
+        order
+      ) =>
+        total +
+        order.volume,
+      0
+    );
+
+  const totalLiquidity =
+    totalBidLiquidity +
+    totalAskLiquidity;
+
+  const bidLiquidityPct =
+    totalLiquidity >
+      0
+      ? (
+          totalBidLiquidity /
+          totalLiquidity
+        ) * 100
+      : 50;
+
+  const askLiquidityPct =
+    totalLiquidity >
+      0
+      ? (
+          totalAskLiquidity /
+          totalLiquidity
+        ) * 100
+      : 50;
+
+  return {
+    coin,
+
+    support,
+    resistance,
+
+    bidWalls,
+    askWalls,
+
+    totalBidLiquidity,
+    totalAskLiquidity,
+
+    bidLiquidityPct,
+    askLiquidityPct,
+
+    bestBid:
+      book.bids[0]
+        ?.price ||
+      null,
+
+    bestAsk:
+      book.asks[0]
+        ?.price ||
+      null,
+  };
+}
+
+/* ============================================================
+   GRT LIQUIDITY ANALYSIS
+============================================================ */
+
+async function getGRTLiquidityAnalysis(
   currentPrice
 ) {
   const structure =
@@ -3612,17 +3458,11 @@ async function getGRTLiquidityFilter(
       ready:
         false,
 
-      supportOkay:
-        false,
-
-      resistanceOkay:
+      supportive:
         false,
 
       resistanceBlocking:
         false,
-
-      structure:
-        null,
     };
   }
 
@@ -3632,35 +3472,35 @@ async function getGRTLiquidityFilter(
   const resistance =
     structure.resistance;
 
-  let supportOkay =
-    false;
+  const nearbySupport =
+    Boolean(
+      support &&
+      support.distancePct <=
+        1.00
+    );
 
-  let resistanceOkay =
-    true;
+  const strongSupport =
+    Boolean(
+      nearbySupport &&
+      support.rating >=
+        4
+    );
 
   let resistanceBlocking =
     false;
 
   if (
-    support
-  ) {
-    supportOkay =
-      support.distancePct <=
-        1.00 &&
-      support.rating >=
-        3;
-  }
-
-  if (
     resistance
   ) {
-    /*
-      A very strong wall extremely near the price
-      can veto BUY NOW.
-
-      Moderate walls do NOT automatically block,
-      to avoid an overly rigid filter.
-    */
+    if (
+      resistance.distancePct <=
+        0.20 &&
+      resistance.rating >=
+        7
+    ) {
+      resistanceBlocking =
+        true;
+    }
 
     if (
       resistance.distancePct <=
@@ -3670,503 +3510,737 @@ async function getGRTLiquidityFilter(
     ) {
       resistanceBlocking =
         true;
-
-      resistanceOkay =
-        false;
-    } else if (
-      resistance.distancePct <=
-        0.20 &&
-      resistance.rating >=
-        7
-    ) {
-      resistanceBlocking =
-        true;
-
-      resistanceOkay =
-        false;
     }
   }
+
+  const bidSupportive =
+    structure.bidLiquidityPct >=
+    52;
+
+  const supportive =
+    (
+      strongSupport ||
+      bidSupportive
+    ) &&
+    !resistanceBlocking;
 
   return {
     ready:
       true,
 
-    supportOkay,
-
-    resistanceOkay,
+    supportive,
 
     resistanceBlocking,
 
     support,
-
     resistance,
+
+    bidLiquidityPct:
+      structure.bidLiquidityPct,
+
+    askLiquidityPct:
+      structure.askLiquidityPct,
 
     structure,
   };
 }
 
 /* ============================================================
-   GRT MOMENTUM DECISION
+   BTC BUY SURGE RADAR
 
-   NO SPIKE:
-   no action text.
+   BTC IS NOT A TRADE SIGNAL.
 
-   SPIKE:
-   at least VERIFYING BUY.
+   Trigger only when:
+   1. Executed BUY activity is unusually high.
+   2. Buyer dominance is positive.
+   3. Price starts responding positively.
 
-   BUY NOW:
-   uses confluence rather than requiring every
-   single condition to be perfect.
-
-   Strong red flags can veto BUY NOW.
+   Large volume while price is falling
+   is intentionally NOT announced.
 ============================================================ */
 
-async function getGRTMomentumDecision(
-  ticker
-) {
-  const volumeData =
-    await getMomentumVolumeData(
-      "GRT"
+async function getBTCBuySurge() {
+  const baseline =
+    await getBuyVolumeBaseline(
+      "BTC"
+    );
+
+  const priceResponse =
+    getExecutedPriceResponse(
+      "BTC",
+      5 * 60 * 1000
     );
 
   if (
-    !volumeData.ready
+    !baseline.ready
   ) {
     return {
-      momentumText:
-        "⚪ COLLECTING DATA",
+      status:
+        "COLLECTING",
 
-      actionText:
-        "",
+      text:
+        "⚪ COLLECTING DATA",
+    };
+  }
+
+  const current =
+    baseline.current;
+
+  const buyIncreasePct =
+    safeNumber(
+      baseline.buyIncreasePct,
+      -100
+    );
+
+  const unusualBuy =
+    buyIncreasePct >=
+    MOMENTUM_SPIKE_THRESHOLD_PCT;
+
+  const buyerDominant =
+    current.buyVolumePct >=
+    BTC_BUY_SURGE_MIN_BUY_PCT;
+
+  const positivePrice =
+    priceResponse.ready &&
+    priceResponse.changePct >=
+      BTC_BUY_SURGE_MIN_PRICE_RESPONSE_PCT;
+
+  if (
+    unusualBuy &&
+    buyerDominant &&
+    positivePrice
+  ) {
+    return {
+      status:
+        "BUY_SURGE",
+
+      text:
+        `🟢 BUY SURGE +${Math.max(
+          0,
+          buyIncreasePct
+        ).toFixed(
+          0
+        )}%`,
+
+      buyIncreasePct,
+
+      buyVolumePct:
+        current.buyVolumePct,
+
+      priceResponsePct:
+        priceResponse.changePct,
+    };
+  }
+
+  return {
+    status:
+      "NO_SURGE",
+
+    text:
+      "🔴 NO BUY SURGE",
+
+    buyIncreasePct,
+
+    buyVolumePct:
+      current.buyVolumePct,
+
+    priceResponsePct:
+      priceResponse.changePct,
+  };
+}
+
+/* ============================================================
+   GRT MOMENTUM RAW ANALYSIS
+
+   This is the main 5M early-entry detector.
+
+   IMPORTANT:
+   - Abnormal volume alone is NOT enough.
+   - SELL spike is ignored.
+   - Price must show early positive response.
+   - RSI / orderbook / MA are supporting filters.
+============================================================ */
+
+async function analyzeGRTMomentum(
+  ticker
+) {
+  const [
+    baseline,
+    rsi,
+    ma,
+    liquidity,
+  ] =
+    await Promise.all([
+      getBuyVolumeBaseline(
+        "GRT"
+      ),
+
+      getGRT5mRSI(),
+
+      getGRT1hMA(),
+
+      getGRTLiquidityAnalysis(
+        ticker.currentPrice
+      ),
+    ]);
+
+  const priceResponse =
+    getExecutedPriceResponse(
+      "GRT",
+      5 * 60 * 1000
+    );
+
+  if (
+    !baseline.ready
+  ) {
+    return {
+      ready:
+        false,
 
       status:
         "COLLECTING",
     };
   }
 
-  if (
-    !volumeData.isSpike
-  ) {
-    return {
-      momentumText:
-        "🔴 NO SPIKE",
-
-      actionText:
-        "",
-
-      status:
-        "NO_SPIKE",
-
-      spikePct:
-        volumeData.spikePct,
-    };
-  }
-
-  const [
-    rsi,
-    ma,
-    liquidity,
-  ] =
-    await Promise.all([
-      getGRT5MRSI(),
-
-      getGRT1HMATrend(),
-
-      getGRTLiquidityFilter(
-        ticker.currentPrice
-      ),
-    ]);
-
   const flow =
-    getGRTCurrent5MFlow();
+    baseline.current;
 
-  const priceResponse =
-    getGRT5MPriceResponse();
+  const buyIncreasePct =
+    safeNumber(
+      baseline.buyIncreasePct,
+      -100
+    );
 
-  let positiveScore =
-    0;
+  const unusualBuy =
+    buyIncreasePct >=
+    MOMENTUM_SPIKE_THRESHOLD_PCT;
 
-  let strongRedFlag =
-    false;
-
-  /* ========================================================
-     RSI FILTER
-  ======================================================== */
-
-  if (
-    rsi.ready
-  ) {
-    if (
-      rsi.direction ===
-        "RISING"
-    ) {
-      positiveScore +=
-        1;
-    }
-
-    if (
-      rsi.current >=
-        45 &&
-      rsi.current <=
-        72
-    ) {
-      positiveScore +=
-        1;
-    }
-
-    /*
-      Overbought alone does NOT automatically block.
-      But overbought + falling RSI is a warning.
-    */
-
-    if (
-      rsi.current >=
-        75 &&
-      rsi.direction ===
-        "FALLING"
-    ) {
-      strongRedFlag =
-        true;
-    }
-
-    if (
-      rsi.current <=
-        30 &&
-      rsi.direction ===
-        "RISING"
-    ) {
-      positiveScore +=
-        1;
-    }
-  }
-
-  /* ========================================================
-     1H MA FILTER
-  ======================================================== */
-
-  if (
-    ma.ready
-  ) {
-    if (
-      ma.status ===
-        "CROSS UP"
-    ) {
-      positiveScore +=
-        2;
-    } else if (
-      ma.status ===
-        "BULLISH"
-    ) {
-      positiveScore +=
-        2;
-    } else if (
-      ma.status ===
-        "NEAR CROSS"
-    ) {
-      positiveScore +=
-        1;
-    }
-
-    /*
-      MA9 clearly below MA50 does not kill
-      VERIFYING BUY, but makes BUY NOW harder.
-    */
-
-    if (
-      ma.status ===
-        "BEARISH" &&
-      ma.gapPct <
-        -0.50
-    ) {
-      strongRedFlag =
-        true;
-    }
-  }
-
-  /* ========================================================
-     EXECUTED FLOW FILTER
-  ======================================================== */
-
-  if (
-    flow.buyVolumePct >=
-    55
-  ) {
-    positiveScore +=
-      1;
-  }
-
-  if (
-    flow.buyFrequencyPct >=
-    55
-  ) {
-    positiveScore +=
-      1;
-  }
-
-  if (
-    flow.buyVolumePct <
-      40 &&
-    flow.buyFrequencyPct <
-      45
-  ) {
-    strongRedFlag =
-      true;
-  }
-
-  /* ========================================================
-     PRICE RESPONSE
-  ======================================================== */
-
-  if (
+  const positivePrice =
     priceResponse.ready &&
-    priceResponse.rising
-  ) {
-    positiveScore +=
-      1;
-  }
+    priceResponse.changePct >=
+      GRT_EARLY_MIN_PRICE_RESPONSE_PCT;
+
+  const priceNotFalling =
+    !priceResponse.ready ||
+    priceResponse.changePct >=
+      -0.02;
+
+  const buyerDominant =
+    flow.buyVolumePct >=
+    GRT_EARLY_MIN_BUY_VOLUME_PCT;
+
+  const buyerStrong =
+    flow.buyVolumePct >=
+    GRT_DYNAMIC_BUY_VOLUME_MIN_PCT;
+
+  const frequencySupport =
+    flow.buyFrequencyPct >=
+    52;
+
+  const rsiImproving =
+    rsi.ready &&
+    (
+      rsi.direction ===
+        "RISING" ||
+      (
+        rsi.oversold &&
+        rsi.change >
+        0
+      )
+    );
+
+  const rsiDanger =
+    rsi.ready &&
+    rsi.overbought &&
+    rsi.direction ===
+      "FALLING";
+
+  const maSupport =
+    !ma.ready ||
+    ma.bullish ||
+    ma.nearCross;
+
+  const maStrongBearish =
+    ma.ready &&
+    !ma.bullish &&
+    !ma.nearCross &&
+    ma.gapPct <
+      -0.50;
+
+  const liquiditySupport =
+    !liquidity.ready ||
+    liquidity.supportive;
+
+  const resistanceBlocking =
+    liquidity.ready &&
+    liquidity.resistanceBlocking;
 
   /*
-    Large spike but price failing to respond
-    suggests absorption by sellers.
-
-    Do not issue BUY NOW.
+    Hard veto conditions.
   */
 
-  if (
-    volumeData.spikePct >=
-      50 &&
+  const sellDominant =
+    flow.sellVolumePct >=
+    60;
+
+  const meaningfulPriceDrop =
     priceResponse.ready &&
     priceResponse.changePct <=
-      0
-  ) {
-    strongRedFlag =
-      true;
-  }
+      -0.10;
 
-  /* ========================================================
-     ORDERBOOK / LIQUIDITY
-  ======================================================== */
-
-  if (
-    liquidity.ready
-  ) {
-    if (
-      liquidity.supportOkay
-    ) {
-      positiveScore +=
-        1;
-    }
-
-    if (
-      liquidity.resistanceOkay
-    ) {
-      positiveScore +=
-        1;
-    }
-
-    if (
-      liquidity.resistanceBlocking
-    ) {
-      strongRedFlag =
-        true;
-    }
-  }
-
-  /* ========================================================
-     FINAL DECISION
-
-     Deliberately tolerant:
-     BUY NOW does not require every filter.
-
-     But it needs meaningful confluence
-     and no major veto condition.
-  ======================================================== */
-
-  let buyNowThreshold =
-    6;
+  const hardVeto =
+    sellDominant ||
+    meaningfulPriceDrop ||
+    resistanceBlocking ||
+    rsiDanger;
 
   /*
-    If 1H MA is already bullish/cross-up,
-    allow a slightly more responsive signal.
+    Positive confluence scoring.
+
+    This is deliberately NOT 6/6 rigid.
   */
+
+  let score =
+    0;
+
+  if (
+    unusualBuy
+  ) {
+    score +=
+      2;
+  }
+
+  if (
+    buyerStrong
+  ) {
+    score +=
+      2;
+  } else if (
+    buyerDominant
+  ) {
+    score +=
+      1;
+  }
+
+  if (
+    frequencySupport
+  ) {
+    score +=
+      1;
+  }
+
+  if (
+    positivePrice
+  ) {
+    score +=
+      2;
+  } else if (
+    priceNotFalling
+  ) {
+    score +=
+      1;
+  }
+
+  if (
+    rsiImproving
+  ) {
+    score +=
+      1;
+  }
+
+  if (
+    maSupport
+  ) {
+    score +=
+      1;
+  }
+
+  if (
+    liquiditySupport
+  ) {
+    score +=
+      1;
+  }
+
+  /*
+    VERIFYING BUY:
+    early positive setup.
+
+    BUY NOW:
+    stronger confluence + positive price response.
+
+    BUY NOW still needs user visual confirmation
+    on the Luno chart.
+  */
+
+  const verifyingBuy =
+    !hardVeto &&
+    unusualBuy &&
+    buyerDominant &&
+    priceNotFalling &&
+    score >=
+      5;
+
+  let buyNowThreshold =
+    8;
 
   if (
     ma.ready &&
-    (
-      ma.status ===
-        "CROSS UP" ||
-      ma.status ===
-        "BULLISH"
-    )
+    ma.bullish
   ) {
     buyNowThreshold =
-      5;
+      7;
   }
 
   const buyNow =
-    !strongRedFlag &&
-    positiveScore >=
-      buyNowThreshold;
+    verifyingBuy &&
+    positivePrice &&
+    buyerStrong &&
+    score >=
+      buyNowThreshold &&
+    !maStrongBearish;
+
+  let status =
+    "NO_ENTRY";
+
+  if (
+    verifyingBuy
+  ) {
+    status =
+      "VERIFYING";
+  }
+
+  if (
+    buyNow
+  ) {
+    status =
+      "BUY_NOW";
+  }
 
   return {
-    momentumText:
-      `🟢 SPIKE +${Math.max(
-        0,
-        volumeData.spikePct
-      ).toFixed(
-        0
-      )}%`,
+    ready:
+      true,
 
-    actionText:
-      buyNow
-        ? "🟢 BUY NOW"
-        : "🟡 VERIFYING BUY...",
+    status,
 
-    status:
-      buyNow
-        ? "BUY_NOW"
-        : "VERIFYING",
+    score,
 
-    spikePct:
-      volumeData.spikePct,
+    buyNow,
 
-    score:
-      positiveScore,
+    verifyingBuy,
 
-    strongRedFlag,
+    hardVeto,
 
-    rsi,
+    unusualBuy,
 
-    ma,
+    buyIncreasePct,
 
     flow,
 
     priceResponse,
 
+    rsi,
+
+    ma,
+
     liquidity,
+
+    reasons: {
+      buyerDominant,
+      buyerStrong,
+      frequencySupport,
+      positivePrice,
+      priceNotFalling,
+      rsiImproving,
+      maSupport,
+      liquiditySupport,
+      sellDominant,
+      meaningfulPriceDrop,
+      resistanceBlocking,
+      rsiDanger,
+      maStrongBearish,
+    },
   };
 }
 
 /* ============================================================
-   NEXT RESISTANCE FROM ORDERBOOK
+   GRT MOMENTUM DISPLAY DECISION
 ============================================================ */
 
-async function findNextOrderBookResistance(
-  coin,
-  currentPrice
+async function getGRTMomentumDecision(
+  ticker
 ) {
-  const orderBook =
-    await getTopOrderBook(
-      coin
+  const analysis =
+    await analyzeGRTMomentum(
+      ticker
     );
 
   if (
-    !orderBook ||
-    !orderBook.asks.length
+    !analysis.ready
+  ) {
+    return {
+      status:
+        "COLLECTING",
+
+      momentumText:
+        "⚪ COLLECTING DATA",
+
+      actionText:
+        "",
+
+      analysis,
+    };
+  }
+
+  if (
+    analysis.status ===
+    "BUY_NOW"
+  ) {
+    return {
+      status:
+        "BUY_NOW",
+
+      momentumText:
+        "🟢 BUY NOW",
+
+      actionText:
+        "",
+
+      analysis,
+    };
+  }
+
+  if (
+    analysis.status ===
+    "VERIFYING"
+  ) {
+    return {
+      status:
+        "VERIFYING",
+
+      momentumText:
+        "🟡 VERIFYING BUY...",
+
+      actionText:
+        "",
+
+      analysis,
+    };
+  }
+
+  return {
+    status:
+      "NO_ENTRY",
+
+    momentumText:
+      "🔴 NO ENTRY SIGNAL",
+
+    actionText:
+      "",
+
+    analysis,
+  };
+}
+
+/* ============================================================
+   5M PRICE ALERT FORMAT
+
+   BUY NOW trigger itself will be connected
+   to Scalping Entry in a later PART.
+============================================================ */
+
+async function sendPriceAlert() {
+  const [
+    btc,
+    grt,
+  ] =
+    await Promise.all([
+      getTicker(
+        "BTC"
+      ),
+
+      getTicker(
+        "GRT"
+      ),
+    ]);
+
+  if (
+    !btc ||
+    !grt
+  ) {
+    return;
+  }
+
+  const [
+    btcMomentum,
+    grtMomentum,
+  ] =
+    await Promise.all([
+      getBTCBuySurge(),
+
+      getGRTMomentumDecision(
+        grt
+      ),
+    ]);
+
+const previousBTC =
+  LAST_ALERT_PRICE[
+    "BTC"
+  ];
+
+const previousGRT =
+  LAST_ALERT_PRICE[
+    "GRT"
+  ];
+
+  const btcMove =
+    previousBTC >
+      0
+      ? percentChange(
+          previousBTC,
+          btc.currentPrice
+        )
+      : 0;
+
+  const grtMove =
+    previousGRT >
+      0
+      ? percentChange(
+          previousGRT,
+          grt.currentPrice
+        )
+      : 0;
+
+LAST_ALERT_PRICE[
+  "BTC"
+] =
+  btc.currentPrice;
+
+LAST_ALERT_PRICE[
+  "GRT"
+] =
+  grt.currentPrice;
+
+  const btcMoveText =
+    Math.abs(
+      btcMove
+    ) >=
+      0.01
+      ? ` ${
+          btcMove >
+            0
+            ? "⬆️"
+            : "⬇️"
+        } ${formatPercent(
+          btcMove
+        )}`
+      : "";
+
+  const grtMoveText =
+    Math.abs(
+      grtMove
+    ) >=
+      0.01
+      ? ` ${
+          grtMove >
+            0
+            ? "⬆️"
+            : "⬇️"
+        } ${formatPercent(
+          grtMove
+        )}`
+      : "";
+
+  await sendTelegram(
+    `📡 PRICE ALERT
+
+₿ BTC RM${formatPrice(
+      "BTC",
+      btc.currentPrice
+    )}${btcMoveText}
+⚡ MOMENTUM: ${btcMomentum.text}
+
+🪙 GRT RM${formatPrice(
+      "GRT",
+      grt.currentPrice
+    )}${grtMoveText}
+⚡ MOMENTUM: ${grtMomentum.momentumText}`
+  );
+
+  /*
+    We call the dedicated BUY NOW handler
+    only when the GRT momentum engine
+    actually confirms BUY NOW.
+
+    Function is defined in later PART.
+  */
+
+  if (
+    grtMomentum.status ===
+    "BUY_NOW"
+  ) {
+    await handleGRTBuyNowSignal(
+      grt,
+      grtMomentum.analysis
+    );
+  }
+}
+/* ============================================================
+   PRICE SNAPSHOT
+============================================================ */
+
+function getPriceSnapshot(
+  coin,
+  windowMs
+) {
+  const points =
+    getPriceMemoryWindow(
+      coin,
+      windowMs
+    );
+
+  if (
+    points.length <
+    2
   ) {
     return null;
   }
 
-  const rangePct =
-    ORDERBOOK_STRUCTURE_RANGE_PCT[
-      coin
-    ] || 3.00;
-
-  const maxPrice =
-    currentPrice *
-    (
-      1 +
-      rangePct /
-        100
-    );
-
-  const relevantAsks =
-    orderBook.asks.filter(
-      (ask) =>
-        ask.price >
-          currentPrice &&
-        ask.price <=
-          maxPrice
-    );
-
-  const clusters =
-    clusterOrderBookSide(
-      relevantAsks,
-      ORDERBOOK_CLUSTER_PCT[
-        coin
-      ] || 0.15
-    );
-
-  if (
-    !clusters.length
-  ) {
-    return null;
-  }
-
-  const stats =
-    getWallStats(
-      clusters
-    );
-
-  const sorted =
-    clusters
-      .map(
-        (cluster) => {
-          const strength =
-            rateOrderBookWall({
-              cluster,
-              stats,
-              currentPrice,
-            });
-
-          return {
-            price:
-              cluster.price,
-
-            volume:
-              cluster.volume,
-
-            distancePct:
-              percentChange(
-                currentPrice,
-                cluster.price
-              ),
-
-            strength,
-          };
-        }
-      )
-      .filter(
-        (item) =>
-          item.distancePct >
-          0
-      )
-      .sort(
-        (
-          a,
-          b
-        ) =>
-          a.price -
-          b.price
-      );
-
-  if (
-    !sorted.length
-  ) {
-    return null;
-  }
-
-  const meaningful =
-    sorted.find(
+  const prices =
+    points.map(
       (item) =>
-        item.strength.ratio >=
-          MIN_WALL_RELATIVE_RATIO ||
-        item.strength.rating >=
-          4
+        item.price
     );
 
-  return meaningful ||
-    sorted[0];
+  const open =
+    points[0].price;
+
+  const close =
+    points[
+      points.length -
+        1
+    ].price;
+
+  return {
+    open,
+    close,
+
+    high:
+      Math.max(
+        ...prices
+      ),
+
+    low:
+      Math.min(
+        ...prices
+      ),
+
+    change:
+      percentChange(
+        open,
+        close
+      ),
+  };
 }
 
 /* ============================================================
@@ -4178,7 +4252,7 @@ function getMarketDirection(
 ) {
   if (
     changePct >=
-    0.5
+    0.50
   ) {
     return "SEDANG NAIK KUAT";
   }
@@ -4192,7 +4266,7 @@ function getMarketDirection(
 
   if (
     changePct <=
-    -0.5
+    -0.50
   ) {
     return "SEDANG MENURUN KUAT";
   }
@@ -4208,7 +4282,7 @@ function getMarketDirection(
 }
 
 /* ============================================================
-   BUY / SELL PRESSURE
+   EXECUTED PRESSURE
 ============================================================ */
 
 function getPressureLabel(
@@ -4265,7 +4339,7 @@ function getRecentFakeBreakout(
   }
 
   if (
-    now() -
+    Date.now() -
       item.at >
     FAKE_BREAKOUT_VISIBLE_MS
   ) {
@@ -4280,12 +4354,12 @@ function getRecentFakeBreakout(
 }
 
 /* ============================================================
-   VALIDATE RECENT CONFIRMED BREAKOUT
+   RECENT CONFIRMED BREAKOUT
 ============================================================ */
 
-function getRelevantConfirmedBreakout(
+function getRecentConfirmedBreakout(
   coin,
-  currentResistance
+  resistancePrice
 ) {
   const item =
     LAST_CONFIRMED_BREAKOUT[
@@ -4299,7 +4373,7 @@ function getRelevantConfirmedBreakout(
   }
 
   if (
-    now() -
+    Date.now() -
       item.at >
     CONFIRMED_BREAKOUT_VISIBLE_MS
   ) {
@@ -4311,30 +4385,22 @@ function getRelevantConfirmedBreakout(
   }
 
   if (
-    !currentResistance
+    !resistancePrice ||
+    !item.resistance
   ) {
     return null;
   }
 
-  const referenceResistance =
-    item.resistance;
-
-  if (
-    !referenceResistance
-  ) {
-    return null;
-  }
-
-  const difference =
+  const differencePct =
     Math.abs(
       percentChange(
-        referenceResistance,
-        currentResistance
+        item.resistance,
+        resistancePrice
       )
     );
 
   if (
-    difference >
+    differencePct >
     CONFIRMED_STRUCTURE_TOLERANCE_PCT
   ) {
     return null;
@@ -4344,34 +4410,41 @@ function getRelevantConfirmedBreakout(
 }
 
 /* ============================================================
-   BREAKOUT WATCH
+   BREAKOUT WATCH CREATION
 ============================================================ */
 
 function ensureBreakoutWatch({
   coin,
   resistance,
-  resistanceStrength,
-  distancePct,
+  resistanceRating,
+  resistanceDistancePct,
   pressure,
 }) {
   if (
-    !resistance
+    !resistance ||
+    resistance <=
+      0
   ) {
     return;
   }
 
-  const buyPressure =
+  const positivePressure =
     pressure.includes(
       "BELI"
     );
 
   if (
-    !buyPressure ||
-    distancePct ===
+    !positivePressure
+  ) {
+    return;
+  }
+
+  if (
+    resistanceDistancePct ===
       null ||
-    distancePct <
-      0 ||
-    distancePct >
+    resistanceDistancePct ===
+      undefined ||
+    resistanceDistancePct >
       BREAKOUT_WATCH_MAX_DISTANCE_PCT
   ) {
     return;
@@ -4383,22 +4456,28 @@ function ensureBreakoutWatch({
     ];
 
   if (
-    existing &&
-    Math.abs(
-      percentChange(
-        existing.resistance,
-        resistance
-      )
-    ) <=
-      0.35
+    existing
   ) {
-    existing.resistance =
-      resistance;
+    const difference =
+      Math.abs(
+        percentChange(
+          existing.resistance,
+          resistance
+        )
+      );
 
-    existing.resistanceStrength =
-      resistanceStrength;
+    if (
+      difference <=
+      0.35
+    ) {
+      existing.resistance =
+        resistance;
 
-    return;
+      existing.resistanceRating =
+        resistanceRating;
+
+      return;
+    }
   }
 
   BREAKOUT_WATCH[
@@ -4408,10 +4487,10 @@ function ensureBreakoutWatch({
 
     resistance,
 
-    resistanceStrength,
+    resistanceRating,
 
     startedAt:
-      now(),
+      Date.now(),
 
     firstAboveAt:
       null,
@@ -4419,28 +4498,26 @@ function ensureBreakoutWatch({
     lastAboveAt:
       null,
 
-    lastAbovePrice:
-      null,
-
     aboveTradeCount:
       0,
 
-    buyEvidenceScore:
-      0,
-
-    acceptanceScore:
+    buyEvidence:
       0,
 
     failureScore:
       0,
 
-    sequences:
+    processedSequences:
       new Set(),
 
     confirmed:
       false,
   };
 }
+
+/* ============================================================
+   CANCEL BREAKOUT WATCH
+============================================================ */
 
 function cancelBreakoutWatch(
   coin
@@ -4497,8 +4574,6 @@ function getMarketCriteria({
     resistance &&
     resistanceDistancePct !==
       null &&
-    resistanceDistancePct >=
-      0 &&
     resistanceDistancePct <=
       BREAKOUT_WATCH_MAX_DISTANCE_PCT &&
     pressure.includes(
@@ -4527,13 +4602,7 @@ function getMarketCriteria({
   }
 
   if (
-    resistance &&
-    (
-      direction ===
-        "SIDEWAY" ||
-      pressure ===
-        "SEIMBANG"
-    )
+    resistance
   ) {
     return `BELI JIKA PECAH RM${formatPrice(
       coin,
@@ -4543,6 +4612,7 @@ function getMarketCriteria({
 
   return "JGN BELI";
 }
+
 /* ============================================================
    MARKET STRUCTURE ANALYSIS
 ============================================================ */
@@ -4561,17 +4631,14 @@ async function analyzeMarketStructure(
     return null;
   }
 
-  const currentPrice =
-    ticker.currentPrice;
-
-  const bookStructure =
+  const structure =
     await getOrderBookStructure(
       coin,
-      currentPrice
+      ticker.currentPrice
     );
 
   if (
-    !bookStructure
+    !structure
   ) {
     return null;
   }
@@ -4579,81 +4646,47 @@ async function analyzeMarketStructure(
   const snapshot15m =
     getPriceSnapshot(
       coin,
-      15 *
-        60 *
-        1000
+      15 * 60 * 1000
     );
 
   const snapshot60m =
     getPriceSnapshot(
       coin,
-      60 *
-        60 *
-        1000
+      60 * 60 * 1000
     );
 
-  let directionChange =
-    0;
-
-  if (
+  const directionChange =
     snapshot15m
-  ) {
-    directionChange =
-      snapshot15m.change;
-  } else if (
-    snapshot60m
-  ) {
-    directionChange =
-      snapshot60m.change;
-  }
+      ? snapshot15m.change
+      : snapshot60m
+        ? snapshot60m.change
+        : 0;
 
   const direction =
     getMarketDirection(
       directionChange
     );
 
-  const trades15m =
-    getTradesInWindow(
+  const flow =
+    getExecutedFlowSummary(
       coin,
-      now() -
-        15 *
-          60 *
-          1000,
-      now()
+      15 * 60 * 1000
     );
-
-  const flow15m =
-    summarizeTrades(
-      coin,
-      trades15m
-    );
-
-  const buyPct =
-    flow15m
-      ? flow15m.buyPct
-      : 50;
-
-  const sellPct =
-    flow15m
-      ? flow15m.sellPct
-      : 50;
 
   const pressure =
     getPressureLabel(
-      buyPct,
-      sellPct
+      flow.buyVolumePct ||
+        50,
+
+      flow.sellVolumePct ||
+        50
     );
 
   const support =
-    bookStructure.support;
+    structure.support;
 
   const resistance =
-    bookStructure.resistance;
-
-  const resistanceDistancePct =
-    resistance
-      ? resistance.distancePct
-      : null;
+    structure.resistance;
 
   const fakeBreakout =
     getRecentFakeBreakout(
@@ -4661,11 +4694,11 @@ async function analyzeMarketStructure(
     );
 
   const confirmedBreakout =
-    getRelevantConfirmedBreakout(
+    getRecentConfirmedBreakout(
       coin,
       resistance
-        ? resistance.price
-        : null
+        ?.price ||
+        null
     );
 
   let market =
@@ -4675,7 +4708,7 @@ async function analyzeMarketStructure(
     fakeBreakout
   ) {
     market =
-      `${direction} — FAKE BREAKOUT DETECTED`;
+      `${direction} — FAKE BREAKOUT`;
   } else if (
     confirmedBreakout
   ) {
@@ -4702,16 +4735,18 @@ async function analyzeMarketStructure(
 
     resistance:
       resistance
-        ? resistance.price
-        : null,
+        ?.price ||
+      null,
 
-    resistanceStrength:
+    resistanceRating:
       resistance
-        ? resistance.rating
-        : 0,
+        ?.rating ||
+      0,
 
-    distancePct:
-      resistanceDistancePct,
+    resistanceDistancePct:
+      resistance
+        ?.distancePct ??
+      null,
 
     pressure,
   });
@@ -4726,10 +4761,13 @@ async function analyzeMarketStructure(
 
       resistance:
         resistance
-          ? resistance.price
-          : null,
+          ?.price ||
+        null,
 
-      resistanceDistancePct,
+      resistanceDistancePct:
+        resistance
+          ?.distancePct ??
+        null,
 
       fakeBreakout,
 
@@ -4739,44 +4777,54 @@ async function analyzeMarketStructure(
   return {
     coin,
 
-    currentPrice,
+    currentPrice:
+      ticker.currentPrice,
 
     supportPrice:
       support
-        ? support.price
-        : null,
+        ?.price ||
+      null,
 
     supportRating:
       support
-        ? support.rating
-        : 0,
+        ?.rating ||
+      0,
 
     supportVolume:
       support
-        ? support.volume
-        : 0,
+        ?.volume ||
+      0,
 
     supportDistancePct:
       support
-        ? support.distancePct
-        : null,
+        ?.distancePct ??
+      null,
 
     resistancePrice:
       resistance
-        ? resistance.price
-        : null,
+        ?.price ||
+      null,
 
     resistanceRating:
       resistance
-        ? resistance.rating
-        : 0,
+        ?.rating ||
+      0,
 
     resistanceVolume:
       resistance
-        ? resistance.volume
-        : 0,
+        ?.volume ||
+      0,
 
-    resistanceDistancePct,
+    resistanceDistancePct:
+      resistance
+        ?.distancePct ??
+      null,
+
+    bidLiquidityPct:
+      structure.bidLiquidityPct,
+
+    askLiquidityPct:
+      structure.askLiquidityPct,
 
     market,
 
@@ -4786,14 +4834,16 @@ async function analyzeMarketStructure(
 
     criteria,
 
-    buyPct,
+    buyPct:
+      flow.buyVolumePct,
 
-    sellPct,
+    sellPct:
+      flow.sellVolumePct,
   };
 }
 
 /* ============================================================
-   MARKET STRUCTURE DISPLAY
+   MARKET STRUCTURE TEXT
 ============================================================ */
 
 function buildMarketStructureSection(
@@ -4804,10 +4854,7 @@ function buildMarketStructureSection(
       ? `RM${formatPrice(
           data.coin,
           data.supportPrice
-        )} — ${data.supportRating}/10
-📏 Jarak: ${data.supportDistancePct.toFixed(
-          2
-        )}%`
+        )} — ${data.supportRating}/10`
       : "N/A";
 
   const resistanceText =
@@ -4815,38 +4862,23 @@ function buildMarketStructureSection(
       ? `RM${formatPrice(
           data.coin,
           data.resistancePrice
-        )} — ${data.resistanceRating}/10
-📏 Jarak: ${data.resistanceDistancePct.toFixed(
-          2
-        )}%`
+        )} — ${data.resistanceRating}/10`
       : "N/A";
 
   return `🪙 ${data.coin}
-
-💵 Harga Semasa:
-RM${formatPrice(
+💵 Harga Semasa: RM${formatPrice(
     data.coin,
     data.currentPrice
   )}
-
-🟢 Support:
-${supportText}
-
-🔴 Resistance:
-${resistanceText}
-
-📈 Market:
-${data.market}
-
-⚡️ Tekanan:
-${data.pressure}
-
-🧠 Kriteria:
-${data.criteria}`;
+🟢 Support: ${supportText}
+🔴 Resistance: ${resistanceText}
+📈 Market: ${data.market}
+⚡️ Tekanan: ${data.pressure}
+🧠 Kriteria: ${data.criteria}`;
 }
 
 /* ============================================================
-   SEND MARKET STRUCTURE — 15 MIN
+   MARKET STRUCTURE ALERT
 ============================================================ */
 
 async function sendMarketStructure() {
@@ -4882,477 +4914,24 @@ async function sendMarketStructure() {
     `📊 MARKET STRUCTURE UPDATE
 
 ${sections.join(
-  "\n\n━━━━━━━━━━━━━━━━━━\n\n"
+  "\n━━━━━━━━━━━━━━━━━━\n"
 )}`
   );
 }
 
 /* ============================================================
-   2H BACKGROUND ANALYSIS
+   TRADE SIZE EVIDENCE
 ============================================================ */
 
-function getPrevious2HWindows(
+function getMedianTradeVolume(
   coin,
-  currentStart,
-  maxWindows = 5
-) {
-  const summaries = [];
-
-  for (
-    let i = 1;
-    i <= maxWindows;
-    i++
-  ) {
-    const end =
-      currentStart -
-      (
-        i - 1
-      ) *
-        TWO_HOURS;
-
-    const start =
-      end -
-      TWO_HOURS;
-
-    const trades =
-      getTradesInWindow(
-        coin,
-        start,
-        end
-      );
-
-    const summary =
-      summarizeTrades(
-        coin,
-        trades
-      );
-
-    if (
-      summary &&
-      summary.totalVolume >
-        0
-    ) {
-      summaries.push(
-        summary
-      );
-    }
-  }
-
-  return summaries;
-}
-
-/* ============================================================
-   RELATIVE 2H VOLUME
-============================================================ */
-
-function getRelativeVolumeInfo(
-  currentSummary,
-  previousSummaries
-) {
-  if (
-    !previousSummaries.length
-  ) {
-    return {
-      ratio:
-        null,
-
-      label:
-        null,
-    };
-  }
-
-  const avg =
-    average(
-      previousSummaries.map(
-        (item) =>
-          item.totalVolume
-      )
-    );
-
-  if (
-    !avg
-  ) {
-    return {
-      ratio:
-        null,
-
-      label:
-        null,
-    };
-  }
-
-  const ratio =
-    currentSummary.totalVolume /
-    avg;
-
-  let label =
-    "NORMAL VOLUME";
-
-  if (
-    ratio <
-    0.8
-  ) {
-    label =
-      "LOW VOLUME";
-  } else if (
-    ratio >=
-    1.75
-  ) {
-    label =
-      "VOLUME BREAKOUT";
-  } else if (
-    ratio >=
-    1.25
-  ) {
-    label =
-      "HIGH VOLUME";
-  }
-
-  return {
-    ratio,
-    label,
-  };
-}
-
-/* ============================================================
-   2H PRICE TREND
-============================================================ */
-
-function getCurrent2HPriceTrend({
-  coin,
-  startPrice,
-  peakPrice,
-  currentPrice,
-}) {
-  const recent15m =
-    getPriceSnapshot(
-      coin,
-      15 *
-        60 *
-        1000
-    );
-
-  const recentDirection =
-    recent15m
-      ? recent15m.change
-      : percentChange(
-          startPrice,
-          currentPrice
-        );
-
-  const peakDrop =
-    percentChange(
-      peakPrice,
-      currentPrice
-    );
-
-  const startMove =
-    percentChange(
-      startPrice,
-      currentPrice
-    );
-
-  const isFallingNow =
-    peakPrice >
-      currentPrice &&
-    (
-      recentDirection <
-        -0.08 ||
-      currentPrice <
-        startPrice
-    );
-
-  if (
-    isFallingNow
-  ) {
-    return {
-      direction:
-        "DOWN",
-
-      value:
-        peakDrop,
-    };
-  }
-
-  if (
-    startMove >
-    0.03
-  ) {
-    return {
-      direction:
-        "UP",
-
-      value:
-        startMove,
-    };
-  }
-
-  if (
-    startMove <
-    -0.03
-  ) {
-    return {
-      direction:
-        "DOWN",
-
-      value:
-        startMove,
-    };
-  }
-
-  return {
-    direction:
-      "FLAT",
-
-    value:
-      0,
-  };
-}
-
-/* ============================================================
-   2H DOMINANCE
-============================================================ */
-
-function getDominance(
-  summary
-) {
-  if (
-    summary.buyPct >=
-    summary.sellPct
-  ) {
-    return {
-      side:
-        "BUYER",
-
-      percent:
-        summary.buyPct,
-    };
-  }
-
-  return {
-    side:
-      "SELLER",
-
-    percent:
-      summary.sellPct,
-  };
-}
-
-/* ============================================================
-   2H DECISION
-============================================================ */
-
-function getTwoHourActionDecision({
-  dominance,
-  priceTrend,
-  relativeVolume,
-}) {
-  const dominantPct =
-    dominance.percent;
-
-  const strongDominance =
-    dominantPct >=
-    62;
-
-  const mildDominance =
-    dominantPct >=
-    55;
-
-  const volumeRatio =
-    relativeVolume.ratio;
-
-  const highVolume =
-    volumeRatio !==
-      null &&
-    volumeRatio >=
-      1.25;
-
-  if (
-    dominance.side ===
-      "BUYER" &&
-    priceTrend.direction ===
-      "UP"
-  ) {
-    if (
-      strongDominance &&
-      highVolume &&
-      priceTrend.value >=
-        0.5
-    ) {
-      return "ALLOW";
-    }
-
-    if (
-      mildDominance &&
-      priceTrend.value >
-        0
-    ) {
-      return "CAUTION";
-    }
-  }
-
-  if (
-    dominance.side ===
-      "BUYER" &&
-    priceTrend.direction ===
-      "DOWN"
-  ) {
-    return "BLOCK";
-  }
-
-  if (
-    dominance.side ===
-      "SELLER" &&
-    priceTrend.direction ===
-      "DOWN"
-  ) {
-    return "BLOCK";
-  }
-
-  return "CAUTION";
-}
-
-/* ============================================================
-   ANALYZE 2H MARKET CONDITION
-============================================================ */
-
-async function analyze2HMarketCondition(
-  coin
-) {
-  const endTime =
-    now();
-
-  const startTime =
-    endTime -
-    TWO_HOURS;
-
-  const currentTrades =
-    getTradesInWindow(
-      coin,
-      startTime,
-      endTime
-    );
-
-  if (
-    !currentTrades.length
-  ) {
-    return null;
-  }
-
-  const summary =
-    summarizeTrades(
-      coin,
-      currentTrades
-    );
-
-  if (
-    !summary
-  ) {
-    return null;
-  }
-
-  const coverageMs =
-    summary.endTime -
-    summary.startTime;
-
-  const startupCoverage =
-    endTime -
-    Math.max(
-      BOT_STARTED_AT,
-      startTime
-    );
-
-  if (
-    coverageMs <
-      TWO_HOUR_MIN_COVERAGE_MS ||
-    startupCoverage <
-      TWO_HOUR_MIN_COVERAGE_MS
-  ) {
-    return null;
-  }
-
-  const ticker =
-    await getTicker(
-      coin
-    );
-
-  if (
-    !ticker
-  ) {
-    return null;
-  }
-
-  const previous =
-    getPrevious2HWindows(
-      coin,
-      startTime,
-      5
-    );
-
-  const relativeVolume =
-    getRelativeVolumeInfo(
-      summary,
-      previous
-    );
-
-  const priceTrend =
-    getCurrent2HPriceTrend({
-      coin,
-
-      startPrice:
-        summary.open,
-
-      peakPrice:
-        summary.high,
-
-      currentPrice:
-        ticker.currentPrice,
-    });
-
-  const dominance =
-    getDominance(
-      summary
-    );
-
-  const action =
-    getTwoHourActionDecision({
-      dominance,
-
-      priceTrend,
-
-      relativeVolume,
-    });
-
-  return {
-    coin,
-
-    summary,
-
-    relativeVolume,
-
-    priceTrend,
-
-    dominance,
-
-    action,
-  };
-}
-
-/* ============================================================
-   RECENT MEDIAN TRADE VOLUME
-============================================================ */
-
-function getRecentMedianTradeVolume(
-  coin,
-  lookbackMs =
+  windowMs =
     TWO_HOURS
 ) {
   const trades =
     getTradesInWindow(
       coin,
-      now() -
-        lookbackMs,
-      now()
+      windowMs
     );
 
   if (
@@ -5361,36 +4940,62 @@ function getRecentMedianTradeVolume(
     return 0;
   }
 
-  return median(
-    trades.map(
-      (trade) =>
-        trade.volume
-    )
-  );
-}
+  const volumes =
+    trades
+      .map(
+        (trade) =>
+          trade.volume
+      )
+      .sort(
+        (a, b) =>
+          a - b
+      );
 
-/* ============================================================
-   EXECUTED TRADE EVIDENCE WEIGHT
-============================================================ */
+  const middle =
+    Math.floor(
+      volumes.length /
+      2
+    );
+
+  if (
+    volumes.length %
+      2 ===
+    1
+  ) {
+    return volumes[
+      middle
+    ];
+  }
+
+  return (
+    volumes[
+      middle - 1
+    ] +
+    volumes[
+      middle
+    ]
+  ) / 2;
+}
 
 function getTradeEvidenceWeight(
   coin,
   trade
 ) {
-  const normal =
-    getRecentMedianTradeVolume(
+  const medianVolume =
+    getMedianTradeVolume(
       coin
     );
 
   if (
-    !normal
+    medianVolume <=
+    0
   ) {
     return 1;
   }
 
   const multiple =
     trade.volume /
-    normal;
+    medianVolume;
 
   if (
     multiple >=
@@ -5410,10 +5015,13 @@ function getTradeEvidenceWeight(
 }
 
 /* ============================================================
-   PROCESS EXECUTED TRADE AGAINST BREAKOUT WATCH
+   BREAKOUT EXECUTED-TRADE PROCESSOR
+
+   This function is called by collectTradeHistory()
+   from PART 2.
 ============================================================ */
 
-async function processBreakoutWatchTrade(
+async function processBreakoutTrade(
   coin,
   trade
 ) {
@@ -5424,33 +5032,28 @@ async function processBreakoutWatchTrade(
 
   if (
     !watch ||
-    watch.confirmed ||
-    ACTIVE_TRADES[
-      coin
-    ] ||
-    PENDING_ENTRIES[
-      coin
-    ]
+    watch.confirmed
   ) {
     return;
   }
 
   if (
-    watch.sequences.has(
-      trade.sequence
-    )
+    watch.processedSequences
+      .has(
+        trade.sequence
+      )
   ) {
     return;
   }
 
-  watch.sequences.add(
+  watch.processedSequences.add(
     trade.sequence
   );
 
   const resistance =
     watch.resistance;
 
-  const aboveThreshold =
+  const breakoutPrice =
     resistance *
     (
       1 +
@@ -5458,7 +5061,7 @@ async function processBreakoutWatchTrade(
         100
     );
 
-  const holdThreshold =
+  const holdPrice =
     resistance *
     (
       1 +
@@ -5466,7 +5069,7 @@ async function processBreakoutWatchTrade(
         100
     );
 
-  const failureThreshold =
+  const failurePrice =
     resistance *
     (
       1 -
@@ -5474,7 +5077,7 @@ async function processBreakoutWatchTrade(
         100
     );
 
-  const hardFailureThreshold =
+  const hardFailurePrice =
     resistance *
     (
       1 -
@@ -5482,15 +5085,15 @@ async function processBreakoutWatchTrade(
         100
     );
 
-  /* =========================================================
-     TRADE EXECUTED ABOVE RESISTANCE
-  ========================================================= */
+  /* ========================================================
+     EXECUTED ABOVE RESISTANCE
+  ======================================================== */
 
   if (
     trade.price >=
-    aboveThreshold
+    breakoutPrice
   ) {
-    const weight =
+    const evidence =
       getTradeEvidenceWeight(
         coin,
         trade
@@ -5503,119 +5106,93 @@ async function processBreakoutWatchTrade(
     watch.lastAboveAt =
       trade.timestamp;
 
-    watch.lastAbovePrice =
-      trade.price;
-
-    watch.aboveTradeCount +=
-      1;
+    watch.aboveTradeCount++;
 
     if (
       trade.isBuy
     ) {
-      watch.buyEvidenceScore +=
-        weight;
-    } else {
-      watch.acceptanceScore +=
-        0.5;
+      watch.buyEvidence +=
+        evidence;
     }
 
     watch.failureScore =
       0;
 
-    const structure =
-      await analyzeMarketStructure(
-        coin
-      );
-
-    if (
-      !structure
-    ) {
-      return;
-    }
-
-    const pressureOkay =
-      !structure.pressure.includes(
-        "JUAL"
-      );
-
-    /*
-      Flexible confirmation:
-      1 exceptionally large executed buy
-      can contribute much more evidence,
-      but ordinary trades still need repetition.
-    */
-
     const enoughEvidence =
       (
         watch.aboveTradeCount >=
           2 &&
-        watch.buyEvidenceScore >=
+        watch.buyEvidence >=
           3
       ) ||
-      (
-        watch.aboveTradeCount >=
-          3 &&
-        watch.buyEvidenceScore >=
-          2
-      ) ||
-      (
-        watch.aboveTradeCount >=
-          1 &&
-        watch.buyEvidenceScore >=
-          3
-      );
-
-    const lastPriceHolding =
-      trade.price >=
-      holdThreshold;
+      watch.buyEvidence >=
+        4;
 
     if (
       enoughEvidence &&
-      pressureOkay &&
-      lastPriceHolding
+      trade.price >=
+        holdPrice
     ) {
       watch.confirmed =
         true;
+
+      LAST_CONFIRMED_BREAKOUT[
+        coin
+      ] = {
+        at:
+          Date.now(),
+
+        resistance,
+
+        confirmedPrice:
+          trade.price,
+
+        entryBlocked:
+          false,
+      };
+
+      /*
+        Dedicated breakout scalping trigger
+        is defined in a later PART.
+      */
 
       await triggerBreakoutScalpingEntry(
         coin,
         watch,
         trade
       );
+
+      cancelBreakoutWatch(
+        coin
+      );
     }
 
     return;
   }
 
-  /* =========================================================
-     MINOR PULLBACK — STILL WITHIN TOLERANCE
-  ========================================================= */
+  /* ========================================================
+     STILL WITHIN NORMAL PULLBACK
+  ======================================================== */
 
   if (
     trade.price >=
-    failureThreshold
+    failurePrice
   ) {
     return;
   }
 
-  /* =========================================================
-     BREAKOUT FAILURE
-  ========================================================= */
+  /* ========================================================
+     FAILURE EVIDENCE
+  ======================================================== */
 
-  const failureWeight =
+  watch.failureScore +=
     trade.isBuy
       ? 1
       : 2;
 
-  watch.failureScore +=
-    failureWeight;
-
-  const hardFailure =
-    trade.price <=
-    hardFailureThreshold;
-
   if (
-    hardFailure ||
+    trade.price <=
+      hardFailurePrice ||
     watch.failureScore >=
       2
   ) {
@@ -5623,7 +5200,7 @@ async function processBreakoutWatchTrade(
       coin
     ] = {
       at:
-        now(),
+        Date.now(),
 
       resistance,
 
@@ -5635,6 +5212,488 @@ async function processBreakoutWatchTrade(
       coin
     );
   }
+}
+
+/* ============================================================
+   2H FLOW ANALYSIS
+============================================================ */
+
+async function analyze2HMarketCondition(
+  coin
+) {
+  const trades =
+    getTradesInWindow(
+      coin,
+      TWO_HOURS
+    );
+
+  if (
+    trades.length <
+    2
+  ) {
+    return null;
+  }
+
+  const sorted = [
+    ...trades,
+  ].sort(
+    (a, b) =>
+      a.timestamp -
+      b.timestamp
+  );
+
+  const coverageMs =
+    sorted[
+      sorted.length -
+        1
+    ].timestamp -
+    sorted[0].timestamp;
+
+  if (
+    coverageMs <
+    TWO_HOUR_MIN_COVERAGE_MS
+  ) {
+    return null;
+  }
+
+  const flow =
+    getExecutedFlowSummary(
+      coin,
+      TWO_HOURS
+    );
+
+  const price =
+    getMemoryPriceChange(
+      coin,
+      TWO_HOURS
+    );
+
+  const buyerDominant =
+    flow.buyVolumePct >=
+    55;
+
+  const sellerDominant =
+    flow.sellVolumePct >=
+    55;
+
+  let action =
+    "CAUTION";
+
+  if (
+    buyerDominant &&
+    price.ready &&
+    price.changePct >
+      0
+  ) {
+    action =
+      "ALLOW";
+  }
+
+  if (
+    sellerDominant &&
+    price.ready &&
+    price.changePct <
+      0
+  ) {
+    action =
+      "BLOCK";
+  }
+
+  if (
+    buyerDominant &&
+    price.ready &&
+    price.changePct <
+      -0.25
+  ) {
+    action =
+      "BLOCK";
+  }
+
+  return {
+    coin,
+
+    action,
+
+    buyVolumePct:
+      flow.buyVolumePct,
+
+    sellVolumePct:
+      flow.sellVolumePct,
+
+    buyFrequencyPct:
+      flow.buyFrequencyPct,
+
+    sellFrequencyPct:
+      flow.sellFrequencyPct,
+
+    priceChangePct:
+      price.changePct,
+  };
+}
+
+/* ============================================================
+   2H SAFETY
+============================================================ */
+
+async function getTwoHourSafety(
+  coin
+) {
+  const analysis =
+    await analyze2HMarketCondition(
+      coin
+    );
+
+  if (
+    !analysis
+  ) {
+    return "UNKNOWN";
+  }
+
+  return analysis.action;
+}
+
+/* ============================================================
+   NEXT RESISTANCE
+============================================================ */
+
+async function findNextOrderBookResistance(
+  coin,
+  currentPrice
+) {
+  const structure =
+    await getOrderBookStructure(
+      coin,
+      currentPrice
+    );
+
+  if (
+    !structure ||
+    !structure.askWalls
+      ?.length
+  ) {
+    return null;
+  }
+
+  const candidates =
+    structure.askWalls
+      .filter(
+        (wall) =>
+          wall.price >
+          currentPrice
+      )
+      .sort(
+        (a, b) =>
+          a.price -
+          b.price
+      );
+
+  if (
+    !candidates.length
+  ) {
+    return null;
+  }
+
+  const meaningful =
+    candidates.find(
+      (wall) =>
+        wall.rating >=
+          4 ||
+        wall.ratio >=
+          MIN_WALL_RELATIVE_RATIO
+    );
+
+  const selected =
+    meaningful ||
+    candidates[0];
+
+  return {
+    price:
+      selected.price,
+
+    volume:
+      selected.volume,
+
+    distancePct:
+      percentChange(
+        currentPrice,
+        selected.price
+      ),
+
+    strength: {
+      rating:
+        selected.rating,
+
+      ratio:
+        selected.ratio,
+    },
+  };
+}
+
+/* ============================================================
+   ROOM TO TP
+============================================================ */
+
+async function evaluateRoomToTP(
+  coin,
+  entryPrice
+) {
+  const nextResistance =
+    await findNextOrderBookResistance(
+      coin,
+      entryPrice
+    );
+
+  const defaultTarget =
+    entryPrice *
+    (
+      1 +
+      DEFAULT_BREAKOUT_TP_PCT[
+        coin
+      ] /
+        100
+    );
+
+  if (
+    !nextResistance
+  ) {
+    return {
+      allowed:
+        true,
+
+      nextResistance:
+        null,
+
+      maxTargetPrice:
+        defaultTarget,
+
+      reason:
+        "NO STRONG WALL ABOVE",
+    };
+  }
+
+  if (
+    nextResistance
+      .distancePct <
+    MIN_GROSS_ROOM_PCT
+  ) {
+    return {
+      allowed:
+        false,
+
+      nextResistance,
+
+      maxTargetPrice:
+        null,
+
+      reason:
+        "ROOM TOO SMALL",
+    };
+  }
+
+  if (
+    nextResistance
+      .distancePct <=
+      1.00 &&
+    nextResistance
+      .strength
+      .rating >=
+      7
+  ) {
+    return {
+      allowed:
+        false,
+
+      nextResistance,
+
+      maxTargetPrice:
+        null,
+
+      reason:
+        "STRONG RESISTANCE TOO CLOSE",
+    };
+  }
+
+  const beforeWall =
+    nextResistance.price *
+    0.9975;
+
+  const maxTargetPrice =
+    Math.min(
+      defaultTarget,
+      beforeWall
+    );
+
+  if (
+    percentChange(
+      entryPrice,
+      maxTargetPrice
+    ) <
+    MIN_GROSS_ROOM_PCT
+  ) {
+    return {
+      allowed:
+        false,
+
+      nextResistance,
+
+      maxTargetPrice,
+
+      reason:
+        "TP SPACE TOO TIGHT",
+    };
+  }
+
+  return {
+    allowed:
+      true,
+
+    nextResistance,
+
+    maxTargetPrice,
+
+    reason:
+      "ROOM OK",
+  };
+}
+/* ============================================================
+   QUANTITY-AWARE LIMIT ENTRY
+============================================================ */
+
+async function chooseQuantityAwareLimitEntry({
+  coin,
+  technicalEntry,
+  requiredQuantity,
+}) {
+  const book =
+    await getTopOrderBook(
+      coin
+    );
+
+  if (
+    !book ||
+    !book.asks.length
+  ) {
+    return {
+      finalEntry:
+        technicalEntry,
+
+      source:
+        "TECHNICAL ENTRY",
+
+      depthAvailable:
+        0,
+
+      requiredQuantity,
+
+      chasePct:
+        0,
+
+      fullFillEstimated:
+        false,
+    };
+  }
+
+  const maxAllowedEntry =
+    technicalEntry *
+    (
+      1 +
+      MAX_ENTRY_CHASE_PCT /
+        100
+    );
+
+  let cumulativeVolume =
+    0;
+
+  let selectedPrice =
+    null;
+
+  for (
+    const ask of
+    book.asks
+  ) {
+    if (
+      ask.price >
+      maxAllowedEntry
+    ) {
+      break;
+    }
+
+    cumulativeVolume +=
+      ask.volume;
+
+    if (
+      cumulativeVolume >=
+      requiredQuantity
+    ) {
+      selectedPrice =
+        ask.price;
+
+      break;
+    }
+  }
+
+  if (
+    selectedPrice
+  ) {
+    return {
+      finalEntry:
+        selectedPrice,
+
+      source:
+        "ORDERBOOK DEPTH",
+
+      depthAvailable:
+        cumulativeVolume,
+
+      requiredQuantity,
+
+      chasePct:
+        percentChange(
+          technicalEntry,
+          selectedPrice
+        ),
+
+      fullFillEstimated:
+        true,
+    };
+  }
+
+  const technicalDepth =
+    book.asks
+      .filter(
+        (ask) =>
+          ask.price <=
+          technicalEntry
+      )
+      .reduce(
+        (
+          total,
+          ask
+        ) =>
+          total +
+          ask.volume,
+        0
+      );
+
+  return {
+    finalEntry:
+      technicalEntry,
+
+    source:
+      "TECHNICAL ENTRY",
+
+    depthAvailable:
+      technicalDepth,
+
+    requiredQuantity,
+
+    chasePct:
+      0,
+
+    fullFillEstimated:
+      technicalDepth >=
+      requiredQuantity,
+  };
 }
 
 /* ============================================================
@@ -5701,295 +5760,6 @@ function choosePreliminaryEntry({
 }
 
 /* ============================================================
-   QUANTITY-AWARE LIMIT ENTRY
-============================================================ */
-
-async function chooseQuantityAwareLimitEntry({
-  coin,
-  technicalEntry,
-  requiredQuantity,
-}) {
-  const orderBook =
-    await getTopOrderBook(
-      coin
-    );
-
-  if (
-    !orderBook ||
-    !orderBook.asks.length
-  ) {
-    return {
-      finalEntry:
-        technicalEntry,
-
-      source:
-        "TECHNICAL ENTRY",
-
-      depthAvailable:
-        0,
-
-      requiredQuantity,
-
-      chasePct:
-        0,
-
-      fullFillEstimated:
-        false,
-    };
-  }
-
-  const maxAllowedEntry =
-    technicalEntry *
-    (
-      1 +
-      MAX_ENTRY_CHASE_PCT /
-        100
-    );
-
-  let cumulativeVolume =
-    0;
-
-  let selectedPrice =
-    null;
-
-  for (
-    const ask of
-    orderBook.asks
-  ) {
-    if (
-      ask.price >
-      maxAllowedEntry
-    ) {
-      break;
-    }
-
-    cumulativeVolume +=
-      ask.volume;
-
-    if (
-      cumulativeVolume >=
-      requiredQuantity
-    ) {
-      selectedPrice =
-        ask.price;
-
-      break;
-    }
-  }
-
-  if (
-    selectedPrice
-  ) {
-    return {
-      finalEntry:
-        selectedPrice,
-
-      source:
-        "ORDERBOOK DEPTH",
-
-      depthAvailable:
-        cumulativeVolume,
-
-      requiredQuantity,
-
-      chasePct:
-        percentChange(
-          technicalEntry,
-          selectedPrice
-        ),
-
-      fullFillEstimated:
-        true,
-    };
-  }
-
-  const technicalDepth =
-    orderBook.asks
-      .filter(
-        (ask) =>
-          ask.price <=
-          technicalEntry
-      )
-      .reduce(
-        (
-          total,
-          ask
-        ) =>
-          total +
-          ask.volume,
-        0
-      );
-
-  return {
-    finalEntry:
-      technicalEntry,
-
-    source:
-      "TECHNICAL ENTRY",
-
-    depthAvailable:
-      technicalDepth,
-
-    requiredQuantity,
-
-    chasePct:
-      0,
-
-    fullFillEstimated:
-      technicalDepth >=
-      requiredQuantity,
-  };
-}
-
-/* ============================================================
-   ROOM TO TP — ORDERBOOK FIRST
-============================================================ */
-
-async function evaluateRoomToTP(
-  coin,
-  entryPrice
-) {
-  const nextResistance =
-    await findNextOrderBookResistance(
-      coin,
-      entryPrice
-    );
-
-  if (
-    !nextResistance
-  ) {
-    return {
-      allowed:
-        true,
-
-      nextResistance:
-        null,
-
-      maxTargetPrice:
-        entryPrice *
-        (
-          1 +
-          DEFAULT_BREAKOUT_TP_PCT[
-            coin
-          ] /
-            100
-        ),
-
-      reason:
-        "NO STRONG WALL ABOVE",
-    };
-  }
-
-  const distance =
-    nextResistance
-      .distancePct;
-
-  const strength =
-    nextResistance
-      .strength
-      .rating;
-
-  if (
-    distance <
-    MIN_GROSS_ROOM_PCT
-  ) {
-    return {
-      allowed:
-        false,
-
-      nextResistance,
-
-      reason:
-        "ROOM TOO SMALL AFTER FEES",
-    };
-  }
-
-  if (
-    distance <=
-      1.00 &&
-    strength >=
-      7
-  ) {
-    return {
-      allowed:
-        false,
-
-      nextResistance,
-
-      reason:
-        "STRONG RESISTANCE TOO CLOSE",
-    };
-  }
-
-  if (
-    distance <=
-      1.50 &&
-    strength >=
-      8
-  ) {
-    return {
-      allowed:
-        false,
-
-      nextResistance,
-
-      reason:
-        "VERY STRONG RESISTANCE NEARBY",
-    };
-  }
-
-  const defaultTarget =
-    entryPrice *
-    (
-      1 +
-      DEFAULT_BREAKOUT_TP_PCT[
-        coin
-      ] /
-        100
-    );
-
-  const beforeWall =
-    nextResistance.price *
-    0.9975;
-
-  const maxTargetPrice =
-    Math.min(
-      defaultTarget,
-      beforeWall
-    );
-
-  if (
-    percentChange(
-      entryPrice,
-      maxTargetPrice
-    ) <
-    MIN_GROSS_ROOM_PCT
-  ) {
-    return {
-      allowed:
-        false,
-
-      nextResistance,
-
-      reason:
-        "TP SPACE TOO TIGHT",
-    };
-  }
-
-  return {
-    allowed:
-      true,
-
-    nextResistance,
-
-    maxTargetPrice,
-
-    reason:
-      "ROOM OK",
-  };
-}
-
-/* ============================================================
    CONFIDENCE
 ============================================================ */
 
@@ -6011,35 +5781,6 @@ function confidenceLabel(
   }
 
   return "WEAK";
-}
-
-/* ============================================================
-   SETUP TYPE
-============================================================ */
-
-function setupType(
-  score,
-  market
-) {
-  if (
-    market.includes(
-      "BREAKOUT"
-    ) &&
-    !market.includes(
-      "FAKE"
-    )
-  ) {
-    return "BREAKOUT";
-  }
-
-  if (
-    score >=
-    80
-  ) {
-    return "CONTINUATION";
-  }
-
-  return "EARLY MOMENTUM";
 }
 
 /* ============================================================
@@ -6163,24 +5904,32 @@ function getScalpingScore({
 }
 
 /* ============================================================
-   HIDDEN 2H SAFETY FILTER
+   SETUP TYPE
 ============================================================ */
 
-async function getTwoHourSafety(
-  coin
+function setupType(
+  score,
+  market
 ) {
-  const analysis =
-    await analyze2HMarketCondition(
-      coin
-    );
-
   if (
-    !analysis
+    market.includes(
+      "BREAKOUT"
+    ) &&
+    !market.includes(
+      "FAKE"
+    )
   ) {
-    return "UNKNOWN";
+    return "BREAKOUT";
   }
 
-  return analysis.action;
+  if (
+    score >=
+    80
+  ) {
+    return "CONTINUATION";
+  }
+
+  return "EARLY MOMENTUM";
 }
 
 /* ============================================================
@@ -6243,9 +5992,7 @@ function buildEntryRiskLevels({
 
   return {
     tp,
-
     sl,
-
     durationHours,
   };
 }
@@ -6274,12 +6021,12 @@ async function sendScalpingEntry(
     candidate;
 
   LAST_GLOBAL_SIGNAL =
-    now();
+    Date.now();
 
   LAST_SIGNAL[
     candidate.coin
   ] =
-    now();
+    Date.now();
 
   let roomText =
     "";
@@ -6376,8 +6123,305 @@ START ENTRY?`,
 }
 
 /* ============================================================
-   BREAKOUT CONFIRMED
-   -> SCALPING ENTRY
+   MOMENTUM BUY NOW -> SCALPING ENTRY
+
+   IMPORTANT:
+   BUY NOW itself is still an EARLY technical signal.
+
+   Before sending SCALPING ENTRY, this function re-checks:
+   - Market Structure
+   - 2H Safety
+   - Orderbook room
+   - Resistance
+   - Entry chase
+============================================================ */
+
+async function triggerMomentumScalpingEntry(
+  ticker,
+  momentumAnalysis
+) {
+  const coin =
+    "GRT";
+
+  if (
+    ACTIVE_TRADES[
+      coin
+    ] ||
+    PENDING_ENTRIES[
+      coin
+    ]
+  ) {
+    return;
+  }
+
+  if (
+    LAST_SIGNAL[
+      coin
+    ] &&
+    Date.now() -
+      LAST_SIGNAL[
+        coin
+      ] <
+      PER_COIN_COOLDOWN
+  ) {
+    return;
+  }
+
+  const structure =
+    await analyzeMarketStructure(
+      coin
+    );
+
+  if (
+    !structure
+  ) {
+    return;
+  }
+
+  /*
+    Momentum BUY NOW should not be converted
+    into a scalping entry if market structure
+    has already turned strongly bearish.
+  */
+
+  if (
+    structure.pressure ===
+      "TEKANAN JUAL KUAT" ||
+    structure.direction ===
+      "SEDANG MENURUN KUAT"
+  ) {
+    return;
+  }
+
+  const twoHourSafety =
+    await getTwoHourSafety(
+      coin
+    );
+
+  if (
+    twoHourSafety ===
+    "BLOCK"
+  ) {
+    return;
+  }
+
+  const technicalEntry =
+    ticker.currentPrice;
+
+  const preliminary =
+    choosePreliminaryEntry({
+      technicalEntry,
+
+      bestAsk:
+        ticker.ask,
+    });
+
+  const room =
+    await evaluateRoomToTP(
+      coin,
+      preliminary.entryPrice
+    );
+
+  if (
+    !room.allowed
+  ) {
+    return;
+  }
+
+  const snapshot15m =
+    getPriceSnapshot(
+      coin,
+      15 * 60 * 1000
+    );
+
+  const snapshot60m =
+    getPriceSnapshot(
+      coin,
+      60 * 60 * 1000
+    );
+
+  let score =
+    getScalpingScore({
+      snapshot15m,
+
+      snapshot60m,
+
+      pressure:
+        structure.pressure,
+
+      market:
+        structure.market,
+
+      currentPrice:
+        ticker.currentPrice,
+
+      support:
+        structure.supportPrice,
+
+      resistance:
+        structure.resistancePrice,
+    });
+
+  /*
+    Momentum engine already confirmed BUY NOW.
+    Give a controlled bonus, not an automatic 100%.
+  */
+
+  score +=
+    Math.min(
+      momentumAnalysis.score *
+        2,
+      18
+    );
+
+  score =
+    Math.round(
+      clamp(
+        score,
+        0,
+        100
+      )
+    );
+
+  /*
+    Momentum BUY NOW should not create
+    a weak scalping entry.
+  */
+
+  if (
+    score <
+    65
+  ) {
+    return;
+  }
+
+  const confidence =
+    confidenceLabel(
+      score
+    );
+
+  const risk =
+    buildEntryRiskLevels({
+      coin,
+
+      entryPrice:
+        preliminary.entryPrice,
+
+      room,
+
+      confidence,
+    });
+
+  await sendScalpingEntry({
+    coin,
+
+    score,
+
+    confidence,
+
+    currentPrice:
+      ticker.currentPrice,
+
+    technicalEntry,
+
+    preliminaryEntry:
+      preliminary.entryPrice,
+
+    tp:
+      risk.tp,
+
+    sl:
+      risk.sl,
+
+    durationHours:
+      risk.durationHours,
+
+    setup:
+      "MOMENTUM BUY NOW",
+
+    brokenResistance:
+      null,
+
+    nextResistance:
+      room.nextResistance,
+
+    momentumSnapshot:
+      momentumAnalysis,
+  });
+}
+
+/* ============================================================
+   HANDLE GRT BUY NOW SIGNAL
+
+   Called directly by sendPriceAlert() in PART 3.
+
+   Responsibilities:
+   1. Prevent duplicate BUY NOW records.
+   2. Record the signal for learning.
+   3. Trigger scalping-entry safety engine.
+============================================================ */
+
+async function handleGRTBuyNowSignal(
+  ticker,
+  momentumAnalysis
+) {
+  if (
+    !ticker ||
+    !momentumAnalysis
+  ) {
+    return;
+  }
+
+  const elapsed =
+    Date.now() -
+    LAST_GRT_BUY_NOW_SIGNAL;
+
+  /*
+    Do not create another learning record
+    every 5 minutes if the same momentum
+    condition remains active.
+
+    15-minute cooldown keeps tests cleaner.
+  */
+
+  if (
+    elapsed <
+    GRT_BUY_NOW_COOLDOWN_MS
+  ) {
+    /*
+      Even during learning cooldown,
+      scalping trigger may still be checked
+      if there is no active/pending entry.
+    */
+
+    await triggerMomentumScalpingEntry(
+      ticker,
+      momentumAnalysis
+    );
+
+    return;
+  }
+
+  LAST_GRT_BUY_NOW_SIGNAL =
+    Date.now();
+
+  /*
+    Defined in PART 7.
+  */
+
+  recordGRTBuyNowSignal(
+    ticker,
+    momentumAnalysis
+  );
+
+  await triggerMomentumScalpingEntry(
+    ticker,
+    momentumAnalysis
+  );
+}
+
+/* ============================================================
+   BREAKOUT SCALPING ENTRY
 ============================================================ */
 
 async function triggerBreakoutScalpingEntry(
@@ -6400,7 +6444,7 @@ async function triggerBreakoutScalpingEntry(
     LAST_SIGNAL[
       coin
     ] &&
-    now() -
+    Date.now() -
       LAST_SIGNAL[
         coin
       ] <
@@ -6417,9 +6461,6 @@ async function triggerBreakoutScalpingEntry(
   if (
     !ticker
   ) {
-    watch.confirmed =
-      false;
-
     return;
   }
 
@@ -6431,9 +6472,6 @@ async function triggerBreakoutScalpingEntry(
   if (
     !structure
   ) {
-    watch.confirmed =
-      false;
-
     return;
   }
 
@@ -6442,9 +6480,6 @@ async function triggerBreakoutScalpingEntry(
       "JUAL"
     )
   ) {
-    watch.confirmed =
-      false;
-
     return;
   }
 
@@ -6462,9 +6497,6 @@ async function triggerBreakoutScalpingEntry(
       safety ===
       "BLOCK"
     ) {
-      watch.confirmed =
-        false;
-
       return;
     }
   }
@@ -6477,7 +6509,7 @@ async function triggerBreakoutScalpingEntry(
       technicalEntry,
 
       bestAsk:
-        ticker.bestAsk,
+        ticker.ask,
     });
 
   const room =
@@ -6493,7 +6525,7 @@ async function triggerBreakoutScalpingEntry(
       coin
     ] = {
       at:
-        now(),
+        Date.now(),
 
       resistance:
         watch.resistance,
@@ -6505,27 +6537,19 @@ async function triggerBreakoutScalpingEntry(
         room.reason,
     };
 
-    cancelBreakoutWatch(
-      coin
-    );
-
     return;
   }
 
   const snapshot15m =
     getPriceSnapshot(
       coin,
-      15 *
-        60 *
-        1000
+      15 * 60 * 1000
     );
 
   const snapshot60m =
     getPriceSnapshot(
       coin,
-      60 *
-        60 *
-        1000
+      60 * 60 * 1000
     );
 
   const baseScore =
@@ -6552,12 +6576,12 @@ async function triggerBreakoutScalpingEntry(
 
   const evidenceBonus =
     Math.min(
-      watch.buyEvidenceScore *
+      watch.buyEvidence *
         3,
       12
     );
 
-  const finalScore =
+  const score =
     Math.round(
       clamp(
         Math.max(
@@ -6572,7 +6596,7 @@ async function triggerBreakoutScalpingEntry(
 
   const confidence =
     confidenceLabel(
-      finalScore
+      score
     );
 
   const risk =
@@ -6594,7 +6618,7 @@ async function triggerBreakoutScalpingEntry(
     coin
   ] = {
     at:
-      now(),
+      Date.now(),
 
     resistance:
       watch.resistance,
@@ -6606,15 +6630,10 @@ async function triggerBreakoutScalpingEntry(
       false,
   };
 
-  cancelBreakoutWatch(
-    coin
-  );
-
   await sendScalpingEntry({
     coin,
 
-    score:
-      finalScore,
+    score,
 
     confidence,
 
@@ -6645,13 +6664,14 @@ async function triggerBreakoutScalpingEntry(
       room.nextResistance,
   });
 }
+
 /* ============================================================
-   GENERAL 1-MINUTE SCALPING SCAN
+   GENERAL 1-MINUTE SCALPING SCANNER
 ============================================================ */
 
 async function scanSignals() {
   if (
-    now() -
+    Date.now() -
       LAST_GLOBAL_SIGNAL <
     GLOBAL_SCALPING_COOLDOWN
   ) {
@@ -6679,7 +6699,7 @@ async function scanSignals() {
       LAST_SIGNAL[
         coin
       ] &&
-      now() -
+      Date.now() -
         LAST_SIGNAL[
           coin
         ] <
@@ -6687,11 +6707,6 @@ async function scanSignals() {
     ) {
       continue;
     }
-
-    /*
-      BTC/GRT yang sedang breakout watch
-      tidak boleh bypass anti-fake engine.
-    */
 
     if (
       CORE_COINS.includes(
@@ -6727,8 +6742,8 @@ async function scanSignals() {
     }
 
     /*
-      BTC/GRT dekat resistance:
-      serahkan kepada breakout watch.
+      For BTC/GRT near resistance,
+      breakout engine gets priority.
     */
 
     if (
@@ -6748,17 +6763,13 @@ async function scanSignals() {
     const snapshot15m =
       getPriceSnapshot(
         coin,
-        15 *
-          60 *
-          1000
+        15 * 60 * 1000
       );
 
     const snapshot60m =
       getPriceSnapshot(
         coin,
-        60 *
-          60 *
-          1000
+        60 * 60 * 1000
       );
 
     if (
@@ -6771,6 +6782,7 @@ async function scanSignals() {
     const score =
       getScalpingScore({
         snapshot15m,
+
         snapshot60m,
 
         pressure:
@@ -6780,7 +6792,7 @@ async function scanSignals() {
           structure.market,
 
         currentPrice:
-          structure.currentPrice,
+          ticker.currentPrice,
 
         support:
           structure.supportPrice,
@@ -6800,11 +6812,6 @@ async function scanSignals() {
     ) {
       continue;
     }
-
-    /*
-      Hidden 2H filter
-      untuk BTC/GRT sahaja.
-    */
 
     if (
       CORE_COINS.includes(
@@ -6832,7 +6839,7 @@ async function scanSignals() {
         technicalEntry,
 
         bestAsk:
-          ticker.bestAsk,
+          ticker.ask,
       });
 
     const room =
@@ -6859,14 +6866,11 @@ async function scanSignals() {
         confidence,
       });
 
-    const grossTarget =
+    if (
       percentChange(
         preliminary.entryPrice,
         risk.tp
-      );
-
-    if (
-      grossTarget <
+      ) <
       MIN_GROSS_ROOM_PCT
     ) {
       continue;
@@ -6917,10 +6921,7 @@ async function scanSignals() {
   }
 
   candidates.sort(
-    (
-      a,
-      b
-    ) =>
+    (a, b) =>
       b.score -
       a.score
   );
@@ -6931,14 +6932,14 @@ async function scanSignals() {
 }
 
 /* ============================================================
-   FINAL ORDER PLAN RESOLVER
+   FINAL ORDER PLAN
 ============================================================ */
 
 async function resolveFinalOrderPlan(
   entry,
   targetProfit
 ) {
-  const finalSellableUnitPerGrossUnit =
+  const sellableUnitFactor =
     (
       1 -
       BUY_FEE
@@ -6952,16 +6953,11 @@ async function resolveFinalOrderPlan(
     entry.preliminaryEntry ||
     entry.technicalEntry;
 
-  let lastDepthSelection =
-    null;
-
-  /* ========================================================
-     ITERATIVE ORDERBOOK RESOLUTION
-  ======================================================== */
-
   for (
-    let attempt = 0;
-    attempt < 4;
+    let attempt =
+      0;
+    attempt <
+      4;
     attempt++
   ) {
     const room =
@@ -6999,13 +6995,13 @@ async function resolveFinalOrderPlan(
           entry.confidence,
       });
 
-    const netPerUnit =
+    const netProfitPerGrossUnit =
       risk.tp *
-        finalSellableUnitPerGrossUnit -
+        sellableUnitFactor -
       entryPrice;
 
     if (
-      netPerUnit <=
+      netProfitPerGrossUnit <=
       0
     ) {
       return {
@@ -7020,10 +7016,10 @@ async function resolveFinalOrderPlan(
     const quantity =
       Math.ceil(
         targetProfit /
-          netPerUnit
+        netProfitPerGrossUnit
       );
 
-    const depthSelection =
+    const depth =
       await chooseQuantityAwareLimitEntry({
         coin:
           entry.coin,
@@ -7035,11 +7031,8 @@ async function resolveFinalOrderPlan(
           quantity,
       });
 
-    lastDepthSelection =
-      depthSelection;
-
     const nextEntry =
-      depthSelection.finalEntry;
+      depth.finalEntry;
 
     if (
       Math.abs(
@@ -7060,9 +7053,10 @@ async function resolveFinalOrderPlan(
 
         risk,
 
-        netPerUnit,
+        netProfitPerGrossUnit,
 
-        depthSelection,
+        depthSelection:
+          depth,
       };
     }
 
@@ -7070,118 +7064,14 @@ async function resolveFinalOrderPlan(
       nextEntry;
   }
 
-  /* ========================================================
-     FINAL PASS
-  ======================================================== */
-
-  const room =
-    await evaluateRoomToTP(
-      entry.coin,
-      entryPrice
-    );
-
-  if (
-    !room.allowed
-  ) {
-    return {
-      allowed:
-        false,
-
-      reason:
-        room.reason,
-    };
-  }
-
-  const risk =
-    buildEntryRiskLevels({
-      coin:
-        entry.coin,
-
-      entryPrice,
-
-      brokenResistance:
-        entry.brokenResistance ||
-        null,
-
-      room,
-
-      confidence:
-        entry.confidence,
-    });
-
-  const netPerUnit =
-    risk.tp *
-      finalSellableUnitPerGrossUnit -
-    entryPrice;
-
-  if (
-    netPerUnit <=
-    0
-  ) {
-    return {
-      allowed:
-        false,
-
-      reason:
-        "FINAL PROFIT ROOM NOT VIABLE",
-    };
-  }
-
-  const quantity =
-    Math.ceil(
-      targetProfit /
-        netPerUnit
-    );
-
-  const depthSelection =
-    await chooseQuantityAwareLimitEntry({
-      coin:
-        entry.coin,
-
-      technicalEntry:
-        entry.technicalEntry,
-
-      requiredQuantity:
-        quantity,
-    });
-
-  if (
-    !depthSelection ||
-    Math.abs(
-      depthSelection.finalEntry -
-        entryPrice
-    ) >=
-      0.0000000001
-  ) {
-    return {
-      allowed:
-        false,
-
-      reason:
-        "ORDERBOOK CHANGED DURING FINAL CHECK",
-    };
-  }
-
   return {
     allowed:
-      true,
+      false,
 
-    entryPrice,
-
-    quantity,
-
-    room,
-
-    risk,
-
-    netPerUnit,
-
-    depthSelection:
-      depthSelection ||
-      lastDepthSelection,
+    reason:
+      "ORDERBOOK CHANGED DURING FINAL CHECK",
   };
 }
-
 /* ============================================================
    ACTIVE TRADE MONITOR
 ============================================================ */
@@ -7251,7 +7141,7 @@ RM${formatPrice(
 📌 Best Bid:
 RM${formatPrice(
           coin,
-          ticker.bestBid
+          ticker.bid
         )}
 
 📦 Net Must Sell:
@@ -7260,8 +7150,8 @@ ${trade.netTradeUnit.toFixed(
         )} ${coin}
 
 💰 Estimated Net Profit:
-${formatMoney(
-          estimatedNetProfit
+RM${estimatedNetProfit.toFixed(
+          2
         )}
 
 SELL NOW?`,
@@ -7318,7 +7208,7 @@ RM${formatPrice(
 📌 Best Bid:
 RM${formatPrice(
           coin,
-          ticker.bestBid
+          ticker.bid
         )}
 
 📦 Net Must Sell:
@@ -7353,7 +7243,7 @@ SELL NOW?`,
     }
 
     const expired =
-      now() -
+      Date.now() -
         trade.startTime >=
       trade.durationHours *
         60 *
@@ -7381,7 +7271,7 @@ RM${formatPrice(
 📌 Best Bid:
 RM${formatPrice(
           coin,
-          ticker.bestBid
+          ticker.bid
         )}
 
 📦 Net Must Sell:
@@ -7433,6 +7323,10 @@ bot.on(
     const chatId =
       query.message.chat.id;
 
+    /* ======================================================
+       START ENTRY
+    ====================================================== */
+
     if (
       data.startsWith(
         "START_"
@@ -7472,6 +7366,10 @@ bot.on(
       }
     }
 
+    /* ======================================================
+       IGNORE ENTRY
+    ====================================================== */
+
     if (
       data.startsWith(
         "IGNORE_"
@@ -7499,6 +7397,10 @@ bot.on(
 📡 Monitoring Next Entry...`
       );
     }
+
+    /* ======================================================
+       CONFIRM BUY
+    ====================================================== */
 
     if (
       data.startsWith(
@@ -7550,6 +7452,10 @@ Masukkan 0 jika order tidak match.`
       }
     }
 
+    /* ======================================================
+       CANCEL BUY
+    ====================================================== */
+
     if (
       data.startsWith(
         "BUYNO_"
@@ -7577,6 +7483,10 @@ Masukkan 0 jika order tidak match.`
 📡 Monitoring Next Entry...`
       );
     }
+
+    /* ======================================================
+       SELL
+    ====================================================== */
 
     if (
       data.startsWith(
@@ -7616,6 +7526,10 @@ Masukkan 0 jika order tidak match.`
       }
     }
 
+    /* ======================================================
+       HOLD
+    ====================================================== */
+
     if (
       data.startsWith(
         "HOLD_"
@@ -7653,7 +7567,9 @@ Masukkan 0 jika order tidak match.`
       await bot.answerCallbackQuery(
         query.id
       );
-    } catch (error) {
+    } catch (
+      error
+    ) {
       console.log(
         "Callback answer error:",
         error.message
@@ -7694,21 +7610,31 @@ bot.on(
     }
 
     /* ======================================================
-       TARGET NET PROFIT
+       WAIT TARGET PROFIT
     ====================================================== */
 
     if (
       state.step ===
       "WAIT_PROFIT"
     ) {
-      const parsed =
-        parseUserNumber(
-          msg.text
+      const targetProfit =
+        Number(
+          String(
+            msg.text ||
+              ""
+          )
+            .replace(
+              /,/g,
+              ""
+            )
+            .trim()
         );
 
       if (
-        !parsed.valid ||
-        parsed.value <=
+        !Number.isFinite(
+          targetProfit
+        ) ||
+        targetProfit <=
           0
       ) {
         await replyTelegram(
@@ -7718,9 +7644,6 @@ bot.on(
 
         return;
       }
-
-      const targetProfit =
-        parsed.value;
 
       const entry =
         PENDING_ENTRIES[
@@ -7946,21 +7869,31 @@ PLACE ORDER?`,
     }
 
     /* ======================================================
-       MATCHED QUANTITY
+       WAIT MATCHED QUANTITY
     ====================================================== */
 
     if (
       state.step ===
       "WAIT_MATCHED_QUANTITY"
     ) {
-      const parsed =
-        parseUserNumber(
-          msg.text
+      const matchedQuantity =
+        Number(
+          String(
+            msg.text ||
+              ""
+          )
+            .replace(
+              /,/g,
+              ""
+            )
+            .trim()
         );
 
       if (
-        !parsed.valid ||
-        parsed.value <
+        !Number.isFinite(
+          matchedQuantity
+        ) ||
+        matchedQuantity <
           0
       ) {
         await replyTelegram(
@@ -7978,9 +7911,6 @@ Atau:
 
         return;
       }
-
-      const matchedQuantity =
-        parsed.value;
 
       const entry =
         PENDING_ENTRIES[
@@ -8120,7 +8050,7 @@ RM${formatPrice(
           entry.durationHours,
 
         startTime:
-          now(),
+          Date.now(),
 
         tpReached:
           false,
@@ -8193,14 +8123,9 @@ RM${state.targetProfit.toFixed(
         )}
 
 🔄 Profit Adjusted To:
-${formatMoney(
-          adjustedProfit
-        )}${
-          adjustedProfit <
-            0
-            ? " ⚠️"
-            : ""
-        }
+RM${adjustedProfit.toFixed(
+          2
+        )}
 
 📊 Target Achievement:
 ${targetAchievement.toFixed(
@@ -8222,21 +8147,31 @@ ${targetAchievement.toFixed(
     }
 
     /* ======================================================
-       MATCHED SELL PRICE
+       WAIT SELL PRICE
     ====================================================== */
 
     if (
       state.step ===
       "WAIT_SELL_PRICE"
     ) {
-      const parsed =
-        parseUserNumber(
-          msg.text
+      const matchedPrice =
+        Number(
+          String(
+            msg.text ||
+              ""
+          )
+            .replace(
+              /,/g,
+              ""
+            )
+            .trim()
         );
 
       if (
-        !parsed.valid ||
-        parsed.value <=
+        !Number.isFinite(
+          matchedPrice
+        ) ||
+        matchedPrice <=
           0
       ) {
         await replyTelegram(
@@ -8246,9 +8181,6 @@ ${targetAchievement.toFixed(
 
         return;
       }
-
-      const matchedPrice =
-        parsed.value;
 
       const trade =
         ACTIVE_TRADES[
@@ -8324,8 +8256,8 @@ ${sellFeeUnit.toFixed(
             ? "Profit"
             : "Loss"
         }:
-${formatMoney(
-          pnl
+RM${pnl.toFixed(
+          2
         )}
 
 📡 Realtime Monitoring Stopped
@@ -8346,7 +8278,1744 @@ ${formatMoney(
   }
 );
 /* ============================================================
-   GRT DAILY WATCH METRICS
+   GRT BUY NOW LEARNING
+   SAVE / LOAD
+============================================================ */
+
+function saveGRTBuyNowHistory() {
+  try {
+    fs.writeFileSync(
+      GRT_BUY_NOW_FILE,
+      JSON.stringify(
+        {
+          history:
+            GRT_BUY_NOW_HISTORY,
+
+          lastSignal:
+            LAST_GRT_BUY_NOW_SIGNAL,
+
+          lastSuggestionCount:
+            LAST_TUNING_SUGGESTION_COUNT,
+        },
+        null,
+        2
+      )
+    );
+  } catch (
+    error
+  ) {
+    console.log(
+      "GRT BUY NOW save error:",
+      error.message
+    );
+  }
+}
+
+function loadGRTBuyNowHistory() {
+  try {
+    if (
+      !fs.existsSync(
+        GRT_BUY_NOW_FILE
+      )
+    ) {
+      return;
+    }
+
+    const raw =
+      fs.readFileSync(
+        GRT_BUY_NOW_FILE,
+        "utf8"
+      );
+
+    if (
+      !raw
+    ) {
+      return;
+    }
+
+    const parsed =
+      JSON.parse(
+        raw
+      );
+
+    if (
+      Array.isArray(
+        parsed.history
+      )
+    ) {
+      GRT_BUY_NOW_HISTORY =
+        parsed.history.slice(
+          -GRT_BUY_NOW_HISTORY_LIMIT
+        );
+    }
+
+    if (
+      parsed.lastSignal
+    ) {
+      LAST_GRT_BUY_NOW_SIGNAL =
+        safeNumber(
+          parsed.lastSignal
+        );
+    }
+
+    if (
+      parsed.lastSuggestionCount
+    ) {
+      LAST_TUNING_SUGGESTION_COUNT =
+        safeNumber(
+          parsed.lastSuggestionCount
+        );
+    }
+  } catch (
+    error
+  ) {
+    console.log(
+      "GRT BUY NOW load error:",
+      error.message
+    );
+  }
+}
+
+/* ============================================================
+   GRT TUNING SAVE / LOAD
+============================================================ */
+
+function saveGRTTuning() {
+  try {
+    fs.writeFileSync(
+      GRT_TUNING_FILE,
+      JSON.stringify(
+        {
+          buyVolumeMinPct:
+            GRT_DYNAMIC_BUY_VOLUME_MIN_PCT,
+
+          updatedAt:
+            Date.now(),
+        },
+        null,
+        2
+      )
+    );
+  } catch (
+    error
+  ) {
+    console.log(
+      "GRT tuning save error:",
+      error.message
+    );
+  }
+}
+
+function loadGRTTuning() {
+  try {
+    if (
+      !fs.existsSync(
+        GRT_TUNING_FILE
+      )
+    ) {
+      return;
+    }
+
+    const raw =
+      fs.readFileSync(
+        GRT_TUNING_FILE,
+        "utf8"
+      );
+
+    if (
+      !raw
+    ) {
+      return;
+    }
+
+    const parsed =
+      JSON.parse(
+        raw
+      );
+
+    const saved =
+      safeNumber(
+        parsed.buyVolumeMinPct,
+        GRT_DYNAMIC_BUY_VOLUME_MIN_PCT
+      );
+
+    /*
+      Safety range.
+      Never allow absurd automatic thresholds.
+    */
+
+    if (
+      saved >=
+        50 &&
+      saved <=
+        75
+    ) {
+      GRT_DYNAMIC_BUY_VOLUME_MIN_PCT =
+        saved;
+    }
+  } catch (
+    error
+  ) {
+    console.log(
+      "GRT tuning load error:",
+      error.message
+    );
+  }
+}
+
+/* ============================================================
+   CREATE UNIQUE LEARNING SIGNAL ID
+============================================================ */
+
+function createGRTSignalId() {
+  return `GRT-${Date.now()}-${Math.random()
+    .toString(36)
+    .substring(
+      2,
+      6
+    )
+    .toUpperCase()}`;
+}
+
+/* ============================================================
+   RECORD GRT BUY NOW SIGNAL
+
+   Called by handleGRTBuyNowSignal()
+   from PART 5.
+============================================================ */
+
+function recordGRTBuyNowSignal(
+  ticker,
+  analysis
+) {
+  if (
+    !ticker ||
+    !analysis
+  ) {
+    return null;
+  }
+
+  const signal = {
+    id:
+      createGRTSignalId(),
+
+    createdAt:
+      Date.now(),
+
+    entryPrice:
+      ticker.currentPrice,
+
+    completed:
+      false,
+
+    result:
+      "MONITORING",
+
+    /*
+      Snapshot of indicators when BUY NOW fired.
+    */
+
+    score:
+      safeNumber(
+        analysis.score
+      ),
+
+    buyIncreasePct:
+      safeNumber(
+        analysis.buyIncreasePct
+      ),
+
+    buyVolumePct:
+      safeNumber(
+        analysis.flow
+          ?.buyVolumePct
+      ),
+
+    sellVolumePct:
+      safeNumber(
+        analysis.flow
+          ?.sellVolumePct
+      ),
+
+    buyFrequencyPct:
+      safeNumber(
+        analysis.flow
+          ?.buyFrequencyPct
+      ),
+
+    sellFrequencyPct:
+      safeNumber(
+        analysis.flow
+          ?.sellFrequencyPct
+      ),
+
+    priceResponsePct:
+      safeNumber(
+        analysis.priceResponse
+          ?.changePct
+      ),
+
+    rsi:
+      analysis.rsi
+        ?.ready
+        ? safeNumber(
+            analysis.rsi.current
+          )
+        : null,
+
+    rsiDirection:
+      analysis.rsi
+        ?.direction ||
+      "UNKNOWN",
+
+    ma9:
+      analysis.ma
+        ?.ready
+        ? safeNumber(
+            analysis.ma.ma9
+          )
+        : null,
+
+    ma50:
+      analysis.ma
+        ?.ready
+        ? safeNumber(
+            analysis.ma.ma50
+          )
+        : null,
+
+    maCondition:
+      analysis.ma
+        ?.condition ||
+      "UNKNOWN",
+
+    bidLiquidityPct:
+      analysis.liquidity
+        ?.ready
+        ? safeNumber(
+            analysis.liquidity
+              .bidLiquidityPct
+          )
+        : null,
+
+    askLiquidityPct:
+      analysis.liquidity
+        ?.ready
+        ? safeNumber(
+            analysis.liquidity
+              .askLiquidityPct
+          )
+        : null,
+
+    support:
+      analysis.liquidity
+        ?.support
+        ?.price ||
+      null,
+
+    supportRating:
+      analysis.liquidity
+        ?.support
+        ?.rating ||
+      null,
+
+    resistance:
+      analysis.liquidity
+        ?.resistance
+        ?.price ||
+      null,
+
+    resistanceRating:
+      analysis.liquidity
+        ?.resistance
+        ?.rating ||
+      null,
+
+    /*
+      Future outcome snapshots.
+    */
+
+    price5m:
+      null,
+
+    change5m:
+      null,
+
+    price10m:
+      null,
+
+    change10m:
+      null,
+
+    price15m:
+      null,
+
+    change15m:
+      null,
+
+    bestPrice:
+      ticker.currentPrice,
+
+    bestMovePct:
+      0,
+
+    worstPrice:
+      ticker.currentPrice,
+
+    worstMovePct:
+      0,
+
+    finishedAt:
+      null,
+  };
+
+  GRT_BUY_NOW_HISTORY.push(
+    signal
+  );
+
+  GRT_BUY_NOW_HISTORY =
+    GRT_BUY_NOW_HISTORY.slice(
+      -GRT_BUY_NOW_HISTORY_LIMIT
+    );
+
+  saveGRTBuyNowHistory();
+
+  console.log(
+    `GRT BUY NOW RECORDED ${signal.id} @ ${signal.entryPrice}`
+  );
+
+  return signal;
+}
+
+/* ============================================================
+   FIND CLOSEST PRICE MEMORY POINT
+============================================================ */
+
+function findClosestPricePoint(
+  coin,
+  targetTime,
+  toleranceMs =
+    90 * 1000
+) {
+  const memory =
+    PRICE_MEMORY[
+      coin
+    ] ||
+    [];
+
+  if (
+    !memory.length
+  ) {
+    return null;
+  }
+
+  let closest =
+    null;
+
+  let bestDifference =
+    Infinity;
+
+  for (
+    const item of
+    memory
+  ) {
+    const difference =
+      Math.abs(
+        item.timestamp -
+        targetTime
+      );
+
+    if (
+      difference <
+      bestDifference
+    ) {
+      closest =
+        item;
+
+      bestDifference =
+        difference;
+    }
+  }
+
+  if (
+    bestDifference >
+    toleranceMs
+  ) {
+    return null;
+  }
+
+  return closest;
+}
+
+/* ============================================================
+   UPDATE BEST / WORST MOVE
+============================================================ */
+
+function updateGRTSignalExtremes(
+  signal,
+  currentPrice,
+  currentTime =
+    Date.now()
+) {
+  if (
+    !signal
+  ) {
+    return;
+  }
+
+  const monitorEndTime =
+    Math.min(
+      currentTime,
+      signal.createdAt +
+        15 *
+          60 *
+          1000
+    );
+
+  const memoryPoints =
+    (
+      PRICE_MEMORY[
+        "GRT"
+      ] ||
+      []
+    ).filter(
+      (item) =>
+        item.timestamp >=
+          signal.createdAt &&
+        item.timestamp <=
+          monitorEndTime &&
+        item.price >
+          0
+    );
+
+  const prices =
+    memoryPoints.map(
+      (item) =>
+        item.price
+    );
+
+  if (
+    currentPrice >
+      0 &&
+    currentTime <=
+      signal.createdAt +
+        15 *
+          60 *
+          1000
+  ) {
+    prices.push(
+      currentPrice
+    );
+  }
+
+  if (
+    !prices.length
+  ) {
+    return;
+  }
+
+  const bestPrice =
+    Math.max(
+      signal.bestPrice ||
+        signal.entryPrice,
+      ...prices
+    );
+
+  const worstPrice =
+    Math.min(
+      signal.worstPrice ||
+        signal.entryPrice,
+      ...prices
+    );
+
+  signal.bestPrice =
+    bestPrice;
+
+  signal.bestMovePct =
+    percentChange(
+      signal.entryPrice,
+      bestPrice
+    );
+
+  signal.worstPrice =
+    worstPrice;
+
+  signal.worstMovePct =
+    percentChange(
+      signal.entryPrice,
+      worstPrice
+    );
+}
+
+/* ============================================================
+   CLASSIFY GRT BUY NOW RESULT
+
+   SUCCESS:
+   price managed at least +0.30% within 15m.
+
+   FALSE:
+   price fell at least -0.30% without first
+   producing meaningful positive movement.
+
+   MIXED:
+   neither clearly succeeded nor failed.
+============================================================ */
+
+function classifyGRTBuyNowSignal(
+  signal
+) {
+  if (
+    !signal
+  ) {
+    return "UNKNOWN";
+  }
+
+  if (
+    signal.bestMovePct >=
+    GRT_BUY_NOW_SUCCESS_PCT
+  ) {
+    return "SUCCESS";
+  }
+
+  if (
+    signal.worstMovePct <=
+      GRT_BUY_NOW_FALSE_PCT &&
+    signal.bestMovePct <
+      GRT_BUY_NOW_SUCCESS_PCT
+  ) {
+    return "FALSE";
+  }
+
+  return "MIXED";
+}
+
+/* ============================================================
+   MONITOR BUY NOW OUTCOMES
+
+   Uses existing ticker / price memory.
+   No fast extra polling is required.
+============================================================ */
+
+async function monitorGRTBuyNowSignals() {
+  const activeSignals =
+    GRT_BUY_NOW_HISTORY.filter(
+      (signal) =>
+        !signal.completed
+    );
+
+  if (
+    !activeSignals.length
+  ) {
+    return;
+  }
+
+  const ticker =
+    await getTicker(
+      "GRT"
+    );
+
+  if (
+    !ticker
+  ) {
+    return;
+  }
+
+  const currentPrice =
+    ticker.currentPrice;
+
+  const currentTime =
+    Date.now();
+
+  let changed =
+    false;
+
+    for (
+    const signal of
+    activeSignals
+  ) {
+    updateGRTSignalExtremes(
+      signal,
+      currentPrice,
+      currentTime
+    );
+
+    const elapsed =
+      currentTime -
+      signal.createdAt;
+
+    /* ======================================================
+       +5 MINUTES
+    ====================================================== */
+
+    if (
+      elapsed >=
+        5 * 60 * 1000 &&
+      signal.price5m ===
+        null
+    ) {
+      const point =
+        findClosestPricePoint(
+          "GRT",
+          signal.createdAt +
+            5 *
+              60 *
+              1000
+        );
+
+      const price =
+        point
+          ?.price ||
+        currentPrice;
+
+      signal.price5m =
+        price;
+
+      signal.change5m =
+        percentChange(
+          signal.entryPrice,
+          price
+        );
+
+      changed =
+        true;
+    }
+
+    /* ======================================================
+       +10 MINUTES
+    ====================================================== */
+
+    if (
+      elapsed >=
+        10 * 60 * 1000 &&
+      signal.price10m ===
+        null
+    ) {
+      const point =
+        findClosestPricePoint(
+          "GRT",
+          signal.createdAt +
+            10 *
+              60 *
+              1000
+        );
+
+      const price =
+        point
+          ?.price ||
+        currentPrice;
+
+      signal.price10m =
+        price;
+
+      signal.change10m =
+        percentChange(
+          signal.entryPrice,
+          price
+        );
+
+      changed =
+        true;
+    }
+
+    /* ======================================================
+       +15 MINUTES
+    ====================================================== */
+
+    if (
+      elapsed >=
+        15 * 60 * 1000 &&
+      signal.price15m ===
+        null
+    ) {
+      const point =
+        findClosestPricePoint(
+          "GRT",
+          signal.createdAt +
+            15 *
+              60 *
+              1000
+        );
+
+      const price =
+        point
+          ?.price ||
+        currentPrice;
+
+      signal.price15m =
+        price;
+
+      signal.change15m =
+        percentChange(
+          signal.entryPrice,
+          price
+        );
+
+      signal.result =
+        classifyGRTBuyNowSignal(
+          signal
+        );
+
+      signal.completed =
+        true;
+
+      signal.finishedAt =
+        currentTime;
+
+      changed =
+        true;
+
+      console.log(
+        `GRT BUY NOW RESULT ${signal.id}: ${signal.result}`
+      );
+    }
+  }
+
+  if (
+    changed
+  ) {
+    saveGRTBuyNowHistory();
+
+    await maybeSuggestGRTTuning();
+  }
+}
+
+/* ============================================================
+   COMPLETED BUY NOW SIGNALS
+============================================================ */
+
+function getCompletedGRTBuyNowSignals() {
+  return GRT_BUY_NOW_HISTORY.filter(
+    (signal) =>
+      signal.completed
+  );
+}
+
+/* ============================================================
+   BUY NOW PERFORMANCE STATS
+============================================================ */
+
+function getGRTBuyNowPerformance() {
+  const completed =
+    getCompletedGRTBuyNowSignals();
+
+  const total =
+    completed.length;
+
+  if (
+    total ===
+    0
+  ) {
+    return {
+      total:
+        0,
+
+      success:
+        0,
+
+      falseSignals:
+        0,
+
+      mixed:
+        0,
+
+      accuracy:
+        0,
+
+      average5m:
+        0,
+
+      average10m:
+        0,
+
+      average15m:
+        0,
+
+      averageBest:
+        0,
+
+      averageWorst:
+        0,
+    };
+  }
+
+  const success =
+    completed.filter(
+      (signal) =>
+        signal.result ===
+        "SUCCESS"
+    ).length;
+
+  const falseSignals =
+    completed.filter(
+      (signal) =>
+        signal.result ===
+        "FALSE"
+    ).length;
+
+  const mixed =
+    completed.filter(
+      (signal) =>
+        signal.result ===
+        "MIXED"
+    ).length;
+
+  return {
+    total,
+
+    success,
+
+    falseSignals,
+
+    mixed,
+
+    accuracy:
+      (
+        success /
+        total
+      ) * 100,
+
+    average5m:
+      average(
+        completed.map(
+          (signal) =>
+            safeNumber(
+              signal.change5m
+            )
+        )
+      ),
+
+    average10m:
+      average(
+        completed.map(
+          (signal) =>
+            safeNumber(
+              signal.change10m
+            )
+        )
+      ),
+
+    average15m:
+      average(
+        completed.map(
+          (signal) =>
+            safeNumber(
+              signal.change15m
+            )
+        )
+      ),
+
+    averageBest:
+      average(
+        completed.map(
+          (signal) =>
+            safeNumber(
+              signal.bestMovePct
+            )
+        )
+      ),
+
+    averageWorst:
+      average(
+        completed.map(
+          (signal) =>
+            safeNumber(
+              signal.worstMovePct
+            )
+        )
+      ),
+  };
+}
+
+/* ============================================================
+   THRESHOLD PERFORMANCE TEST
+============================================================ */
+
+function testBuyVolumeThreshold(
+  signals,
+  threshold
+) {
+  const selected =
+    signals.filter(
+      (signal) =>
+        safeNumber(
+          signal.buyVolumePct
+        ) >=
+        threshold
+    );
+
+  if (
+    !selected.length
+  ) {
+    return {
+      threshold,
+
+      total:
+        0,
+
+      success:
+        0,
+
+      accuracy:
+        0,
+    };
+  }
+
+  const success =
+    selected.filter(
+      (signal) =>
+        signal.result ===
+        "SUCCESS"
+    ).length;
+
+  return {
+    threshold,
+
+    total:
+      selected.length,
+
+    success,
+
+    accuracy:
+      (
+        success /
+        selected.length
+      ) * 100,
+  };
+}
+
+/* ============================================================
+   GENERATE TUNING SUGGESTION
+
+   Bot does NOT apply this automatically.
+============================================================ */
+
+function generateGRTTuningSuggestion() {
+  const completed =
+    getCompletedGRTBuyNowSignals();
+
+  if (
+    completed.length <
+    GRT_TUNING_MIN_COMPLETED_SIGNALS
+  ) {
+    return null;
+  }
+
+  const thresholds = [
+    52,
+    55,
+    58,
+    60,
+    62,
+    65,
+  ];
+
+  const tests =
+    thresholds.map(
+      (threshold) =>
+        testBuyVolumeThreshold(
+          completed,
+          threshold
+        )
+    );
+
+  /*
+    Require enough examples at the new threshold.
+    Avoid recommending based on 1 or 2 lucky signals.
+  */
+
+  const minimumSample =
+    Math.max(
+      8,
+      Math.floor(
+        completed.length *
+          0.25
+      )
+    );
+
+  const usable =
+    tests.filter(
+      (item) =>
+        item.total >=
+        minimumSample
+    );
+
+  if (
+    !usable.length
+  ) {
+    return null;
+  }
+
+  const currentResult =
+    testBuyVolumeThreshold(
+      completed,
+      GRT_DYNAMIC_BUY_VOLUME_MIN_PCT
+    );
+
+  usable.sort(
+    (a, b) =>
+      b.accuracy -
+        a.accuracy ||
+      b.total -
+        a.total
+  );
+
+  const best =
+    usable[0];
+
+  /*
+    Only suggest if historical improvement
+    is meaningful.
+  */
+
+  if (
+    best.threshold ===
+      GRT_DYNAMIC_BUY_VOLUME_MIN_PCT
+  ) {
+    return null;
+  }
+
+  if (
+    best.accuracy <
+    currentResult.accuracy +
+      7
+  ) {
+    return null;
+  }
+
+  return {
+    currentThreshold:
+      GRT_DYNAMIC_BUY_VOLUME_MIN_PCT,
+
+    suggestedThreshold:
+      best.threshold,
+
+    currentAccuracy:
+      currentResult.accuracy,
+
+    currentSamples:
+      currentResult.total,
+
+    suggestedAccuracy:
+      best.accuracy,
+
+    suggestedSamples:
+      best.total,
+
+    completedSignals:
+      completed.length,
+  };
+}
+
+/* ============================================================
+   TUNING SUGGESTION ALERT
+============================================================ */
+
+async function maybeSuggestGRTTuning() {
+  const completed =
+    getCompletedGRTBuyNowSignals();
+
+  if (
+    completed.length <
+    GRT_TUNING_MIN_COMPLETED_SIGNALS
+  ) {
+    return;
+  }
+
+  /*
+    Do not spam a suggestion after every signal.
+    Re-evaluate after every additional 10 completed signals.
+  */
+
+  if (
+    completed.length <
+    LAST_TUNING_SUGGESTION_COUNT +
+      10 &&
+    LAST_TUNING_SUGGESTION_COUNT >
+      0
+  ) {
+    return;
+  }
+
+  const suggestion =
+    generateGRTTuningSuggestion();
+
+  if (
+    !suggestion
+  ) {
+    return;
+  }
+
+  LAST_TUNING_SUGGESTION_COUNT =
+    completed.length;
+
+  saveGRTBuyNowHistory();
+
+  await sendTelegram(
+    `🧠 GRT TUNING SUGGESTION
+
+BUY NOW signals analysed:
+${suggestion.completedSignals}
+
+Current BUY dominance:
+${suggestion.currentThreshold.toFixed(
+      0
+    )}%
+
+Historical:
+${suggestion.currentThreshold.toFixed(
+      0
+    )}% → ${suggestion.currentAccuracy.toFixed(
+      1
+    )}% success
+(${suggestion.currentSamples} signals)
+
+Suggested:
+${suggestion.suggestedThreshold.toFixed(
+      0
+    )}% → ${suggestion.suggestedAccuracy.toFixed(
+      1
+    )}% success
+(${suggestion.suggestedSamples} signals)
+
+APPLY NEW THRESHOLD?`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text:
+                `✅ APPLY ${suggestion.suggestedThreshold}%`,
+
+              callback_data:
+                `TUNE_APPLY_${suggestion.suggestedThreshold}`,
+            },
+            {
+              text:
+                "❌ KEEP CURRENT",
+
+              callback_data:
+                "TUNE_KEEP",
+            },
+          ],
+        ],
+      },
+    }
+  );
+}
+
+/* ============================================================
+   TUNING CALLBACK
+============================================================ */
+
+bot.on(
+  "callback_query",
+  async (query) => {
+    const data =
+      String(
+        query.data ||
+          ""
+      );
+
+    const chatId =
+      query.message
+        ?.chat
+        ?.id;
+
+    if (
+      data.startsWith(
+        "TUNE_APPLY_"
+      )
+    ) {
+      const newThreshold =
+        Number(
+          data.replace(
+            "TUNE_APPLY_",
+            ""
+          )
+        );
+
+      if (
+        Number.isFinite(
+          newThreshold
+        ) &&
+        newThreshold >=
+          50 &&
+        newThreshold <=
+          75
+      ) {
+        const previous =
+          GRT_DYNAMIC_BUY_VOLUME_MIN_PCT;
+
+        GRT_DYNAMIC_BUY_VOLUME_MIN_PCT =
+          newThreshold;
+
+        saveGRTTuning();
+
+        if (
+          chatId
+        ) {
+          await replyTelegram(
+            chatId,
+            `✅ GRT MOMENTUM TUNING APPLIED
+
+BUY dominance:
+${previous.toFixed(
+              0
+            )}% → ${newThreshold.toFixed(
+              0
+            )}%
+
+📡 Future BUY NOW signals will use the new threshold.`
+          );
+        }
+      }
+    }
+
+    if (
+      data ===
+      "TUNE_KEEP"
+    ) {
+      if (
+        chatId
+      ) {
+        await replyTelegram(
+          chatId,
+          `✅ CURRENT FORMULA KEPT
+
+BUY dominance remains:
+${GRT_DYNAMIC_BUY_VOLUME_MIN_PCT.toFixed(
+            0
+          )}%`
+        );
+      }
+    }
+  }
+);
+
+/* ============================================================
+   LAST BUY NOW SIGNAL
+============================================================ */
+
+function getLastGRTBuyNowSignal() {
+  if (
+    !GRT_BUY_NOW_HISTORY.length
+  ) {
+    return null;
+  }
+
+  return GRT_BUY_NOW_HISTORY[
+    GRT_BUY_NOW_HISTORY.length -
+      1
+  ];
+}
+
+/* ============================================================
+   FORMAT BUY NOW SIGNAL RESULT
+============================================================ */
+
+function formatLearningSignal(
+  signal
+) {
+  if (
+    !signal
+  ) {
+    return "NO DATA";
+  }
+
+  const five =
+    signal.change5m ===
+      null
+      ? "WAITING"
+      : formatPercent(
+          signal.change5m
+        );
+
+  const ten =
+    signal.change10m ===
+      null
+      ? "WAITING"
+      : formatPercent(
+          signal.change10m
+        );
+
+  const fifteen =
+    signal.change15m ===
+      null
+      ? "WAITING"
+      : formatPercent(
+          signal.change15m
+        );
+
+  return `Signal:
+${signal.id}
+
+BUY NOW:
+RM${formatPrice(
+    "GRT",
+    signal.entryPrice
+  )}
+
+5M: ${five}
+10M: ${ten}
+15M: ${fifteen}
+
+⬆️ Best:
+${formatPercent(
+    signal.bestMovePct
+  )}
+
+⬇️ Worst:
+${formatPercent(
+    signal.worstMovePct
+  )}
+
+Result:
+${signal.completed
+  ? signal.result ===
+      "SUCCESS"
+    ? "✅ SUCCESS"
+    : signal.result ===
+        "FALSE"
+      ? "❌ FALSE SIGNAL"
+      : "➖ MIXED"
+  : "⏳ MONITORING"}`;
+}
+
+/* ============================================================
+   /BUYTEST COMMAND
+============================================================ */
+
+bot.onText(
+  /\/buytest/i,
+  async (msg) => {
+    const stats =
+      getGRTBuyNowPerformance();
+
+    const last =
+      getLastGRTBuyNowSignal();
+
+    if (
+      GRT_BUY_NOW_HISTORY.length ===
+      0
+    ) {
+      await replyTelegram(
+        msg.chat.id,
+        `🧪 GRT BUY NOW TEST
+
+No BUY NOW signals recorded yet.
+
+Current BUY dominance threshold:
+${GRT_DYNAMIC_BUY_VOLUME_MIN_PCT.toFixed(
+          0
+        )}%`
+      );
+
+      return;
+    }
+
+    await replyTelegram(
+      msg.chat.id,
+      `🧪 GRT BUY NOW TEST
+
+Signals Recorded:
+${GRT_BUY_NOW_HISTORY.length}
+
+Completed:
+${stats.total}
+
+✅ Success:
+${stats.success}
+
+❌ False:
+${stats.falseSignals}
+
+➖ Mixed:
+${stats.mixed}
+
+🎯 Accuracy:
+${stats.accuracy.toFixed(
+        1
+      )}%
+
+📈 Average Move
+5M: ${formatPercent(
+        stats.average5m
+      )}
+10M: ${formatPercent(
+        stats.average10m
+      )}
+15M: ${formatPercent(
+        stats.average15m
+      )}
+
+⬆️ Avg Best Move:
+${formatPercent(
+        stats.averageBest
+      )}
+
+⬇️ Avg Worst Move:
+${formatPercent(
+        stats.averageWorst
+      )}
+
+⚙️ Current BUY Threshold:
+${GRT_DYNAMIC_BUY_VOLUME_MIN_PCT.toFixed(
+        0
+      )}%
+
+━━━━━━━━━━━━━━
+
+${formatLearningSignal(
+  last
+)}`
+    );
+  }
+);
+
+/* ============================================================
+   /BUYLAST COMMAND
+============================================================ */
+
+bot.onText(
+  /\/buylast/i,
+  async (msg) => {
+    const last =
+      getLastGRTBuyNowSignal();
+
+    if (
+      !last
+    ) {
+      await replyTelegram(
+        msg.chat.id,
+        "🧪 No GRT BUY NOW signal recorded yet."
+      );
+
+      return;
+    }
+
+    await replyTelegram(
+      msg.chat.id,
+      `🧪 LAST GRT BUY NOW
+
+${formatLearningSignal(
+        last
+      )}
+
+BUY Volume:
+${safeNumber(
+  last.buyVolumePct
+).toFixed(
+  1
+)}%
+
+BUY Frequency:
+${safeNumber(
+  last.buyFrequencyPct
+).toFixed(
+  1
+)}%
+
+Initial Price Response:
+${formatPercent(
+  last.priceResponsePct
+)}
+
+RSI:
+${
+  last.rsi !==
+    null
+    ? last.rsi.toFixed(
+        1
+      )
+    : "N/A"
+}
+
+1H MA:
+${last.maCondition}
+
+Signal Score:
+${last.score}`
+    );
+  }
+);
+
+/* ============================================================
+   /TUNING COMMAND
+============================================================ */
+
+bot.onText(
+  /\/tuning/i,
+  async (msg) => {
+    const completed =
+      getCompletedGRTBuyNowSignals();
+
+    const suggestion =
+      generateGRTTuningSuggestion();
+
+    if (
+      completed.length <
+      GRT_TUNING_MIN_COMPLETED_SIGNALS
+    ) {
+      await replyTelegram(
+        msg.chat.id,
+        `🧠 GRT TUNING
+
+Completed BUY NOW signals:
+${completed.length}/${GRT_TUNING_MIN_COMPLETED_SIGNALS}
+
+Current BUY threshold:
+${GRT_DYNAMIC_BUY_VOLUME_MIN_PCT.toFixed(
+          0
+        )}%
+
+More data is needed before tuning.`
+      );
+
+      return;
+    }
+
+    if (
+      !suggestion
+    ) {
+      await replyTelegram(
+        msg.chat.id,
+        `🧠 GRT TUNING
+
+Current BUY threshold:
+${GRT_DYNAMIC_BUY_VOLUME_MIN_PCT.toFixed(
+          0
+        )}%
+
+Completed signals:
+${completed.length}
+
+✅ No meaningful threshold improvement detected yet.`
+      );
+
+      return;
+    }
+
+    await replyTelegram(
+      msg.chat.id,
+      `🧠 GRT TUNING ANALYSIS
+
+Current:
+${suggestion.currentThreshold}% → ${suggestion.currentAccuracy.toFixed(
+        1
+      )}%
+
+Suggested:
+${suggestion.suggestedThreshold}% → ${suggestion.suggestedAccuracy.toFixed(
+        1
+      )}%
+
+Samples:
+${suggestion.currentSamples} vs ${suggestion.suggestedSamples}
+
+Use the next tuning suggestion alert to APPLY or KEEP.`
+    );
+  }
+);
+/* ============================================================
+   DAILY WATCH SNAPSHOT SAVE
+============================================================ */
+
+function saveDailyWatchSnapshot() {
+  try {
+    fs.writeFileSync(
+      DAILY_WATCH_FILE,
+      JSON.stringify(
+        {
+          state:
+            GRT_DAILY_STATE,
+
+          history:
+            GRT_DAILY_HISTORY,
+
+          lastReportKey:
+            LAST_DAILY_REPORT_KEY,
+        },
+        null,
+        2
+      )
+    );
+  } catch (
+    error
+  ) {
+    console.log(
+      "Daily watch save error:",
+      error.message
+    );
+  }
+}
+
+/* ============================================================
+   DAILY WATCH SNAPSHOT LOAD
+============================================================ */
+
+function loadDailyWatchSnapshot() {
+  try {
+    if (
+      !fs.existsSync(
+        DAILY_WATCH_FILE
+      )
+    ) {
+      return;
+    }
+
+    const raw =
+      fs.readFileSync(
+        DAILY_WATCH_FILE,
+        "utf8"
+      );
+
+    if (
+      !raw
+    ) {
+      return;
+    }
+
+    const parsed =
+      JSON.parse(
+        raw
+      );
+
+    if (
+      parsed.state
+    ) {
+      GRT_DAILY_STATE =
+        parsed.state;
+    }
+
+    if (
+      Array.isArray(
+        parsed.history
+      )
+    ) {
+      GRT_DAILY_HISTORY =
+        parsed.history.slice(
+          -GRT_DAILY_HISTORY_DAYS
+        );
+    }
+
+    if (
+      parsed.lastReportKey
+    ) {
+      LAST_DAILY_REPORT_KEY =
+        parsed.lastReportKey;
+    }
+  } catch (
+    error
+  ) {
+    console.log(
+      "Daily watch load error:",
+      error.message
+    );
+  }
+}
+
+/* ============================================================
+   DAILY WATCH METRICS
 ============================================================ */
 
 function getDailyWatchMetrics(
@@ -8380,8 +10049,7 @@ function getDailyWatchMetrics(
       ? (
           state.buyExecutions /
           totalExecutions
-        ) *
-        100
+        ) * 100
       : 0;
 
   const sellFrequencyPct =
@@ -8390,8 +10058,7 @@ function getDailyWatchMetrics(
       ? (
           state.sellExecutions /
           totalExecutions
-        ) *
-        100
+        ) * 100
       : 0;
 
   const buyVolumePct =
@@ -8400,8 +10067,7 @@ function getDailyWatchMetrics(
       ? (
           state.buyVolume /
           totalVolume
-        ) *
-        100
+        ) * 100
       : 0;
 
   const sellVolumePct =
@@ -8410,8 +10076,7 @@ function getDailyWatchMetrics(
       ? (
           state.sellVolume /
           totalVolume
-        ) *
-        100
+        ) * 100
       : 0;
 
   const grtChangePct =
@@ -8432,10 +10097,6 @@ function getDailyWatchMetrics(
         )
       : 0;
 
-  const grtOutperformance =
-    grtChangePct -
-    btcChangePct;
-
   return {
     totalExecutions,
 
@@ -8453,15 +10114,17 @@ function getDailyWatchMetrics(
 
     btcChangePct,
 
-    grtOutperformance,
+    grtOutperformance:
+      grtChangePct -
+      btcChangePct,
   };
 }
 
 /* ============================================================
-   FORMAT LARGE GRT VOLUME
+   FORMAT LARGE VOLUME
 ============================================================ */
 
-function formatGRTVolume(
+function formatLargeNumber(
   value
 ) {
   const number =
@@ -8528,72 +10191,26 @@ function getPreviousDailySummary() {
 }
 
 /* ============================================================
-   DAILY HISTORY AVERAGES
+   DAILY HISTORY AVERAGE
 ============================================================ */
 
-function getDailyHistoryAverages() {
+function getDailyHistoryAverage(
+  key
+) {
   if (
     !GRT_DAILY_HISTORY.length
   ) {
-    return null;
+    return 0;
   }
 
-  const history =
-    GRT_DAILY_HISTORY.slice(
-      -GRT_DAILY_HISTORY_DAYS
-    );
-
-  return {
-    grtChangePct:
-      average(
-        history.map(
-          (item) =>
-            safeNumber(
-              item.grtChangePct
-            )
+  return average(
+    GRT_DAILY_HISTORY.map(
+      (item) =>
+        safeNumber(
+          item[key]
         )
-      ),
-
-    buyFrequencyPct:
-      average(
-        history.map(
-          (item) =>
-            safeNumber(
-              item.buyFrequencyPct
-            )
-        )
-      ),
-
-    buyVolumePct:
-      average(
-        history.map(
-          (item) =>
-            safeNumber(
-              item.buyVolumePct
-            )
-        )
-      ),
-
-    btcChangePct:
-      average(
-        history.map(
-          (item) =>
-            safeNumber(
-              item.btcChangePct
-            )
-        )
-      ),
-
-    grtOutperformance:
-      average(
-        history.map(
-          (item) =>
-            safeNumber(
-              item.grtOutperformance
-            )
-        )
-      ),
-  };
+    )
+  );
 }
 
 /* ============================================================
@@ -8601,29 +10218,23 @@ function getDailyHistoryAverages() {
 ============================================================ */
 
 function getDailyPriceTrend(
-  currentMetrics
+  metrics
 ) {
-  const averages =
-    getDailyHistoryAverages();
-
   const previous =
     getPreviousDailySummary();
 
   if (
-    !averages ||
     !previous
   ) {
     if (
-      currentMetrics
-        .grtChangePct >
+      metrics.grtChangePct >
       1
     ) {
       return "STRENGTHENING ↑";
     }
 
     if (
-      currentMetrics
-        .grtChangePct <
+      metrics.grtChangePct <
       -1
     ) {
       return "WEAKENING ↓";
@@ -8632,28 +10243,16 @@ function getDailyPriceTrend(
     return "NEUTRAL";
   }
 
-  const strongerThanYesterday =
-    currentMetrics
-      .grtChangePct >
-    previous.grtChangePct;
-
-  const aboveAverage =
-    currentMetrics
-      .grtChangePct >
-    averages.grtChangePct;
-
   if (
-    strongerThanYesterday &&
-    aboveAverage
+    metrics.grtChangePct >
+      previous.grtChangePct
   ) {
     return "STRENGTHENING ↑";
   }
 
   if (
-    !strongerThanYesterday &&
-    currentMetrics
-      .grtChangePct <
-      averages.grtChangePct
+    metrics.grtChangePct <
+      previous.grtChangePct
   ) {
     return "WEAKENING ↓";
   }
@@ -8662,72 +10261,41 @@ function getDailyPriceTrend(
 }
 
 /* ============================================================
-   DAILY BUY ACTIVITY TREND
+   DAILY BUY TREND
 ============================================================ */
 
 function getDailyBuyTrend(
-  currentMetrics
+  metrics
 ) {
-  const averages =
-    getDailyHistoryAverages();
-
   const previous =
     getPreviousDailySummary();
 
   if (
-    !averages ||
     !previous
   ) {
     if (
-      currentMetrics
-        .buyFrequencyPct >=
+      metrics.buyFrequencyPct >=
         55 &&
-      currentMetrics
-        .buyVolumePct >=
+      metrics.buyVolumePct >=
         55
     ) {
       return "INCREASING ↑";
-    }
-
-    if (
-      currentMetrics
-        .buyFrequencyPct <
-        45 &&
-      currentMetrics
-        .buyVolumePct <
-        45
-    ) {
-      return "DECREASING ↓";
     }
 
     return "NEUTRAL";
   }
 
   const frequencyUp =
-    currentMetrics
-      .buyFrequencyPct >
+    metrics.buyFrequencyPct >
     previous.buyFrequencyPct;
 
   const volumeUp =
-    currentMetrics
-      .buyVolumePct >
+    metrics.buyVolumePct >
     previous.buyVolumePct;
-
-  const aboveFrequencyAverage =
-    currentMetrics
-      .buyFrequencyPct >
-    averages.buyFrequencyPct;
-
-  const aboveVolumeAverage =
-    currentMetrics
-      .buyVolumePct >
-    averages.buyVolumePct;
 
   if (
     frequencyUp &&
-    volumeUp &&
-    aboveFrequencyAverage &&
-    aboveVolumeAverage
+    volumeUp
   ) {
     return "INCREASING ↑";
   }
@@ -8763,59 +10331,26 @@ function getSevenDayTrend(
     return "BUILDING DATA";
   }
 
-  let positiveDays =
-    0;
+  const positiveDays =
+    history.filter(
+      (item) =>
+        item.grtChangePct >
+        0
+    ).length;
 
-  let strengtheningDays =
-    0;
-
-  for (
-    let i = 0;
-    i < history.length;
-    i++
-  ) {
-    if (
-      history[i]
-        .grtChangePct >
-      0
-    ) {
-      positiveDays++;
-    }
-
-    if (
-      i >
-        0 &&
-      history[i]
-        .grtChangePct >
-      history[
-        i - 1
-      ].grtChangePct
-    ) {
-      strengtheningDays++;
-    }
-  }
-
-  const positiveRatio =
+  const ratio =
     positiveDays /
     history.length;
 
   if (
-    positiveRatio >=
-      0.70 &&
-    strengtheningDays >=
-      Math.floor(
-        (
-          history.length -
-          1
-        ) /
-        2
-      )
+    ratio >=
+    0.70
   ) {
     return "UPTREND";
   }
 
   if (
-    positiveRatio <=
+    ratio <=
     0.30
   ) {
     return "DOWNTREND";
@@ -8825,44 +10360,41 @@ function getSevenDayTrend(
 }
 
 /* ============================================================
-   DAILY GRT MOMENTUM
+   DAILY MOMENTUM SUMMARY
 ============================================================ */
 
-function getDailyGRTMomentum({
-  currentMetrics,
+function getDailyMomentumSummary({
+  metrics,
   priceTrend,
   buyTrend,
+  sevenDayTrend,
 }) {
   let score =
     0;
 
   if (
-    currentMetrics
-      .grtChangePct >
+    metrics.grtChangePct >
     0
   ) {
     score++;
   }
 
   if (
-    currentMetrics
-      .buyFrequencyPct >=
+    metrics.buyFrequencyPct >=
     52
   ) {
     score++;
   }
 
   if (
-    currentMetrics
-      .buyVolumePct >=
+    metrics.buyVolumePct >=
     52
   ) {
     score++;
   }
 
   if (
-    currentMetrics
-      .grtOutperformance >
+    metrics.grtOutperformance >
     0
   ) {
     score++;
@@ -8885,15 +10417,22 @@ function getDailyGRTMomentum({
   }
 
   if (
+    sevenDayTrend ===
+    "UPTREND"
+  ) {
+    score++;
+  }
+
+  if (
     score >=
-    5
+    6
   ) {
     return "STRONGER";
   }
 
   if (
     score >=
-    3
+    4
   ) {
     return "BUILDING";
   }
@@ -8909,67 +10448,48 @@ function getDailyGRTMomentum({
 }
 
 /* ============================================================
-   ALTCOIN ROTATION SIGNAL
-
-   THIS IS NOT:
-   "ALTCOIN SEASON CONFIRMED"
-
-   It only evaluates:
-   GRT vs BTC + GRT flow + multi-day trend.
+   ALTCOIN ROTATION WATCH
 ============================================================ */
 
 function getAltcoinRotationSignal({
-  currentMetrics,
-  buyTrend,
+  metrics,
   priceTrend,
+  buyTrend,
   sevenDayTrend,
 }) {
   let score =
     0;
 
   if (
-    currentMetrics
-      .grtOutperformance >=
+    metrics.grtOutperformance >=
     1
   ) {
     score +=
       2;
   } else if (
-    currentMetrics
-      .grtOutperformance >
+    metrics.grtOutperformance >
     0
   ) {
     score++;
   }
 
   if (
-    currentMetrics
-      .buyFrequencyPct >=
+    metrics.buyFrequencyPct >=
     55
   ) {
     score++;
   }
 
   if (
-    currentMetrics
-      .buyVolumePct >=
+    metrics.buyVolumePct >=
     55
   ) {
     score++;
   }
 
   if (
-    currentMetrics
-      .grtChangePct >
+    metrics.grtChangePct >
     0
-  ) {
-    score++;
-  }
-
-  if (
-    buyTrend.includes(
-      "INCREASING"
-    )
   ) {
     score++;
   }
@@ -8977,6 +10497,14 @@ function getAltcoinRotationSignal({
   if (
     priceTrend.includes(
       "STRENGTHENING"
+    )
+  ) {
+    score++;
+  }
+
+  if (
+    buyTrend.includes(
+      "INCREASING"
     )
   ) {
     score++;
@@ -9031,7 +10559,7 @@ function finalizeDailySummary(
     return null;
   }
 
-  const summary = {
+  const baseSummary = {
     dateKey:
       state.dateKey,
 
@@ -9052,12 +10580,6 @@ function finalizeDailySummary(
 
     btcClose:
       state.btcClose,
-
-    buyExecutions:
-      state.buyExecutions,
-
-    sellExecutions:
-      state.sellExecutions,
 
     buyVolume:
       state.buyVolume,
@@ -9080,33 +10602,27 @@ function finalizeDailySummary(
 
   const sevenDayTrend =
     getSevenDayTrend(
-      summary
+      baseSummary
     );
 
   const momentum =
-    getDailyGRTMomentum({
-      currentMetrics:
-        metrics,
-
+    getDailyMomentumSummary({
+      metrics,
       priceTrend,
-
       buyTrend,
+      sevenDayTrend,
     });
 
   const rotation =
     getAltcoinRotationSignal({
-      currentMetrics:
-        metrics,
-
-      buyTrend,
-
+      metrics,
       priceTrend,
-
+      buyTrend,
       sevenDayTrend,
     });
 
   return {
-    ...summary,
+    ...baseSummary,
 
     priceTrend,
 
@@ -9121,56 +10637,55 @@ function finalizeDailySummary(
 }
 
 /* ============================================================
-   BUILD GRT 24H REPORT
+   BUILD DAILY REPORT
 ============================================================ */
 
 function buildGRTDailyReport(
-  summary
+  summary,
+  live =
+    false
 ) {
   const previous =
     getPreviousDailySummary();
 
-  const previousSection =
-    previous
-      ? `📊 VS YESTERDAY
-Price: ${formatPercent(
-          previous.grtChangePct
-        )} → ${formatPercent(
-          summary.grtChangePct
-        )} ${
-          summary.grtChangePct >=
-          previous.grtChangePct
-            ? "↑"
-            : "↓"
-        }
-BUY Frequency: ${previous.buyFrequencyPct.toFixed(
-          1
-        )}% → ${summary.buyFrequencyPct.toFixed(
-          1
-        )}% ${
-          summary.buyFrequencyPct >=
-          previous.buyFrequencyPct
-            ? "↑"
-            : "↓"
-        }
-BUY Volume: ${previous.buyVolumePct.toFixed(
-          1
-        )}% → ${summary.buyVolumePct.toFixed(
-          1
-        )}% ${
-          summary.buyVolumePct >=
-          previous.buyVolumePct
-            ? "↑"
-            : "↓"
-        }
+  let comparison =
+    "";
 
-`
-      : "";
+  if (
+    previous
+  ) {
+    comparison = `
+
+📊 VS PREVIOUS DAY
+Price:
+${formatPercent(
+      previous.grtChangePct
+    )} → ${formatPercent(
+      summary.grtChangePct
+    )}
+
+BUY Frequency:
+${previous.buyFrequencyPct.toFixed(
+      1
+    )}% → ${summary.buyFrequencyPct.toFixed(
+      1
+    )}%
+
+BUY Volume:
+${previous.buyVolumePct.toFixed(
+      1
+    )}% → ${summary.buyVolumePct.toFixed(
+      1
+    )}%`;
+  }
 
   return `🌙 GRT 24H DAILY REPORT
 ${formatMalaysiaDateLabel(
     summary.dateKey
-  )} | 12AM → 12AM MYT
+  )}
+${live
+  ? "12AM → NOW MYT"
+  : "12AM → 12AM MYT"}
 
 💵 PRICE
 Open: RM${formatPrice(
@@ -9202,25 +10717,25 @@ Low: RM${formatPrice(
   )}%
 
 📦 EXECUTED VOLUME
-🟢 BUY: ${formatGRTVolume(
+🟢 BUY: ${formatLargeNumber(
     summary.buyVolume
   )} — ${summary.buyVolumePct.toFixed(
     1
   )}%
-🔴 SELL: ${formatGRTVolume(
+🔴 SELL: ${formatLargeNumber(
     summary.sellVolume
   )} — ${summary.sellVolumePct.toFixed(
     1
   )}%
 
-${previousSection}₿ GRT VS BTC
+₿ GRT VS BTC
 GRT: ${formatPercent(
     summary.grtChangePct
   )}
 BTC: ${formatPercent(
     summary.btcChangePct
   )}
-GRT Outperform: ${formatPercent(
+Outperform: ${formatPercent(
     summary.grtOutperformance
   )}
 
@@ -9231,7 +10746,7 @@ Buy Activity: ${summary.buyTrend}
 
 🧠 SUMMARY
 GRT MOMENTUM: ${summary.momentum}
-ALTCOIN ROTATION: ${summary.rotation}`;
+ALTCOIN ROTATION: ${summary.rotation}${comparison}`;
 }
 
 /* ============================================================
@@ -9253,74 +10768,38 @@ async function checkDailyWatchRollover() {
   }
 
   if (
-    LAST_DAILY_REPORT_KEY ===
+    LAST_DAILY_REPORT_KEY !==
     state.dateKey
   ) {
-    GRT_DAILY_STATE =
-      createDailyWatchState(
-        today
+    const summary =
+      finalizeDailySummary(
+        state
       );
 
-    saveDailyWatchSnapshot();
+    if (
+      summary &&
+      summary.grtOpen &&
+      summary.grtClose
+    ) {
+      await sendTelegram(
+        buildGRTDailyReport(
+          summary,
+          false
+        )
+      );
 
-    return;
-  }
-
-  const grt =
-    await getTicker(
-      "GRT"
-    );
-
-  const btc =
-    await getTicker(
-      "BTC"
-    );
-
-  if (
-    grt &&
-    state.grtClose ===
-      null
-  ) {
-    state.grtClose =
-      grt.currentPrice;
-  }
-
-  if (
-    btc &&
-    state.btcClose ===
-      null
-  ) {
-    state.btcClose =
-      btc.currentPrice;
-  }
-
-  const summary =
-    finalizeDailySummary(
-      state
-    );
-
-  if (
-    summary &&
-    summary.grtOpen &&
-    summary.grtClose
-  ) {
-    await sendTelegram(
-      buildGRTDailyReport(
+      GRT_DAILY_HISTORY.push(
         summary
-      )
-    );
-
-    GRT_DAILY_HISTORY.push(
-      summary
-    );
-
-    GRT_DAILY_HISTORY =
-      GRT_DAILY_HISTORY.slice(
-        -GRT_DAILY_HISTORY_DAYS
       );
 
-    LAST_DAILY_REPORT_KEY =
-      state.dateKey;
+      GRT_DAILY_HISTORY =
+        GRT_DAILY_HISTORY.slice(
+          -GRT_DAILY_HISTORY_DAYS
+        );
+
+      LAST_DAILY_REPORT_KEY =
+        state.dateKey;
+    }
   }
 
   GRT_DAILY_STATE =
@@ -9328,44 +10807,30 @@ async function checkDailyWatchRollover() {
       today
     );
 
-  if (
-    grt
-  ) {
-    updateDailyWatchPrice(
-      "GRT",
-      grt.currentPrice
-    );
-  }
-
-  if (
-    btc
-  ) {
-    updateDailyWatchPrice(
-      "BTC",
-      btc.currentPrice
-    );
-  }
-
   saveDailyWatchSnapshot();
 }
 
 /* ============================================================
-   CURRENT /GRt24 REPORT
+   CURRENT DAILY REPORT
 ============================================================ */
 
-async function buildCurrentGRTDailyWatch() {
+async function buildCurrentGRTDailyReport() {
   const state =
     ensureDailyWatchState();
 
-  const grt =
-    await getTicker(
-      "GRT"
-    );
+  const [
+    grt,
+    btc,
+  ] =
+    await Promise.all([
+      getTicker(
+        "GRT"
+      ),
 
-  const btc =
-    await getTicker(
-      "BTC"
-    );
+      getTicker(
+        "BTC"
+      ),
+    ]);
 
   if (
     grt
@@ -9397,29 +10862,31 @@ async function buildCurrentGRTDailyWatch() {
   }
 
   return buildGRTDailyReport(
-    summary
-  ).replace(
-    "12AM → 12AM MYT",
-    "12AM → NOW MYT"
+    summary,
+    true
   );
 }
 
 /* ============================================================
-   MANUAL COMMAND — /momentum
+   MANUAL COMMAND /MOMENTUM
 ============================================================ */
 
 bot.onText(
   /\/momentum/i,
   async (msg) => {
-    const btc =
-      await getTicker(
-        "BTC"
-      );
+    const [
+      btc,
+      grt,
+    ] =
+      await Promise.all([
+        getTicker(
+          "BTC"
+        ),
 
-    const grt =
-      await getTicker(
-        "GRT"
-      );
+        getTicker(
+          "GRT"
+        ),
+      ]);
 
     if (
       !btc ||
@@ -9433,18 +10900,17 @@ bot.onText(
       return;
     }
 
-    const btcMomentum =
-      await getBTCMomentumText();
+    const [
+      btcMomentum,
+      grtMomentum,
+    ] =
+      await Promise.all([
+        getBTCBuySurge(),
 
-    const grtMomentum =
-      await getGRTMomentumDecision(
-        grt
-      );
-
-    const grtAction =
-      grtMomentum.actionText
-        ? `\n${grtMomentum.actionText}`
-        : "";
+        getGRTMomentumDecision(
+          grt
+        ),
+      ]);
 
     await replyTelegram(
       msg.chat.id,
@@ -9454,19 +10920,19 @@ bot.onText(
         "BTC",
         btc.currentPrice
       )}
-⚡ MOMENTUM: ${btcMomentum}
+⚡ MOMENTUM: ${btcMomentum.text}
 
 🪙 GRT RM${formatPrice(
         "GRT",
         grt.currentPrice
       )}
-⚡ MOMENTUM: ${grtMomentum.momentumText}${grtAction}`
+⚡ MOMENTUM: ${grtMomentum.momentumText}`
     );
   }
 );
 
 /* ============================================================
-   MANUAL COMMAND — /structure
+   MANUAL COMMAND /STRUCTURE
 ============================================================ */
 
 bot.onText(
@@ -9494,32 +10960,21 @@ bot.onText(
       }
     }
 
-    if (
-      !sections.length
-    ) {
-      await replyTelegram(
-        msg.chat.id,
-        `📊 MARKET STRUCTURE UPDATE
-
-Data belum mencukupi.`
-      );
-
-      return;
-    }
-
     await replyTelegram(
       msg.chat.id,
-      `📊 MARKET STRUCTURE UPDATE
+      sections.length
+        ? `📊 MARKET STRUCTURE UPDATE
 
 ${sections.join(
-  "\n\n━━━━━━━━━━━━━━━━━━\n\n"
+  "\n━━━━━━━━━━━━━━━━━━\n"
 )}`
+        : "⚠️ Market structure data unavailable."
     );
   }
 );
 
 /* ============================================================
-   MANUAL COMMAND — /flow
+   MANUAL COMMAND /FLOW
 ============================================================ */
 
 bot.onText(
@@ -9528,206 +10983,127 @@ bot.onText(
     msg,
     match
   ) => {
-    const requestedCoin =
+    const requested =
       match?.[1]
         ?.toUpperCase();
 
     const coins =
-      requestedCoin
+      requested
         ? [
-            requestedCoin,
+            requested,
           ]
         : CORE_COINS;
 
-    const lines = [];
+    const sections = [];
 
     for (
       const coin of
       coins
     ) {
-      const analysis =
+      const data =
         await analyze2HMarketCondition(
           coin
         );
 
       if (
-        !analysis
+        !data
       ) {
-        lines.push(
+        sections.push(
           `${coin}: DATA BELUM CUKUP`
         );
 
         continue;
       }
 
-      const ratioText =
-        analysis.relativeVolume
-          .ratio !==
-          null &&
-        analysis.relativeVolume
-          .ratio !==
-          undefined
-          ? analysis.relativeVolume
-              .ratio
-              .toFixed(
-                2
-              )
-          : "N/A";
+      sections.push(
+        `${coin}: ${data.action}
 
-      lines.push(
-        `${coin}: ${analysis.action}
-
-Dominance:
-${analysis.dominance.side} ${analysis.dominance.percent.toFixed(
+BUY Volume:
+${data.buyVolumePct.toFixed(
           1
         )}%
 
-Price Trend:
-${analysis.priceTrend.direction} ${formatPercent(
-          analysis.priceTrend.value
-        )}
+SELL Volume:
+${data.sellVolumePct.toFixed(
+          1
+        )}%
 
-Volume:
-${ratioText}x ${
-          analysis.relativeVolume
-            .label ||
-          ""
-        }`
+BUY Frequency:
+${data.buyFrequencyPct.toFixed(
+          1
+        )}%
+
+Price:
+${formatPercent(
+          data.priceChangePct
+        )}`
       );
     }
 
     await replyTelegram(
       msg.chat.id,
-      `🧠 2H BACKGROUND ANALYSIS
+      `🧠 2H BACKGROUND
 
-${lines.join(
-  "\n\n━━━━━━━━━━━━━━━━━━\n\n"
+${sections.join(
+  "\n\n━━━━━━━━━━━━━━\n\n"
 )}`
     );
   }
 );
 
 /* ============================================================
-   MANUAL COMMAND — /grt24
+   MANUAL COMMAND /GRT24
 ============================================================ */
 
 bot.onText(
   /\/grt24/i,
   async (msg) => {
     const report =
-      await buildCurrentGRTDailyWatch();
-
-    if (
-      !report
-    ) {
-      await replyTelegram(
-        msg.chat.id,
-        "⚠️ GRT Daily Watch data belum mencukupi."
-      );
-
-      return;
-    }
+      await buildCurrentGRTDailyReport();
 
     await replyTelegram(
       msg.chat.id,
-      report
+      report ||
+        "⚠️ GRT daily data unavailable."
     );
   }
 );
 
 /* ============================================================
-   MANUAL COMMAND — /watch
-============================================================ */
-
-bot.onText(
-  /\/watch/i,
-  async (msg) => {
-    const lines =
-      CORE_COINS.map(
-        (coin) => {
-          const watch =
-            BREAKOUT_WATCH[
-              coin
-            ];
-
-          if (
-            !watch
-          ) {
-            return `${coin}: NO BREAKOUT WATCH`;
-          }
-
-          return `${coin}:
-Resistance: RM${formatPrice(
-            coin,
-            watch.resistance
-          )}
-Strength: ${watch.resistanceStrength}/10
-Executed Above: ${watch.aboveTradeCount}
-Buyer Evidence: ${watch.buyEvidenceScore}
-Failure Score: ${watch.failureScore}`;
-        }
-      );
-
-    await replyTelegram(
-      msg.chat.id,
-      `👀 BREAKOUT WATCH
-
-${lines.join(
-  "\n\n━━━━━━━━━━━━━━━━━━\n\n"
-)}`
-    );
-  }
-);
-
-/* ============================================================
-   MANUAL COMMAND — /status
+   MANUAL COMMAND /STATUS
 ============================================================ */
 
 bot.onText(
   /\/status/i,
   async (msg) => {
-    const stored =
-      CORE_COINS.map(
-        (coin) =>
-          `${coin}: ${
-            TRADE_HISTORY[
-              coin
-            ].length
-          } trades`
-      ).join(
-        "\n"
-      );
-
-    const active =
-      Object.keys(
-        ACTIVE_TRADES
-      );
-
-    const pending =
-      Object.keys(
-        PENDING_ENTRIES
-      );
-
     const candleAuth =
       LUNO_API_KEY_ID &&
       LUNO_API_KEY_SECRET
-        ? "ACTIVE"
+        ? "CONFIGURED"
         : "NOT CONFIGURED";
 
     await replyTelegram(
       msg.chat.id,
       `✅ BOT ACTIVE
 
-${stored}
-
 📡 Price Alert:
-5 MIN + MOMENTUM
+5 MIN
 
-⚡ Spike Threshold:
+₿ BTC:
+BUY SURGE RADAR
+
+🪙 GRT:
+NO ENTRY SIGNAL
+→ VERIFYING BUY
+→ BUY NOW
+
+⚡ BUY Surge Threshold:
 +${MOMENTUM_SPIKE_THRESHOLD_PCT}%
 
-⏱️ Volume Baseline:
-PREVIOUS 1H
+🎯 Dynamic GRT BUY Threshold:
+${GRT_DYNAMIC_BUY_VOLUME_MIN_PCT.toFixed(
+        0
+      )}%
 
 🔐 Luno Candle API:
 ${candleAuth}
@@ -9735,34 +11111,26 @@ ${candleAuth}
 📊 Market Structure:
 15 MIN
 
-👀 Anti-Fake Breakout:
+🚀 Scalping Scan:
+1 MIN
+
+🧠 BUY NOW Learning:
 ACTIVE
 
-🧾 Executed Confirmation:
+🧪 BUY NOW Records:
+${GRT_BUY_NOW_HISTORY.length}
+
+🌙 Daily Watch:
 ACTIVE
-
-📚 Quantity-Aware Entry:
-ACTIVE
-
-🧠 2H Analysis:
-BACKGROUND ONLY
-
-🌙 GRT Daily Watch:
-12AM → 12AM MYT
 
 📈 Active Trades:
 ${
-  active.length
-    ? active.join(
-        ", "
-      )
-    : "NONE"
-}
-
-⏳ Pending Entries:
-${
-  pending.length
-    ? pending.join(
+  Object.keys(
+    ACTIVE_TRADES
+  ).length
+    ? Object.keys(
+        ACTIVE_TRADES
+      ).join(
         ", "
       )
     : "NONE"
@@ -9792,88 +11160,28 @@ app.get(
         new Date()
           .toISOString(),
 
-      config: {
-        priceAlert:
-          "5 minutes",
+      momentum: {
+        btc:
+          "BUY SURGE RADAR",
 
-        momentumSpikeThresholdPct:
+        grt:
+          "NO ENTRY -> VERIFYING -> BUY NOW",
+
+        buyIncreaseThreshold:
           MOMENTUM_SPIKE_THRESHOLD_PCT,
 
-        momentumBaseline:
-          "previous completed 5m windows up to 1 hour",
-
-        momentumMinWindows:
-          MOMENTUM_MIN_BASELINE_WINDOWS,
-
-        lunoCandleAuth:
-          Boolean(
-            LUNO_API_KEY_ID &&
-            LUNO_API_KEY_SECRET
-          ),
-
-        grtRSI:
-          "5m RSI14",
-
-        grtMA:
-          "1h MA9/MA50",
-
-        marketStructure:
-          "15 minutes",
-
-        supportResistance:
-          "live orderbook first",
-
-        wallRating:
-          "relative depth 1-10",
-
-        breakoutWatch:
-          "executed-trade based",
-
-        antiFakeBreakout:
-          true,
-
-        scalpingScan:
-          "1 minute",
-
-        tradeMonitor:
-          "15 seconds",
-
-        tradeCollector:
-          "5 seconds",
-
-        marketCondition2H:
-          "background only",
-
-        grtDailyWatch:
-          "12AM to 12AM Asia/Kuala_Lumpur",
-
-        orderbookEntry:
-          "quantity-aware",
-
-        maxEntryChasePct:
-          MAX_ENTRY_CHASE_PCT,
-
-        minimumGrossRoomPct:
-          MIN_GROSS_ROOM_PCT,
-
-        buyFee:
-          BUY_FEE,
-
-        sellFee:
-          SELL_FEE,
+        grtDynamicBuyVolumePct:
+          GRT_DYNAMIC_BUY_VOLUME_MIN_PCT,
       },
 
-      storedTrades:
-        Object.fromEntries(
-          SCAN_COINS.map(
-            (coin) => [
-              coin,
-              TRADE_HISTORY[
-                coin
-              ].length,
-            ]
-          )
-        ),
+      learning: {
+        records:
+          GRT_BUY_NOW_HISTORY.length,
+
+        completed:
+          getCompletedGRTBuyNowSignals()
+            .length,
+      },
 
       activeTrades:
         Object.keys(
@@ -9884,20 +11192,6 @@ app.get(
         Object.keys(
           PENDING_ENTRIES
         ),
-
-      dailyWatch: {
-        currentDate:
-          GRT_DAILY_STATE
-            ?.dateKey ||
-          null,
-
-        historyDays:
-          GRT_DAILY_HISTORY
-            .length,
-
-        lastReport:
-          LAST_DAILY_REPORT_KEY,
-      },
     });
   }
 );
@@ -9938,22 +11232,15 @@ app.get(
         coin
       );
 
-    if (
-      !ticker
-    ) {
-      return res
-        .status(
-          502
-        )
-        .json({
-          error:
-            "Unable to fetch ticker",
-        });
-    }
+    return res.json({
+      ready:
+        Boolean(
+          ticker
+        ),
 
-    return res.json(
-      ticker
-    );
+      data:
+        ticker,
+    });
   }
 );
 
@@ -9984,7 +11271,7 @@ app.get(
         )
         .json({
           error:
-            "Only BTC and GRT are supported",
+            "BTC or GRT only",
         });
     }
 
@@ -10002,46 +11289,46 @@ app.get(
         )
         .json({
           error:
-            "Unable to fetch ticker",
+            "Ticker unavailable",
         });
     }
-
-    const volume =
-      await getMomentumVolumeData(
-        coin
-      );
 
     if (
       coin ===
       "BTC"
     ) {
-      return res.json({
-        coin,
-
-        currentPrice:
-          ticker.currentPrice,
-
-        volume,
-
-        momentumText:
-          await getBTCMomentumText(),
-      });
+      return res.json(
+        await getBTCBuySurge()
+      );
     }
 
-    const decision =
+    return res.json(
       await getGRTMomentumDecision(
         ticker
-      );
+      )
+    );
+  }
+);
 
-    return res.json({
-      coin,
+/* ============================================================
+   BUY TEST ENDPOINT
+============================================================ */
 
-      currentPrice:
-        ticker.currentPrice,
+app.get(
+  "/buytest",
+  (
+    req,
+    res
+  ) => {
+    res.json({
+      threshold:
+        GRT_DYNAMIC_BUY_VOLUME_MIN_PCT,
 
-      volume,
+      stats:
+        getGRTBuyNowPerformance(),
 
-      decision,
+      history:
+        GRT_BUY_NOW_HISTORY,
     });
   }
 );
@@ -10070,19 +11357,7 @@ app.get(
     if (
       !CORE_COINS.includes(
         coin
-      )
-    ) {
-      return res
-        .status(
-          400
-        )
-        .json({
-          error:
-            "Only BTC and GRT are supported",
-        });
-    }
-
-    if (
+      ) ||
       ![
         300,
         3600,
@@ -10096,7 +11371,7 @@ app.get(
         )
         .json({
           error:
-            "Duration must be 300 or 3600",
+            "Use BTC/GRT and duration 300/3600",
         });
     }
 
@@ -10106,17 +11381,11 @@ app.get(
         duration,
         duration ===
           300
-          ? 30
+          ? 40
           : 70
       );
 
     return res.json({
-      authenticated:
-        Boolean(
-          LUNO_API_KEY_ID &&
-          LUNO_API_KEY_SECRET
-        ),
-
       coin,
 
       duration,
@@ -10130,132 +11399,7 @@ app.get(
 );
 
 /* ============================================================
-   ORDERBOOK ENDPOINT
-============================================================ */
-
-app.get(
-  "/orderbook/:coin",
-  async (
-    req,
-    res
-  ) => {
-    const coin =
-      String(
-        req.params.coin ||
-          ""
-      ).toUpperCase();
-
-    if (
-      !SCAN_COINS.includes(
-        coin
-      )
-    ) {
-      return res
-        .status(
-          400
-        )
-        .json({
-          error:
-            "Unsupported coin",
-        });
-    }
-
-    const orderBook =
-      await getTopOrderBook(
-        coin
-      );
-
-    if (
-      !orderBook
-    ) {
-      return res
-        .status(
-          502
-        )
-        .json({
-          error:
-            "Unable to fetch orderbook",
-        });
-    }
-
-    return res.json(
-      orderBook
-    );
-  }
-);
-
-/* ============================================================
-   BOOK STRUCTURE ENDPOINT
-============================================================ */
-
-app.get(
-  "/book-structure/:coin",
-  async (
-    req,
-    res
-  ) => {
-    const coin =
-      String(
-        req.params.coin ||
-          ""
-      ).toUpperCase();
-
-    if (
-      !SCAN_COINS.includes(
-        coin
-      )
-    ) {
-      return res
-        .status(
-          400
-        )
-        .json({
-          error:
-            "Unsupported coin",
-        });
-    }
-
-    const ticker =
-      await getTicker(
-        coin
-      );
-
-    if (
-      !ticker
-    ) {
-      return res
-        .status(
-          502
-        )
-        .json({
-          error:
-            "Unable to fetch ticker",
-        });
-    }
-
-    const structure =
-      await getOrderBookStructure(
-        coin,
-        ticker.currentPrice
-      );
-
-    return res.json({
-      ready:
-        Boolean(
-          structure
-        ),
-
-      currentPrice:
-        ticker.currentPrice,
-
-      data:
-        structure,
-    });
-  }
-);
-
-/* ============================================================
-   MARKET STRUCTURE ENDPOINT
+   STRUCTURE ENDPOINT
 ============================================================ */
 
 app.get(
@@ -10271,7 +11415,7 @@ app.get(
       ).toUpperCase();
 
     if (
-      !CORE_COINS.includes(
+      !SCAN_COINS.includes(
         coin
       )
     ) {
@@ -10281,7 +11425,7 @@ app.get(
         )
         .json({
           error:
-            "Only BTC and GRT are supported",
+            "Unsupported coin",
         });
     }
 
@@ -10302,361 +11446,6 @@ app.get(
 );
 
 /* ============================================================
-   NEXT RESISTANCE ENDPOINT
-============================================================ */
-
-app.get(
-  "/next-resistance/:coin",
-  async (
-    req,
-    res
-  ) => {
-    const coin =
-      String(
-        req.params.coin ||
-          ""
-      ).toUpperCase();
-
-    if (
-      !SCAN_COINS.includes(
-        coin
-      )
-    ) {
-      return res
-        .status(
-          400
-        )
-        .json({
-          error:
-            "Unsupported coin",
-        });
-    }
-
-    const ticker =
-      await getTicker(
-        coin
-      );
-
-    if (
-      !ticker
-    ) {
-      return res
-        .status(
-          502
-        )
-        .json({
-          error:
-            "Unable to fetch ticker",
-        });
-    }
-
-    const resistance =
-      await findNextOrderBookResistance(
-        coin,
-        ticker.currentPrice
-      );
-
-    return res.json({
-      coin,
-
-      currentPrice:
-        ticker.currentPrice,
-
-      resistance,
-    });
-  }
-);
-
-/* ============================================================
-   2H FLOW ENDPOINT
-============================================================ */
-
-app.get(
-  "/flow/:coin",
-  async (
-    req,
-    res
-  ) => {
-    const coin =
-      String(
-        req.params.coin ||
-          ""
-      ).toUpperCase();
-
-    if (
-      !CORE_COINS.includes(
-        coin
-      )
-    ) {
-      return res
-        .status(
-          400
-        )
-        .json({
-          error:
-            "Only BTC and GRT are supported",
-        });
-    }
-
-    const data =
-      await analyze2HMarketCondition(
-        coin
-      );
-
-    return res.json({
-      ready:
-        Boolean(
-          data
-        ),
-
-      data,
-    });
-  }
-);
-
-/* ============================================================
-   GRT DAILY WATCH ENDPOINT
-============================================================ */
-
-app.get(
-  "/grt24",
-  async (
-    req,
-    res
-  ) => {
-    const state =
-      ensureDailyWatchState();
-
-    const metrics =
-      getDailyWatchMetrics(
-        state
-      );
-
-    return res.json({
-      timezone:
-        MALAYSIA_TIMEZONE,
-
-      dateKey:
-        state.dateKey,
-
-      state,
-
-      metrics,
-
-      history:
-        GRT_DAILY_HISTORY,
-    });
-  }
-);
-
-/* ============================================================
-   BREAKOUT WATCH ENDPOINT
-============================================================ */
-
-app.get(
-  "/watch/:coin",
-  (
-    req,
-    res
-  ) => {
-    const coin =
-      String(
-        req.params.coin ||
-          ""
-      ).toUpperCase();
-
-    if (
-      !CORE_COINS.includes(
-        coin
-      )
-    ) {
-      return res
-        .status(
-          400
-        )
-        .json({
-          error:
-            "Only BTC and GRT are supported",
-        });
-    }
-
-    const watch =
-      BREAKOUT_WATCH[
-        coin
-      ];
-
-    if (
-      !watch
-    ) {
-      return res.json({
-        active:
-          false,
-
-        coin,
-      });
-    }
-
-    return res.json({
-      active:
-        true,
-
-      coin,
-
-      resistance:
-        watch.resistance,
-
-      resistanceStrength:
-        watch.resistanceStrength,
-
-      startedAt:
-        watch.startedAt,
-
-      firstAboveAt:
-        watch.firstAboveAt,
-
-      lastAboveAt:
-        watch.lastAboveAt,
-
-      lastAbovePrice:
-        watch.lastAbovePrice,
-
-      aboveTradeCount:
-        watch.aboveTradeCount,
-
-      buyEvidenceScore:
-        watch.buyEvidenceScore,
-
-      acceptanceScore:
-        watch.acceptanceScore,
-
-      failureScore:
-        watch.failureScore,
-
-      confirmed:
-        watch.confirmed,
-    });
-  }
-);
-
-/* ============================================================
-   ACTIVE TRADE ENDPOINT
-============================================================ */
-
-app.get(
-  "/trade/:coin",
-  (
-    req,
-    res
-  ) => {
-    const coin =
-      String(
-        req.params.coin ||
-          ""
-      ).toUpperCase();
-
-    if (
-      !SCAN_COINS.includes(
-        coin
-      )
-    ) {
-      return res
-        .status(
-          400
-        )
-        .json({
-          error:
-            "Unsupported coin",
-        });
-    }
-
-    const trade =
-      ACTIVE_TRADES[
-        coin
-      ];
-
-    if (
-      !trade
-    ) {
-      return res.json({
-        active:
-          false,
-
-        coin,
-      });
-    }
-
-    return res.json({
-      active:
-        true,
-
-      coin,
-
-      data:
-        trade,
-    });
-  }
-);
-
-/* ============================================================
-   PENDING ENTRY ENDPOINT
-============================================================ */
-
-app.get(
-  "/pending/:coin",
-  (
-    req,
-    res
-  ) => {
-    const coin =
-      String(
-        req.params.coin ||
-          ""
-      ).toUpperCase();
-
-    if (
-      !SCAN_COINS.includes(
-        coin
-      )
-    ) {
-      return res
-        .status(
-          400
-        )
-        .json({
-          error:
-            "Unsupported coin",
-        });
-    }
-
-    const entry =
-      PENDING_ENTRIES[
-        coin
-      ];
-
-    if (
-      !entry
-    ) {
-      return res.json({
-        pending:
-          false,
-
-        coin,
-      });
-    }
-
-    return res.json({
-      pending:
-        true,
-
-      coin,
-
-      data:
-        entry,
-    });
-  }
-);
-
-/* ============================================================
    STARTUP
 ============================================================ */
 
@@ -10667,16 +11456,31 @@ app.listen(
       `RUNNING ${PORT} ${SERVICE_CODE}`
     );
 
+    /*
+      Load stored state before
+      starting the monitoring engines.
+    */
+
     loadDailyWatchSnapshot();
 
+    loadGRTBuyNowHistory();
+
+    loadGRTTuning();
+
     ensureDailyWatchState();
+
+    /*
+      Prime local data.
+    */
+
+    await backfillTradeHistory();
 
     await collectTradeHistory();
 
     await updateMemory();
 
     /* ========================================================
-       TEST LUNO CANDLE AUTH
+       LUNO CANDLE AUTH TEST
     ======================================================== */
 
     let candleStatus =
@@ -10686,7 +11490,7 @@ app.listen(
       LUNO_API_KEY_ID &&
       LUNO_API_KEY_SECRET
     ) {
-      const candleTest =
+      const test =
         await getLunoCandles(
           "GRT",
           300,
@@ -10694,13 +11498,13 @@ app.listen(
         );
 
       if (
-        candleTest.length
+        test.length
       ) {
         candleStatus =
           "ACTIVE";
 
         console.log(
-          `LUNO CANDLE API READY — ${candleTest.length} candles`
+          `LUNO CANDLE API READY — ${test.length} candles`
         );
       } else {
         candleStatus =
@@ -10726,44 +11530,71 @@ app.listen(
         );
 
       if (
-        ticker
+        !ticker
       ) {
-        const structure =
-          await getOrderBookStructure(
-            coin,
-            ticker.currentPrice
-          );
+        continue;
+      }
 
-        if (
-          structure
-        ) {
-          console.log(
-            `${coin} ORDERBOOK STRUCTURE READY`
-          );
-        }
+      const structure =
+        await getOrderBookStructure(
+          coin,
+          ticker.currentPrice
+        );
+
+      if (
+        structure
+      ) {
+        console.log(
+          `${coin} ORDERBOOK STRUCTURE READY`
+        );
       }
     }
 
     await sendTelegram(
       `✅ BOT ONLINE
 
-🚀 INSTITUTIONAL SCALPING TERMINAL ACTIVE
-
 📡 PRICE ALERT:
-5 MIN + MOMENTUM
+5 MIN
 
-⚡ VOLUME SPIKE:
-+${MOMENTUM_SPIKE_THRESHOLD_PCT}% VS 1H BASELINE
-
-₿ BTC MOMENTUM:
-RADAR ONLY
+₿ BTC:
+BUY SURGE RADAR
+Executed BUY + Positive Price Response
 
 🪙 GRT MOMENTUM:
-RSI 5M + MA9/MA50 1H
-+ EXECUTED FLOW
-+ PRICE RESPONSE
-+ LIQUIDITY
-+ ORDERBOOK
+🔴 NO ENTRY SIGNAL
+🟡 VERIFYING BUY
+🟢 BUY NOW
+
+🟢 BUY NOW:
+TRIGGERS SCALPING ENTRY SAFETY CHECK
+
+⚡ BUY ACTIVITY THRESHOLD:
++${MOMENTUM_SPIKE_THRESHOLD_PCT}%
+
+🎯 GRT BUY DOMINANCE:
+${GRT_DYNAMIC_BUY_VOLUME_MIN_PCT.toFixed(
+        0
+      )}%
+
+📈 GRT FILTERS:
+RSI 5M
+MA9 / MA50 1H
+Executed BUY
+Price Response
+Orderbook
+Liquidity
+Support / Resistance
+
+🧪 BUY NOW LEARNING:
+ACTIVE
+
+Outcome:
+5M / 10M / 15M
+Best Move / Worst Move
+
+🧠 SEMI-AUTO TUNING:
+ACTIVE
+USER APPROVAL REQUIRED
 
 🔐 LUNO CANDLE API:
 ${candleStatus}
@@ -10771,50 +11602,23 @@ ${candleStatus}
 📊 MARKET STRUCTURE:
 15 MIN
 
-🟢 SUPPORT:
-LIVE BUY WALL
-
-🔴 RESISTANCE:
-LIVE SELL WALL
-
-👀 ANTI-FAKE BREAKOUT:
+🚀 SCALPING:
 ACTIVE
 
-🧾 EXECUTED TRADE CONFIRMATION:
-ACTIVE
-
-📚 QUANTITY-AWARE ORDERBOOK:
-ACTIVE
-
-🎯 MAX ENTRY CHASE:
-${MAX_ENTRY_CHASE_PCT.toFixed(
-        2
-      )}%
-
-🧱 NEXT RESISTANCE FILTER:
-ACTIVE
-
-🚀 SCALPING ENTRY:
-ACTIVE
-
-📦 MATCHED QUANTITY FLOW:
-ACTIVE
-
-🧠 2H ANALYSIS:
-BACKGROUND ONLY
-
-🌙 GRT 24H DAILY REPORT:
-12AM MYT`
+🌙 GRT DAILY WATCH:
+ACTIVE`
     );
 
     await checkDailyWatchRollover();
 
     saveDailyWatchSnapshot();
+
+    saveGRTBuyNowHistory();
   }
 );
 
 /* ============================================================
-   SCHEDULES
+   SCHEDULERS
 ============================================================ */
 
 /* ============================================================
@@ -10823,7 +11627,16 @@ BACKGROUND ONLY
 ============================================================ */
 
 setInterval(
-  collectTradeHistory,
+  () => {
+    collectTradeHistory()
+      .catch(
+        (error) =>
+          console.log(
+            "Trade collector interval:",
+            error.message
+          )
+      );
+  },
   TRADE_COLLECT_INTERVAL
 );
 
@@ -10833,8 +11646,36 @@ setInterval(
 ============================================================ */
 
 setInterval(
-  updateMemory,
+  () => {
+    updateMemory()
+      .catch(
+        (error) =>
+          console.log(
+            "Price memory interval:",
+            error.message
+          )
+      );
+  },
   PRICE_MEMORY_INTERVAL
+);
+
+/* ============================================================
+   ACTIVE TRADE MONITOR
+   EVERY 15 SECONDS
+============================================================ */
+
+setInterval(
+  () => {
+    monitorTrades()
+      .catch(
+        (error) =>
+          console.log(
+            "Trade monitor interval:",
+            error.message
+          )
+      );
+  },
+  TRADE_MONITOR_INTERVAL
 );
 
 /* ============================================================
@@ -10843,8 +11684,36 @@ setInterval(
 ============================================================ */
 
 setInterval(
-  scanSignals,
+  () => {
+    scanSignals()
+      .catch(
+        (error) =>
+          console.log(
+            "Scalping scan interval:",
+            error.message
+          )
+      );
+  },
   SCALPING_SCAN_INTERVAL
+);
+
+/* ============================================================
+   GRT BUY NOW LEARNING MONITOR
+   EVERY 1 MINUTE
+============================================================ */
+
+setInterval(
+  () => {
+    monitorGRTBuyNowSignals()
+      .catch(
+        (error) =>
+          console.log(
+            "BUY NOW learning interval:",
+            error.message
+          )
+      );
+  },
+  GRT_BUY_NOW_MONITOR_INTERVAL
 );
 
 /* ============================================================
@@ -10853,7 +11722,16 @@ setInterval(
 ============================================================ */
 
 setInterval(
-  sendPriceAlert,
+  () => {
+    sendPriceAlert()
+      .catch(
+        (error) =>
+          console.log(
+            "Price alert interval:",
+            error.message
+          )
+      );
+  },
   PRICE_ALERT_INTERVAL
 );
 
@@ -10863,39 +11741,51 @@ setInterval(
 ============================================================ */
 
 setInterval(
-  sendMarketStructure,
+  () => {
+    sendMarketStructure()
+      .catch(
+        (error) =>
+          console.log(
+            "Market structure interval:",
+            error.message
+          )
+      );
+  },
   MARKET_STRUCTURE_INTERVAL
 );
 
 /* ============================================================
-   ACTIVE TRADE MONITOR
-   EVERY 15 SECONDS
+   DAILY WATCH DAY CHANGE CHECK
 ============================================================ */
 
 setInterval(
-  monitorTrades,
-  TRADE_MONITOR_INTERVAL
-);
-
-/* ============================================================
-   GRT DAILY WATCH ROLLOVER
-   CHECK EVERY 1 MINUTE
-
-   Actual day boundary uses:
-   Asia/Kuala_Lumpur
-============================================================ */
-
-setInterval(
-  checkDailyWatchRollover,
+  () => {
+    checkDailyWatchRollover()
+      .catch(
+        (error) =>
+          console.log(
+            "Daily rollover interval:",
+            error.message
+          )
+      );
+  },
   DAILY_WATCH_CHECK_INTERVAL
 );
 
 /* ============================================================
-   DAILY WATCH SNAPSHOT
-   EVERY 1 MINUTE
+   SAVE DAILY WATCH
 ============================================================ */
 
 setInterval(
   saveDailyWatchSnapshot,
   DAILY_WATCH_SAVE_INTERVAL
+);
+
+/* ============================================================
+   SAVE BUY NOW LEARNING
+============================================================ */
+
+setInterval(
+  saveGRTBuyNowHistory,
+  60 * 1000
 );
