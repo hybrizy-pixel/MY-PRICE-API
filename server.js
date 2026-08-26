@@ -21,6 +21,46 @@ const bot = new TelegramBot(BOT_TOKEN, {
   polling: true,
 });
 
+bot.setMyCommands([
+  {
+    command: "momentum",
+    description: "Check BTC & GRT momentum",
+  },
+  {
+    command: "structure",
+    description: "Check BTC & GRT market structure",
+  },
+  {
+    command: "flow",
+    description: "Check 2H executed flow",
+  },
+  {
+    command: "grt24",
+    description: "GRT 24H daily report",
+  },
+  {
+    command: "buytest",
+    description: "GRT BUY NOW test statistics",
+  },
+  {
+    command: "buylast",
+    description: "Show latest GRT BUY NOW result",
+  },
+  {
+    command: "tuning",
+    description: "Check GRT tuning status",
+  },
+  {
+    command: "status",
+    description: "Bot system status",
+  },
+]).catch((error) => {
+  console.log(
+    "Telegram command menu error:",
+    error.message
+  );
+});
+
 /* ============================================================
    UNIQUE SERVICE CODE
 ============================================================ */
