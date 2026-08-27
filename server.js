@@ -12205,34 +12205,49 @@ async function analyzeActiveGRTHoldStatus(
       currentPrice
     );
 
-  const buyPct =
-    safeNumber(
-      execution.flow
-        .buyVolumePct,
-      50
-    );
 
-  const sellPct =
-    safeNumber(
-      execution.flow
-        .sellVolumePct,
-      50
-    );
+const flowReady =
+  Boolean(
+    execution.flow &&
+    execution.flow.totalCount >
+      0
+  );
 
-  const buyFrequency =
-    safeNumber(
-      execution.flow
-        .buyFrequencyPct,
-      50
-    );
+const buyPct =
+  flowReady
+    ? safeNumber(
+        execution.flow
+          .buyVolumePct,
+        50
+      )
+    : null;
 
-  const sellFrequency =
-    safeNumber(
-      execution.flow
-        .sellFrequencyPct,
-      50
-    );
+const sellPct =
+  flowReady
+    ? safeNumber(
+        execution.flow
+          .sellVolumePct,
+        50
+      )
+    : null;
 
+const buyFrequency =
+  flowReady
+    ? safeNumber(
+        execution.flow
+          .buyFrequencyPct,
+        50
+      )
+    : null;
+
+const sellFrequency =
+  flowReady
+    ? safeNumber(
+        execution.flow
+          .sellFrequencyPct,
+        50
+      )
+    : null;
   const support =
     execution.support;
 
@@ -12244,17 +12259,19 @@ async function analyzeActiveGRTHoldStatus(
           0.997
     );
 
-  const strongSellPressure =
-    sellPct >=
-      65 &&
-    sellFrequency >=
-      58;
+ const strongSellPressure =
+  flowReady &&
+  sellPct >=
+    65 &&
+  sellFrequency >=
+    58;
 
-  const buyerHealthy =
-    buyPct >=
-      52 &&
-    buyFrequency >=
-      50;
+const buyerHealthy =
+  flowReady &&
+  buyPct >=
+    52 &&
+  buyFrequency >=
+    50;
 
   const sustained =
     Boolean(
@@ -12397,22 +12414,24 @@ async function analyzeActiveGRTHoldStatus(
       accelerating
         ? "SUSTAINED BUYING + ACCELERATION"
         : "PRICE STRUCTURE STILL HEALTHY";
-  } else if (
-    strongSellPressure
-  ) {
-    status =
-      "CAUTION";
+ } else if (
+  flowReady &&
+  !buyerHealthy
+) {
+  status =
+    "CAUTION";
 
-    reason =
-      "SELL PRESSURE INCREASING";
-  } else if (
-    !buyerHealthy
-  ) {
-    status =
-      "CAUTION";
+  reason =
+    "BUY ACTIVITY WEAKENING";
+} else if (
+  !flowReady
+) {
+  status =
+    "CAUTION";
 
-    reason =
-      "BUY ACTIVITY WEAKENING";
+  reason =
+    "EXECUTED FLOW DATA NOT READY";
+
   }
 
   return {
@@ -14534,33 +14553,48 @@ async function analyzeManualGRTHold({
   const resistance =
     execution.resistance;
 
-  const buyVolumePct =
-    safeNumber(
-      execution.flow
-        .buyVolumePct,
-      50
-    );
+const flowReady =
+  Boolean(
+    execution.flow &&
+    execution.flow.totalCount >
+      0
+  );
 
-  const sellVolumePct =
-    safeNumber(
-      execution.flow
-        .sellVolumePct,
-      50
-    );
+const buyVolumePct =
+  flowReady
+    ? safeNumber(
+        execution.flow
+          .buyVolumePct,
+        50
+      )
+    : null;
 
-  const buyFrequencyPct =
-    safeNumber(
-      execution.flow
-        .buyFrequencyPct,
-      50
-    );
+const sellVolumePct =
+  flowReady
+    ? safeNumber(
+        execution.flow
+          .sellVolumePct,
+        50
+      )
+    : null;
 
-  const sellFrequencyPct =
-    safeNumber(
-      execution.flow
-        .sellFrequencyPct,
-      50
-    );
+const buyFrequencyPct =
+  flowReady
+    ? safeNumber(
+        execution.flow
+          .buyFrequencyPct,
+        50
+      )
+    : null;
+
+const sellFrequencyPct =
+  flowReady
+    ? safeNumber(
+        execution.flow
+          .sellFrequencyPct,
+        50
+      )
+    : null;
 
   const sustained =
     Boolean(
@@ -14584,11 +14618,12 @@ async function analyzeManualGRTHold({
           0.997
     );
 
-  const sellingDanger =
-    sellVolumePct >=
-      65 &&
-    sellFrequencyPct >=
-      58;
+const sellingDanger =
+  flowReady &&
+  sellVolumePct >=
+    65 &&
+  sellFrequencyPct >=
+    58;
 
   const momentumFailure =
     Boolean(
@@ -14751,6 +14786,8 @@ async function analyzeManualGRTHold({
     twoHour,
 
     projection,
+
+    flowReady,
 
     support,
 
@@ -14950,14 +14987,18 @@ ${analysis.accelerating
   : "NO"}
 
 🧾 BUY Volume:
-${analysis.buyVolumePct.toFixed(
-    1
-  )}%
+${analysis.flowReady
+  ? `${analysis.buyVolumePct.toFixed(
+      1
+    )}%`
+  : "DATA NOT READY"}
 
 🧾 BUY Frequency:
-${analysis.buyFrequencyPct.toFixed(
-    1
-  )}%
+${analysis.flowReady
+  ? `${analysis.buyFrequencyPct.toFixed(
+      1
+    )}%`
+  : "DATA NOT READY"}
 
 🟢 Support:
 ${supportText}
