@@ -1486,6 +1486,9 @@ function formatGRTDirection(
     case "DROP_PERLAHAN":
       return "📉 DROP PERLAHAN";
 
+    case "SIDEWAY":
+      return "➖ SIDEWAY";
+
     case "NAIK_PERLAHAN":
       return "📈 NAIK PERLAHAN";
 
@@ -1642,10 +1645,17 @@ function getGRTFastDirection(
      WEAK DROP / FLAT-DOWN
   ======================================================== */
 
-  else {
-    direction =
-      "DROP_PERLAHAN";
-  }
+else if (
+  change5m < 0
+) {
+  direction =
+    "DROP_PERLAHAN";
+}
+
+else {
+  direction =
+    "SIDEWAY";
+}
 
   if (
     GRT_MOMENTUM_RUNTIME
