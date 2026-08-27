@@ -12209,8 +12209,8 @@ async function analyzeActiveGRTHoldStatus(
 const flowReady =
   Boolean(
     execution.flow &&
-    execution.flow.totalCount >
-      0
+    execution.flow.totalCount >=
+      5
   );
 
 const buyPct =
@@ -14556,8 +14556,8 @@ async function analyzeManualGRTHold({
 const flowReady =
   Boolean(
     execution.flow &&
-    execution.flow.totalCount >
-      0
+    execution.flow.totalCount >=
+      5
   );
 
 const buyVolumePct =
