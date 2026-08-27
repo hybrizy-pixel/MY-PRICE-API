@@ -21808,146 +21808,49 @@ ${error.message}`
    instead of crashing Telegram.
 ============================================================ */
 
-bot.onText(
-  /^\/grt24(?:@\w+)?$/i,
-  async (
-    msg
-  ) => {
-    const chatId =
-      msg.chat.id;
+/* ============================================================
+   INTERACTIVE GRT HOLD — COMMAND
 
-    try {
-      if (
-        typeof buildGRT24Report !==
-        "function"
-      ) {
-        await replyTelegram(
-          chatId,
-          "🌙 GRT 24H module belum ready."
-        );
-
-        return;
-      }
-
-      const report =
-        await buildGRT24Report();
-
-      await replyTelegram(
-        chatId,
-        report
-      );
-    } catch (
-      error
-    ) {
-      await replyTelegram(
-        chatId,
-        `⚠️ GRT24 error:
-${error.message}`
-      );
-    }
-  }
-);
-
+   Flow:
+   /grthold
+      ↓
+   Ask ENTRY PRICE
+      ↓
+   WAIT_GRT_HOLD_ENTRY
+============================================================ */
 
 bot.onText(
   /^\/grthold(?:@\w+)?$/i,
-  async (
-    msg
-  ) => {
-    const chatId =
-      msg.chat.id;
+  async (msg) => {
+    const chatId = msg.chat.id;
 
-    try {
-      const ticker =
-        await getTicker(
-          "GRT"
-        );
+    clearTelegramUserState(chatId);
 
-      if (
-        !ticker
-      ) {
-        await replyTelegram(
-          chatId,
-          "⚠️ GRT ticker unavailable."
-        );
+    setTelegramUserState(chatId, {
+      step: "WAIT_GRT_HOLD_ENTRY",
+    });
 
-        return;
-      }
+    await replyTelegram(
+      chatId,
+      `📡 GRT HOLD ANALYSIS
 
-      const momentum =
-        await getGRTMomentumDecision(
-          ticker
-        );
+Masukkan ENTRY PRICE GRT anda.
 
-      const projection =
-        await calculateGRTProjectedReach({
-          currentPrice:
-            ticker.currentPrice,
-
-          momentum,
-        });
-
-      await replyTelegram(
-        chatId,
-        `📡 GRT HOLD ANALYSIS
-
-💵 Current:
-RM${formatPrice(
-          "GRT",
-          ticker.currentPrice
-        )}
-
-⚡ Momentum:
-${momentum.text ||
-  momentum.status}
-
-${momentum.directionText ||
-  ""}
-
-🎯 Projected TP1:
-${
-  projection?.tp1
-    ? `RM${formatPrice(
-        "GRT",
-        projection.tp1
-      )}`
-    : "N/A"
-}
-
-🚀 Projected TP2:
-${
-  projection?.tp2
-    ? `RM${formatPrice(
-        "GRT",
-        projection.tp2
-      )}`
-    : "N/A"
-}
-
-📌 Projection:
-${projection?.reason ||
-  "N/A"}`
-      );
-    } catch (
-      error
-    ) {
-      await replyTelegram(
-        chatId,
-        `⚠️ GRT HOLD error:
-${error.message}`
-      );
-    }
+Contoh:
+0.0709`
+    );
   }
 );
 
 
+/* ============================================================
+   BUY NOW TEST STATISTICS
+============================================================ */
+
 bot.onText(
   /^\/buytest(?:@\w+)?$/i,
-  async (
-    msg
-  ) => {
-    const chatId =
-      msg.chat.id;
+  async (msg) => {
+    const chatId = msg.chat.id;
 
     try {
       if (
@@ -21980,9 +21883,7 @@ ${JSON.stringify(
   2
 )}`
       );
-    } catch (
-      error
-    ) {
+    } catch (error) {
       await replyTelegram(
         chatId,
         `⚠️ BUY test error:
@@ -21993,23 +21894,21 @@ ${error.message}`
 );
 
 
+/* ============================================================
+   LAST BUY NOW RECORD
+============================================================ */
+
 bot.onText(
   /^\/buylast(?:@\w+)?$/i,
-  async (
-    msg
-  ) => {
-    const chatId =
-      msg.chat.id;
+  async (msg) => {
+    const chatId = msg.chat.id;
 
     const latest =
       GRT_BUY_NOW_HISTORY[
-        GRT_BUY_NOW_HISTORY.length -
-          1
+        GRT_BUY_NOW_HISTORY.length - 1
       ];
 
-    if (
-      !latest
-    ) {
+    if (!latest) {
       await replyTelegram(
         chatId,
         "🧪 Belum ada rekod BUY NOW."
@@ -22032,22 +21931,21 @@ ${JSON.stringify(
 );
 
 
+/* ============================================================
+   GRT TUNING STATUS
+============================================================ */
+
 bot.onText(
   /^\/tuning(?:@\w+)?$/i,
-  async (
-    msg
-  ) => {
-    const chatId =
-      msg.chat.id;
+  async (msg) => {
+    const chatId = msg.chat.id;
 
     await replyTelegram(
       chatId,
       `🧠 GRT TUNING STATUS
 
 Dynamic BUY Volume Min:
-${GRT_DYNAMIC_BUY_VOLUME_MIN_PCT.toFixed(
-        1
-      )}%
+${GRT_DYNAMIC_BUY_VOLUME_MIN_PCT.toFixed(1)}%
 
 Learning Records:
 ${GRT_BUY_NOW_HISTORY.length}
@@ -22057,7 +21955,6 @@ ${GRT_TUNING_MIN_COMPLETED_SIGNALS}`
     );
   }
 );
-
 
 /* ============================================================
    CALLBACK QUERY HANDLER
@@ -22472,10 +22369,657 @@ bot.on(
       return;
     }
 
+    /* ======================================================
+       MANUAL GRT HOLD CHECK — USER INPUT FLOW
+
+       PURPOSE:
+       Check any manually purchased GRT position.
+
+       Independent from:
+       - Scalping Entry
+       - PENDING_ENTRIES
+       - ACTIVE_TRADES
+
+       FLOW:
+
+       /grthold
+          ↓
+       ENTRY PRICE
+          ↓
+       QUANTITY
+          ↓
+       CURRENT NET P/L
+          ↓
+       BREAK EVEN
+          ↓
+       DISTANCE TO BREAK EVEN
+          ↓
+       HOLD / CAUTION / EXIT EARLY
+          ↓
+       PROJECTED TP1 / TP2
+          ↓
+       DISTANCE + NET PROFIT
+    ====================================================== */
+
+
+    /* ======================================================
+       STEP 1 — RECEIVE ENTRY PRICE
+    ====================================================== */
+
+    if (
+      state.step ===
+      "WAIT_GRT_HOLD_ENTRY"
+    ) {
+      const entryPrice =
+        Number(
+          text.replace(
+            ",",
+            "."
+          )
+        );
+
+      if (
+        !Number.isFinite(
+          entryPrice
+        ) ||
+        entryPrice <=
+          0
+      ) {
+        await replyTelegram(
+          chatId,
+          `⚠️ Entry price tak sah.
+
+Masukkan contoh:
+0.0709`
+        );
+
+        return;
+      }
+
+      setTelegramUserState(
+        chatId,
+        {
+          step:
+            "WAIT_GRT_HOLD_QUANTITY",
+
+          entryPrice,
+        }
+      );
+
+      await replyTelegram(
+        chatId,
+        `📦 GRT HOLD CHECK
+
+💵 Entry Price:
+RM${formatPrice(
+          "GRT",
+          entryPrice
+        )}
+
+Sekarang masukkan QUANTITY GRT yang dibeli.
+
+Contoh:
+10000`
+      );
+
+      return;
+    }
+
+
+    /* ======================================================
+       STEP 2 — RECEIVE QUANTITY + RUN ANALYSIS
+    ====================================================== */
+
+    if (
+      state.step ===
+      "WAIT_GRT_HOLD_QUANTITY"
+    ) {
+      const quantity =
+        Number(
+          text.replace(
+            /,/g,
+            ""
+          )
+        );
+
+      if (
+        !Number.isFinite(
+          quantity
+        ) ||
+        quantity <=
+          0
+      ) {
+        await replyTelegram(
+          chatId,
+          `⚠️ Quantity tak sah.
+
+Masukkan contoh:
+10000`
+        );
+
+        return;
+      }
+
+      const entryPrice =
+        safeNumber(
+          state.entryPrice,
+          0
+        );
+
+      if (
+        entryPrice <=
+        0
+      ) {
+        clearTelegramUserState(
+          chatId
+        );
+
+        await replyTelegram(
+          chatId,
+          `⚠️ Entry price hilang.
+
+Taip /grthold semula.`
+        );
+
+        return;
+      }
+
+      try {
+        /* ================================================
+           CURRENT MARKET
+        ================================================ */
+
+        const ticker =
+          await getTicker(
+            "GRT"
+          );
+
+        if (
+          !ticker
+        ) {
+          await replyTelegram(
+            chatId,
+            "⚠️ GRT ticker unavailable."
+          );
+
+          return;
+        }
+
+        const currentPrice =
+          ticker.currentPrice;
+
+
+        /* ================================================
+           CURRENT MOMENTUM + PROJECTED REACH
+        ================================================ */
+
+        const momentum =
+          await getGRTMomentumDecision(
+            ticker
+          );
+
+        const projection =
+          await calculateGRTProjectedReach({
+            currentPrice,
+            momentum,
+          });
+
+
+        /* ================================================
+           MANUAL HOLD STATUS
+
+           NOT registered as active scalping trade.
+        ================================================ */
+
+        const holdAnalysis =
+          await analyzeActiveGRTHoldStatus(
+            {
+              coin:
+                "GRT",
+
+              buyPrice:
+                entryPrice,
+            },
+            ticker
+          );
+
+
+        /* ================================================
+           CURRENT NET P/L
+
+           Reuse existing Luno fee calculation.
+        ================================================ */
+
+        const currentFees =
+          calculateTradeAfterFees({
+            quantity,
+            entryPrice,
+            sellPrice:
+              currentPrice,
+          });
+
+        const tp1Fees =
+          projection?.tp1
+            ? calculateTradeAfterFees({
+                quantity,
+                entryPrice,
+                sellPrice:
+                  projection.tp1,
+              })
+            : null;
+
+        const tp2Fees =
+          projection?.tp2
+            ? calculateTradeAfterFees({
+                quantity,
+                entryPrice,
+                sellPrice:
+                  projection.tp2,
+              })
+            : null;
+
+
+        /* ================================================
+           CAPITAL
+        ================================================ */
+
+        const totalBuyCost =
+          quantity *
+          entryPrice;
+
+
+        /* ================================================
+           BREAK EVEN
+
+           Existing fee model:
+           BUY 0.5%
+           SELL 0.5%
+        ================================================ */
+
+        const netUnitAfterBuy =
+          quantity *
+          (
+            1 -
+            BUY_FEE
+          );
+
+        const sellableUnitAfterFee =
+          netUnitAfterBuy *
+          (
+            1 -
+            SELL_FEE
+          );
+
+        const breakEvenPrice =
+          sellableUnitAfterFee >
+            0
+            ? totalBuyCost /
+              sellableUnitAfterFee
+            : null;
+
+
+        /* ================================================
+           CURRENT POSITION
+        ================================================ */
+
+        const moveFromEntryPct =
+          percentChange(
+            entryPrice,
+            currentPrice
+          );
+
+
+        /* ================================================
+           DISTANCE TO BREAK EVEN
+        ================================================ */
+
+        const distanceToBreakEven =
+          breakEvenPrice
+            ? breakEvenPrice -
+              currentPrice
+            : null;
+
+        const distanceToBreakEvenPct =
+          breakEvenPrice &&
+          currentPrice >
+            0
+            ? percentChange(
+                currentPrice,
+                breakEvenPrice
+              )
+            : null;
+
+        const breakEvenReached =
+          Boolean(
+            breakEvenPrice &&
+            currentPrice >=
+              breakEvenPrice
+          );
+
+
+        /* ================================================
+           DISTANCE TO TP1
+        ================================================ */
+
+        const distanceToTP1 =
+          projection?.tp1
+            ? projection.tp1 -
+              currentPrice
+            : null;
+
+        const distanceToTP1Pct =
+          projection?.tp1 &&
+          currentPrice >
+            0
+            ? percentChange(
+                currentPrice,
+                projection.tp1
+              )
+            : null;
+
+        const tp1Reached =
+          Boolean(
+            projection?.tp1 &&
+            currentPrice >=
+              projection.tp1
+          );
+
+
+        /* ================================================
+           DISTANCE TO TP2
+        ================================================ */
+
+        const distanceToTP2 =
+          projection?.tp2
+            ? projection.tp2 -
+              currentPrice
+            : null;
+
+        const distanceToTP2Pct =
+          projection?.tp2 &&
+          currentPrice >
+            0
+            ? percentChange(
+                currentPrice,
+                projection.tp2
+              )
+            : null;
+
+        const tp2Reached =
+          Boolean(
+            projection?.tp2 &&
+            currentPrice >=
+              projection.tp2
+          );
+
+
+        /* ================================================
+           DISPLAY STATUS
+        ================================================ */
+
+        const pnlEmoji =
+          currentFees &&
+          currentFees.netProfit >=
+            0
+            ? "🟢"
+            : "🔴";
+
+        const holdStatus =
+          holdAnalysis?.status ||
+          "HOLD";
+
+        let holdEmoji =
+          "🟢";
+
+        if (
+          holdStatus ===
+          "CAUTION"
+        ) {
+          holdEmoji =
+            "🟡";
+        }
+
+        if (
+          holdStatus ===
+          "EXIT_EARLY"
+        ) {
+          holdEmoji =
+            "🔴";
+        }
+
+
+        /* ================================================
+           BREAK EVEN DISTANCE TEXT
+        ================================================ */
+
+        const breakEvenDistanceText =
+          !breakEvenPrice
+            ? "N/A"
+            : breakEvenReached
+              ? "✅ DAH LEPAS BREAK EVEN"
+              : `RM${formatPrice(
+                  "GRT",
+                  distanceToBreakEven
+                )} lagi (${formatPercent(
+                  distanceToBreakEvenPct
+                )})`;
+
+
+        /* ================================================
+           TP1 DISTANCE TEXT
+        ================================================ */
+
+        const tp1DistanceText =
+          !projection?.tp1
+            ? "N/A"
+            : tp1Reached
+              ? "✅ TP1 DAH DICAPAI"
+              : `RM${formatPrice(
+                  "GRT",
+                  distanceToTP1
+                )} lagi (${formatPercent(
+                  distanceToTP1Pct
+                )})`;
+
+
+        /* ================================================
+           TP2 DISTANCE TEXT
+        ================================================ */
+
+        const tp2DistanceText =
+          !projection?.tp2
+            ? "N/A"
+            : tp2Reached
+              ? "✅ TP2 DAH DICAPAI"
+              : `RM${formatPrice(
+                  "GRT",
+                  distanceToTP2
+                )} lagi (${formatPercent(
+                  distanceToTP2Pct
+                )})`;
+
+
+        /* ================================================
+           FINAL TELEGRAM REPORT
+        ================================================ */
+
+        await replyTelegram(
+          chatId,
+          `📡 MANUAL GRT HOLD CHECK
+
+━━━━━━━━━━━━━━
+
+📌 POSITION
+
+💵 Entry Price:
+RM${formatPrice(
+            "GRT",
+            entryPrice
+          )}
+
+📦 Quantity:
+${quantity.toLocaleString(
+            "en-MY"
+          )} GRT
+
+💳 Modal:
+RM${totalBuyCost.toFixed(
+            2
+          )}
+
+━━━━━━━━━━━━━━
+
+📊 CURRENT POSITION
+
+💵 Current Price:
+RM${formatPrice(
+            "GRT",
+            currentPrice
+          )}
+
+📈 Price vs Entry:
+${formatPercent(
+            moveFromEntryPct
+          )}
+
+${pnlEmoji} Current NET P/L:
+${
+  currentFees
+    ? `RM${currentFees.netProfit.toFixed(
+        2
+      )} (${formatPercent(
+        currentFees.netProfitPct
+      )})`
+    : "N/A"
+}
+
+━━━━━━━━━━━━━━
+
+⚖️ BREAK EVEN
+
+💵 Break Even Price:
+${
+  breakEvenPrice
+    ? `RM${formatPrice(
+        "GRT",
+        breakEvenPrice
+      )}`
+    : "N/A"
+}
+
+📏 Lagi nak Break Even:
+${breakEvenDistanceText}
+
+━━━━━━━━━━━━━━
+
+${holdEmoji} HOLD STATUS:
+${holdStatus}
+
+🧠 Reason:
+${holdAnalysis?.reason ||
+  "Monitoring current GRT structure."}
+
+━━━━━━━━━━━━━━
+
+⚡ MOMENTUM
+
+${momentum.text ||
+  momentum.status}
+
+${momentum.directionText ||
+  ""}
+
+━━━━━━━━━━━━━━
+
+🎯 PROJECTED TP1
+
+💵 Price:
+${
+  projection?.tp1
+    ? `RM${formatPrice(
+        "GRT",
+        projection.tp1
+      )}`
+    : "N/A"
+}
+
+📏 Lagi nak TP1:
+${tp1DistanceText}
+
+💰 NET Profit @ TP1:
+${
+  tp1Fees
+    ? `RM${tp1Fees.netProfit.toFixed(
+        2
+      )}`
+    : "N/A"
+}
+
+━━━━━━━━━━━━━━
+
+🚀 PROJECTED TP2
+
+💵 Price:
+${
+  projection?.tp2
+    ? `RM${formatPrice(
+        "GRT",
+        projection.tp2
+      )}`
+    : "N/A"
+}
+
+📏 Lagi nak TP2:
+${tp2DistanceText}
+
+💰 NET Profit @ TP2:
+${
+  tp2Fees
+    ? `RM${tp2Fees.netProfit.toFixed(
+        2
+      )}`
+    : "N/A"
+}
+
+━━━━━━━━━━━━━━
+
+📌 Projection:
+${projection?.reason ||
+  "N/A"}`
+        );
+
+
+        /* ================================================
+           FINISH MANUAL HOLD FLOW
+        ================================================ */
+
+        clearTelegramUserState(
+          chatId
+        );
+
+        return;
+      } catch (
+        error
+      ) {
+        clearTelegramUserState(
+          chatId
+        );
+
+        await replyTelegram(
+          chatId,
+          `⚠️ GRT HOLD error:
+${error.message}`
+        );
+
+        return;
+      }
+    }
+
 
     /* ======================================================
        TARGET NET PROFIT
     ====================================================== */
+
 
     if (
       state.step ===
