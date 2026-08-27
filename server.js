@@ -18142,7 +18142,80 @@ app.get(
     });
   }
 );
+/* ============================================================
+   DEBUG GRT EXECUTED TRADES
 
+   Purpose:
+   Check whether recent Luno executed trades
+   are being classified as BUY or SELL.
+
+   Temporary diagnostic endpoint.
+============================================================ */
+
+app.get(
+  "/debug/grttrades",
+  async (
+    req,
+    res
+  ) => {
+    const trades =
+      await getRecentTrades(
+        "GRT",
+        Date.now() -
+          5 *
+            60 *
+            1000
+      );
+
+    const buyTrades =
+      trades.filter(
+        (trade) =>
+          trade.isBuy
+      );
+
+    const sellTrades =
+      trades.filter(
+        (trade) =>
+          !trade.isBuy
+      );
+
+    res.json({
+      count:
+        trades.length,
+
+      buyCount:
+        buyTrades.length,
+
+      sellCount:
+        sellTrades.length,
+
+      buyFrequencyPct:
+        trades.length >
+          0
+          ? (
+              buyTrades.length /
+              trades.length
+            ) *
+            100
+          : 0,
+
+      sellFrequencyPct:
+        trades.length >
+          0
+          ? (
+              sellTrades.length /
+              trades.length
+            ) *
+            100
+          : 0,
+
+      latestTrades:
+        trades.slice(
+          -20
+        ),
+    });
+  }
+);
 /* ============================================================
    STARTUP
 ============================================================ */
