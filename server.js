@@ -1,12 +1,14 @@
 /* ============================================================
    PART 1 — SERVER + CONFIG + GLOBAL STATE
 
-   ONE AI COIN ALERT
+   SAFWAN CRIPTO AI ALERT
 
    PURPOSE:
    - Server setup
    - Telegram setup
    - Environment config
+   - Luno MAIN API initialization
+   - Luno TRADE API initialization
    - Coin configuration
    - Fees
    - Intervals
@@ -84,6 +86,10 @@ const bot =
 
 /* ============================================================
    TELEGRAM COMMAND MENU
+
+   UPDATED:
+   - /autostatus added
+   - /autooff added
 ============================================================ */
 
 bot.setMyCommands([
@@ -158,6 +164,22 @@ bot.setMyCommands([
     description:
       "Bot system status",
   },
+
+  {
+    command:
+      "autostatus",
+
+    description:
+      "Check Auto Trade session status",
+  },
+
+  {
+    command:
+      "autooff",
+
+    description:
+      "Stop Auto Trade session",
+  },
 ]).catch(
   (error) => {
     console.log(
@@ -192,9 +214,20 @@ const BOT_STARTED_AT =
 /* ============================================================
    LUNO FEES
 
-   Existing bot model:
+   IMPORTANT:
+
+   Existing signal / calculation engine currently uses:
+
    BUY  = 0.5%
    SELL = 0.5%
+
+   This value is retained for compatibility with the
+   existing bot.
+
+   Later, before REAL AUTO / SEMI AUTO trading is enabled,
+   the execution layer will obtain / calculate the actual
+   applicable maker / taker fee instead of blindly relying
+   on this fixed value.
 ============================================================ */
 
 const BUY_FEE =
@@ -205,18 +238,131 @@ const SELL_FEE =
 
 
 /* ============================================================
-   LUNO AUTHENTICATED API
+   LUNO API CREDENTIAL INITIALIZATION
+
+   TWO ACCOUNT ARCHITECTURE
+
+   ACCOUNT 1 — MAIN
+   ----------------
+   Purpose:
+   - Market monitoring
+   - Ticker
+   - Orderbook
+   - Executed trades
+   - Balance reading if required
+   - Existing bot functions
+
+   Recommended permission:
+   READ ONLY
+
+
+   ACCOUNT 2 — TRADE
+   -----------------
+   Purpose later:
+   - Semi Auto trading
+   - Full Auto trading
+   - Place BUY order
+   - Place SELL order
+   - Cancel order
+   - Check order status
+
+   IMPORTANT:
+   - TRADE API can remain EMPTY for now.
+   - NO withdrawal credential is initialized.
+   - NO withdrawal function will be connected to the
+     Auto Trade execution engine.
+============================================================ */
+
+
+/* ============================================================
+   MAIN LUNO ACCOUNT
+============================================================ */
+
+const LUNO_MAIN_API_KEY_ID =
+  process.env
+    .LUNO_MAIN_API_KEY_ID ||
+
+  process.env
+    .LUNO_API_KEY_ID ||
+
+  "";
+
+const LUNO_MAIN_API_KEY_SECRET =
+  process.env
+    .LUNO_MAIN_API_KEY_SECRET ||
+
+  process.env
+    .LUNO_API_KEY_SECRET ||
+
+  "";
+
+
+/* ============================================================
+   SECONDARY / TRADING LUNO ACCOUNT
+
+   Safe to leave blank until the secondary account
+   and API credentials are ready.
+============================================================ */
+
+const LUNO_TRADE_API_KEY_ID =
+  process.env
+    .LUNO_TRADE_API_KEY_ID ||
+  "";
+
+const LUNO_TRADE_API_KEY_SECRET =
+  process.env
+    .LUNO_TRADE_API_KEY_SECRET ||
+  "";
+
+
+/* ============================================================
+   BACKWARD COMPATIBILITY
+
+   Existing code in later PARTS may still reference:
+
+   LUNO_API_KEY_ID
+   LUNO_API_KEY_SECRET
+
+   They are intentionally mapped to MAIN account.
+
+   This prevents the current bot from breaking while
+   we migrate the architecture gradually.
 ============================================================ */
 
 const LUNO_API_KEY_ID =
-  process.env
-    .LUNO_API_KEY_ID ||
-  "";
+  LUNO_MAIN_API_KEY_ID;
 
 const LUNO_API_KEY_SECRET =
-  process.env
-    .LUNO_API_KEY_SECRET ||
-  "";
+  LUNO_MAIN_API_KEY_SECRET;
+
+
+/* ============================================================
+   LUNO API READINESS STATE
+
+   IMPORTANT:
+
+   tradeReady === false
+   means future execution engine MUST NOT submit orders.
+
+   We initialize this state now, but actual trading logic
+   will only be introduced later.
+============================================================ */
+
+const LUNO_API_STATUS = {
+
+  mainReady:
+    Boolean(
+      LUNO_MAIN_API_KEY_ID &&
+      LUNO_MAIN_API_KEY_SECRET
+    ),
+
+  tradeReady:
+    Boolean(
+      LUNO_TRADE_API_KEY_ID &&
+      LUNO_TRADE_API_KEY_SECRET
+    ),
+
+};
 
 
 /* ============================================================
@@ -1004,16 +1150,24 @@ const ALTCOIN_SCANNER_RUNTIME = {
    - Price formatting
    - Percentage calculations
    - Coin pair mapping
-   - Luno API helpers
+   - Luno MAIN API helpers
+   - Luno TRADE API foundation
    - Ticker
    - Orderbook
    - Executed trades
    - Candle retrieval
    - Price memory
    - Fee calculations
+   - Telegram helpers
 
    IMPORTANT:
    No GRT momentum decision happens here.
+
+   IMPORTANT API RULE:
+   MAIN API  = market/read functions
+   TRADE API = reserved for later execution engine
+
+   No withdrawal function exists here.
 ============================================================ */
 
 
@@ -1237,35 +1391,112 @@ function getPair(
 
 
 /* ============================================================
-   LUNO AUTH CONFIG
+   LUNO MAIN ACCOUNT AUTH
+
+   Existing monitoring functions use MAIN account only.
+
+   This allows the existing bot to keep running even
+   before TRADE account credentials are configured.
 ============================================================ */
 
-function getLunoAuth() {
+function getLunoMainAuth() {
   if (
-    !LUNO_API_KEY_ID ||
-    !LUNO_API_KEY_SECRET
+    !LUNO_MAIN_API_KEY_ID ||
+    !LUNO_MAIN_API_KEY_SECRET
   ) {
     return null;
   }
 
   return {
     username:
-      LUNO_API_KEY_ID,
+      LUNO_MAIN_API_KEY_ID,
 
     password:
-      LUNO_API_KEY_SECRET,
+      LUNO_MAIN_API_KEY_SECRET,
+  };
+}
+
+
+/* ============================================================
+   LUNO TRADE ACCOUNT AUTH
+
+   FOUNDATION ONLY.
+
+   This function DOES NOT execute any order.
+
+   It only prepares authentication for the future
+   Semi Auto / Full Auto execution module.
+============================================================ */
+
+function getLunoTradeAuth() {
+  if (
+    !LUNO_TRADE_API_KEY_ID ||
+    !LUNO_TRADE_API_KEY_SECRET
+  ) {
+    return null;
+  }
+
+  return {
+    username:
+      LUNO_TRADE_API_KEY_ID,
+
+    password:
+      LUNO_TRADE_API_KEY_SECRET,
+  };
+}
+
+
+/* ============================================================
+   BACKWARD COMPATIBILITY
+
+   Older functions that call getLunoAuth()
+   automatically use MAIN account.
+
+   This prevents existing code from breaking.
+============================================================ */
+
+function getLunoAuth() {
+  return getLunoMainAuth();
+}
+
+
+/* ============================================================
+   LUNO API ACCOUNT STATUS
+============================================================ */
+
+function getLunoApiReadiness() {
+  return {
+    mainReady:
+      Boolean(
+        getLunoMainAuth()
+      ),
+
+    tradeReady:
+      Boolean(
+        getLunoTradeAuth()
+      ),
   };
 }
 
 
 /* ============================================================
    SAFE LUNO GET REQUEST
+
+   accountType:
+
+   MAIN  = default market/read account
+   TRADE = future secondary trading account
+
+   GET requests only.
+
+   No order placement happens here.
 ============================================================ */
 
 async function lunoGet(
   endpoint,
   params = {},
-  authenticated = false
+  authenticated = false,
+  accountType = "MAIN"
 ) {
   const options = {
     method:
@@ -1283,14 +1514,28 @@ async function lunoGet(
   if (
     authenticated
   ) {
-    const auth =
-      getLunoAuth();
+    let auth =
+      null;
+
+    if (
+      accountType ===
+      "TRADE"
+    ) {
+      auth =
+        getLunoTradeAuth();
+    } else {
+      auth =
+        getLunoMainAuth();
+    }
 
     if (
       !auth
     ) {
       throw new Error(
-        "LUNO AUTH NOT CONFIGURED"
+        accountType ===
+          "TRADE"
+          ? "LUNO TRADE AUTH NOT CONFIGURED"
+          : "LUNO MAIN AUTH NOT CONFIGURED"
       );
     }
 
@@ -1604,9 +1849,11 @@ async function getRecentTrades(
              is_buy where available.
           */
 
-const isBuy =
-  trade.is_buy === true ||
-  trade.is_buy === "true";
+          const isBuy =
+            trade.is_buy ===
+              true ||
+            trade.is_buy ===
+              "true";
 
           return {
             sequence,
@@ -2139,6 +2386,20 @@ function getPriceSnapshot(
 
    Get closest price memory sample
    at or before requested lookback.
+
+   IMPORTANT:
+   This powers the redesigned rolling:
+
+   BTC:
+   15M
+
+   GRT:
+   5M
+   15M
+   1H
+
+   These are rolling measurements,
+   NOT candle-close measurements.
 ============================================================ */
 
 function getReferencePrice(
@@ -2188,12 +2449,162 @@ function getReferencePrice(
   /*
      Startup fallback:
      return oldest available sample.
+
+     Later Price Alert logic will know
+     that historical coverage may still
+     be immature during startup.
   */
 
   return memory[
     0
   ] ||
     null;
+}
+
+
+/* ============================================================
+   REFERENCE PRICE AGE
+
+   Used later so rolling movement can distinguish:
+
+   REAL 15M history
+
+   versus
+
+   bot just restarted and only has
+   a few minutes of price memory.
+============================================================ */
+
+function getReferencePriceAgeMs(
+  reference
+) {
+  if (
+    !reference ||
+    !reference.timestamp
+  ) {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    Date.now() -
+      safeNumber(
+        reference.timestamp,
+        Date.now()
+      )
+  );
+}
+
+
+/* ============================================================
+   ROLLING PRICE CHANGE HELPER
+
+   Generic helper used later by
+   redesigned Price Alert.
+
+   This DOES NOT classify BUY / SELL.
+
+   It only measures movement.
+============================================================ */
+
+function getRollingPriceChange(
+  coin,
+  currentPrice,
+  lookbackMs
+) {
+  const current =
+    safeNumber(
+      currentPrice,
+      0
+    );
+
+  if (
+    current <=
+    0
+  ) {
+    return {
+      ready:
+        false,
+
+      changePct:
+        0,
+
+      referencePrice:
+        null,
+
+      referenceTimestamp:
+        null,
+
+      ageMs:
+        0,
+    };
+  }
+
+  const reference =
+    getReferencePrice(
+      coin,
+      lookbackMs
+    );
+
+  if (
+    !reference ||
+    safeNumber(
+      reference.price,
+      0
+    ) <=
+      0
+  ) {
+    return {
+      ready:
+        false,
+
+      changePct:
+        0,
+
+      referencePrice:
+        null,
+
+      referenceTimestamp:
+        null,
+
+      ageMs:
+        0,
+    };
+  }
+
+  const ageMs =
+    getReferencePriceAgeMs(
+      reference
+    );
+
+  /*
+     Allow slight timing tolerance because
+     PRICE_MEMORY samples every ~15 seconds.
+  */
+
+  const minimumCoverage =
+    lookbackMs *
+    0.90;
+
+  return {
+    ready:
+      ageMs >=
+      minimumCoverage,
+
+    changePct:
+      percentChange(
+        reference.price,
+        current
+      ),
+
+    referencePrice:
+      reference.price,
+
+    referenceTimestamp:
+      reference.timestamp,
+
+    ageMs,
+  };
 }
 
 
@@ -2205,6 +2616,13 @@ function getReferencePrice(
    Tradeable unit
       ↓ SELL FEE
    Net sell unit
+
+   NOTE:
+   Current BUY_FEE / SELL_FEE are retained
+   for legacy calculations.
+
+   Real Auto Trade later will use the
+   applicable account fee information.
 ============================================================ */
 
 function calculateNetProfitPerGrossUnit({
@@ -2533,7 +2951,7 @@ ${text}`,
 
 /* ============================================================
    END PART 2
-============================================================ */
+==============================================================*/
 /* ============================================================
    PART 3 — EXECUTED FLOW + MARKET STRUCTURE
 
@@ -2725,12 +3143,6 @@ function getExecutedFlowSummary(
 
 /* ============================================================
    EXECUTED PRICE RESPONSE
-
-   Measures price movement inside
-   executed trade history.
-
-   Useful because price can move before
-   candle indicators fully confirm.
 ============================================================ */
 
 function getExecutedPriceResponse(
@@ -2967,10 +3379,6 @@ function formatPressure(
 
 /* ============================================================
    SIMPLE MARKET DIRECTION
-
-   Descriptive context only.
-
-   Does not independently create BUY NOW.
 ============================================================ */
 
 function getMarketDirection(
@@ -3044,17 +3452,6 @@ function formatMarketDirection(
 
 /* ============================================================
    2H MARKET CONDITION
-
-   This is context.
-
-   BTC:
-   general market context.
-
-   GRT:
-   can later provide confirmation boost.
-
-   ALTCOINS:
-   generic opportunity scanner may use it.
 ============================================================ */
 
 async function analyze2HMarketCondition(
@@ -3363,8 +3760,6 @@ function filterOrderBookRange(
 
 /* ============================================================
    CLUSTER ORDERBOOK LEVELS
-
-   Nearby prices are grouped into one wall.
 ============================================================ */
 
 function clusterOrderBookLevels(
@@ -3523,13 +3918,6 @@ function clusterOrderBookLevels(
 
 /* ============================================================
    WALL RATING
-
-   Rating:
-   1 → 10
-
-   Uses:
-   - relative volume
-   - distance from current price
 ============================================================ */
 
 function rateOrderBookWall({
@@ -3540,7 +3928,7 @@ function rateOrderBookWall({
   if (
     !wall ||
     currentPrice <=
-      0
+    0
   ) {
     return 0;
   }
@@ -3572,11 +3960,6 @@ function rateOrderBookWall({
       )
     );
 
-  /*
-     Volume strength:
-     approximately 1 → 8.
-  */
-
   const volumeScore =
     clamp(
       relativeRatio *
@@ -3584,11 +3967,6 @@ function rateOrderBookWall({
       1,
       8
     );
-
-  /*
-     Closer wall receives
-     a small relevance boost.
-  */
 
   const distanceBoost =
     clamp(
@@ -3763,12 +4141,6 @@ function findBestWall({
   if (
     !rated.length
   ) {
-    /*
-       No major wall.
-       Return strongest available
-       cluster as weak reference.
-    */
-
     const fallback =
       clusters
         .map(
@@ -3822,11 +4194,6 @@ function findBestWall({
     };
   }
 
-  /*
-     Prefer stronger wall,
-     then closer wall.
-  */
-
   rated.sort(
     (
       a,
@@ -3857,9 +4224,6 @@ function findBestWall({
 
 /* ============================================================
    LIQUIDITY ANALYSIS
-
-   Used later by GRT momentum engine
-   and generic altcoin scanner.
 ============================================================ */
 
 async function getLiquidityAnalysis(
@@ -4243,10 +4607,6 @@ async function getMarketStructureSnapshot(
 
 /* ============================================================
    EXECUTION STRUCTURE SNAPSHOT
-
-   Used later by:
-   - GRT Scalping Entry
-   - Generic Altcoin Scalping
 ============================================================ */
 
 async function getExecutionStructureSnapshot(
@@ -4405,10 +4765,6 @@ async function getExecutionStructureSnapshot(
 
 /* ============================================================
    MARKET STRUCTURE SECTION
-
-   User-friendly Telegram format.
-
-   No raw JSON.
 ============================================================ */
 
 function buildMarketStructureSection(
@@ -4490,8 +4846,6 @@ ${data.pressureText ||
 
 /* ============================================================
    2H FLOW TELEGRAM FORMATTER
-
-   Fixes old raw JSON output.
 ============================================================ */
 
 function build2HFlowSection(
@@ -4583,7 +4937,7 @@ ${coverageText}`;
 
 /* ============================================================
    END PART 3
-============================================================ */
+============================================================*/
 /* ============================================================
    PART 4 — GRT MOMENTUM ENGINE
 
@@ -4604,8 +4958,7 @@ ${coverageText}`;
    BUY NOW = momentum decision only.
 
    Profit room does NOT block BUY NOW here.
-   Practical entry quality is checked later
-   inside PART 5.
+   Practical entry quality is checked later in PART 5.
 ============================================================ */
 
 
@@ -4613,49 +4966,23 @@ ${coverageText}`;
    GRT MOMENTUM CONFIG
 ============================================================ */
 
-const GRT_EARLY_MIN_BUY_VOLUME_PCT =
-  52;
+const GRT_EARLY_MIN_BUY_VOLUME_PCT = 52;
+const GRT_EARLY_MIN_PRICE_RESPONSE_PCT = 0.03;
 
-const GRT_EARLY_MIN_PRICE_RESPONSE_PCT =
-  0.03;
+const GRT_SUSTAINED_MIN_BUY_VOLUME_PCT = 54;
+const GRT_SUSTAINED_MIN_BUY_FREQUENCY_PCT = 54;
 
-const GRT_SUSTAINED_MIN_BUY_VOLUME_PCT =
-  54;
+const GRT_SUSTAINED_15M_MOVE_PCT = 0.45;
+const GRT_SUSTAINED_30M_MOVE_PCT = 0.75;
 
-const GRT_SUSTAINED_MIN_BUY_FREQUENCY_PCT =
-  54;
-
-const GRT_SUSTAINED_15M_MOVE_PCT =
-  0.45;
-
-const GRT_SUSTAINED_30M_MOVE_PCT =
-  0.75;
-
-const GRT_ACCELERATION_5M_MOVE_PCT =
-  0.55;
-
-const GRT_ACCELERATION_15M_MOVE_PCT =
-  1.00;
-
-const GRT_ACCELERATION_30M_MOVE_PCT =
-  1.50;
-
-
-/*
-   Validation remains available,
-   but early BUY paths may bypass waiting.
-*/
+const GRT_ACCELERATION_5M_MOVE_PCT = 0.55;
+const GRT_ACCELERATION_15M_MOVE_PCT = 1.00;
+const GRT_ACCELERATION_30M_MOVE_PCT = 1.50;
 
 const GRT_VALIDATION_MAX_MS =
   10 *
   60 *
   1000;
-
-
-/*
-   Re-evaluate quickly when broader
-   movement is already meaningful.
-*/
 
 const GRT_FAST_REEVALUATE_30M_MOVE_PCT =
   1.00;
@@ -4663,24 +4990,6 @@ const GRT_FAST_REEVALUATE_30M_MOVE_PCT =
 
 /* ============================================================
    EARLY REVERSAL CONFIG
-
-   New path.
-
-   Goal:
-   detect genuine rebound before price
-   already runs too far.
-
-   Example:
-   0.0722
-      ↓
-   0.0720
-      ↓
-   0.0722
-      ↓
-   0.0725
-
-   We do NOT require the full +0.55%
-   fast breakout threshold here.
 ============================================================ */
 
 const GRT_EARLY_REVERSAL_MIN_5M_PCT =
@@ -4701,13 +5010,6 @@ const GRT_EARLY_REVERSAL_MIN_SCORE =
 
 /* ============================================================
    2H EARLY CONFIRMATION BOOST
-
-   2H does NOT independently create BUY NOW.
-
-   It only helps confirm a fresh 5M reversal.
-
-   Require enough trades so a tiny sample
-   cannot dominate the decision.
 ============================================================ */
 
 const GRT_2H_BOOST_MIN_TRADES =
@@ -4722,8 +5024,6 @@ const GRT_2H_BOOST_MIN_BUY_FREQUENCY_PCT =
 
 /* ============================================================
    BTC BUY SURGE CONFIG
-
-   BTC is context only.
 ============================================================ */
 
 const BTC_BUY_SURGE_MIN_BUY_PCT =
@@ -4768,11 +5068,6 @@ function updateGRTMomentumPriceHistory(
       history.length -
       1
     ];
-
-  /*
-     Avoid duplicate sample inside
-     a very short interval.
-  */
 
   if (
     last &&
@@ -4859,8 +5154,6 @@ function getGRTReferencePrice(
 
 /* ============================================================
    GRT LOCAL LOW
-
-   Used by early reversal detector.
 ============================================================ */
 
 function getGRTRecentLocalLow(
@@ -4941,9 +5234,6 @@ function formatGRTDirection(
 
 /* ============================================================
    FAST GRT DIRECTION
-
-   5M = fastest response.
-   15M = supporting backbone.
 ============================================================ */
 
 function getGRTFastDirection(
@@ -5236,9 +5526,6 @@ function getGRTSustainedMove(
 
 /* ============================================================
    MERGE DIRECTION + SUSTAINED MOMENTUM
-
-   Prevent latest 5M pause from falsely
-   killing a still-active 15M run.
 ============================================================ */
 
 function mergeGRTDirectionWithMomentum(
@@ -5289,9 +5576,6 @@ function mergeGRTDirectionWithMomentum(
 
 /* ============================================================
    BUY VOLUME BASELINE
-
-   Compare recent 5M flow against
-   previous 5M flow where possible.
 ============================================================ */
 
 function getBuyVolumeBaseline(
@@ -5535,7 +5819,7 @@ async function getGRTTrendPermission() {
 
 
 /* ============================================================
-   GRT 5M RSI
+   RSI
 ============================================================ */
 
 function calculateRSI(
@@ -5931,7 +6215,7 @@ function detectGRTEarlyMomentum({
   if (
     sustainedMove
       ?.change5m >
-      0
+    0
   ) {
     score++;
   }
@@ -6079,8 +6363,6 @@ function detectGRTAcceleration({
 
 /* ============================================================
    MOMENTUM SCORE
-
-   0 → 10
 ============================================================ */
 
 function calculateGRTMomentumScore({
@@ -6149,8 +6431,8 @@ function calculateGRTMomentumScore({
       ?.ready &&
     liquidity
       .bidLiquidityPct >
-      liquidity
-        .askLiquidityPct
+    liquidity
+      .askLiquidityPct
   ) {
     score++;
   }
@@ -6160,7 +6442,7 @@ function calculateGRTMomentumScore({
       ?.ready &&
     priceResponse
       .changePct >
-      0
+    0
   ) {
     score++;
   }
@@ -6473,13 +6755,6 @@ function getGRT2HConfirmationBoost(
 
 /* ============================================================
    EARLY REVERSAL DETECTOR
-
-   Detect:
-   dip
-   → recovery
-   → upward acceleration.
-
-   It still requires buy evidence.
 ============================================================ */
 
 function detectGRTEarlyReversal({
@@ -6770,11 +7045,6 @@ async function getGRTMomentumDecision(
         "UNKNOWN"
     );
 
-  /*
-     Only genuine startup uncertainty
-     should remain COLLECTING.
-  */
-
   if (
     !confirmationReady &&
     !directionKnown
@@ -6818,12 +7088,6 @@ async function getGRTMomentumDecision(
       twoHour,
     };
   }
-
-  /*
-     If confirmation data is still building
-     but direction is clearly down,
-     don't display COLLECTING.
-  */
 
   if (
     !confirmationReady &&
@@ -6881,11 +7145,6 @@ async function getGRTMomentumDecision(
       twoHour,
     };
   }
-
-  /*
-     Upward direction while data still builds:
-     CEK MOMENTUM, not COLLECTING.
-  */
 
   if (
     !confirmationReady &&
@@ -7118,26 +7377,18 @@ async function getGRTMomentumDecision(
   const earlyReversal =
     detectGRTEarlyReversal({
       currentPrice,
-
       direction,
-
       sustainedMove,
-
       baseline,
-
       priceResponse,
-
       liquidity,
-
       twoHourBoost,
     });
 
-  /*
-     PATH A:
-     EARLY REVERSAL
 
-     This is the new faster route.
-  */
+  /* ==========================================================
+     BUY PATH A — EARLY REVERSAL
+  ========================================================== */
 
   const earlyReversalBuy =
     Boolean(
@@ -7147,10 +7398,10 @@ async function getGRTMomentumDecision(
       !hardResistance
     );
 
-  /*
-     PATH B:
-     ACCELERATION
-  */
+
+  /* ==========================================================
+     BUY PATH B — ACCELERATION
+  ========================================================== */
 
   const accelerationBuy =
     Boolean(
@@ -7170,10 +7421,10 @@ async function getGRTMomentumDecision(
       )
     );
 
-  /*
-     PATH C:
-     EARLY + SUSTAINED
-  */
+
+  /* ==========================================================
+     BUY PATH C — EARLY + SUSTAINED
+  ========================================================== */
 
   const sustainedMomentumBuy =
     Boolean(
@@ -7195,10 +7446,10 @@ async function getGRTMomentumDecision(
       )
     );
 
-  /*
-     PATH D:
-     STRONG EXECUTED FLOW
-  */
+
+  /* ==========================================================
+     BUY PATH D — STRONG EXECUTED FLOW
+  ========================================================== */
 
   const strongFlowBuy =
     Boolean(
@@ -7216,10 +7467,10 @@ async function getGRTMomentumDecision(
       !hardResistance
     );
 
-  /*
-     PATH E:
-     FAST 5M BREAKOUT
-  */
+
+  /* ==========================================================
+     BUY PATH E — FAST 5M BREAKOUT
+  ========================================================== */
 
   const fastBreakoutBuy =
     Boolean(
@@ -7240,10 +7491,10 @@ async function getGRTMomentumDecision(
       !hardResistance
     );
 
-  /*
-     PATH F:
-     15M BACKBONE
-  */
+
+  /* ==========================================================
+     BUY PATH F — 15M BACKBONE
+  ========================================================== */
 
   const backbone15mBuy =
     Boolean(
@@ -7375,10 +7626,10 @@ async function getGRTMomentumDecision(
     };
   }
 
-  /*
-     Clearly dropping:
-     immediately DON'T BUY.
-  */
+
+  /* ==========================================================
+     CLEAR DROP
+  ========================================================== */
 
   const clearlyDropping =
     Boolean(
@@ -7445,9 +7696,10 @@ async function getGRTMomentumDecision(
     };
   }
 
-  /*
-     Genuine hard failure.
-  */
+
+  /* ==========================================================
+     HARD FAILURE
+  ========================================================== */
 
   if (
     hardVeto &&
@@ -7507,12 +7759,10 @@ async function getGRTMomentumDecision(
     };
   }
 
-  /*
-     Validation deadline rescue.
 
-     We keep this as backup.
-     Early reversal may already BUY sooner.
-  */
+  /* ==========================================================
+     VALIDATION TIMEOUT
+  ========================================================== */
 
   if (
     validation.active &&
@@ -7648,10 +7898,10 @@ async function getGRTMomentumDecision(
     };
   }
 
-  /*
-     Upward movement exists,
-     but BUY evidence still incomplete.
-  */
+
+  /* ==========================================================
+     STILL VERIFYING
+  ========================================================== */
 
   if (
     upwardCandidate
@@ -7726,9 +7976,10 @@ async function getGRTMomentumDecision(
     };
   }
 
-  /*
-     SIDEWAY / weak / no upward candidate.
-  */
+
+  /* ==========================================================
+     NO ENTRY
+  ========================================================== */
 
   clearGRTValidation();
 
@@ -7790,8 +8041,6 @@ async function getGRTMomentumDecision(
 
 /* ============================================================
    NORMALIZE GRT DECISION
-
-   One user-facing truth.
 ============================================================ */
 
 function normalizeGRTDecision(
@@ -8078,6 +8327,8 @@ async function getGRTMomentumSnapshot(
    - TP1 / TP2
    - SL reference
    - Confidence
+   - Execution score
+   - Explicit rejection reason
    - Quantity planning
    - Maximum 30,000 GRT
    - Interactive START ENTRY / SKIP
@@ -8086,9 +8337,10 @@ async function getGRTMomentumSnapshot(
 
    BUY NOW comes from PART 4.
 
-   PART 5 does NOT decide market momentum.
-   It decides whether the BUY NOW signal
-   can become a practical scalping setup.
+   BUY NOW does NOT guarantee Scalping Entry.
+
+   PART 5 determines whether the BUY NOW signal
+   can become a practical executable setup.
 ============================================================ */
 
 
@@ -8096,42 +8348,99 @@ async function getGRTMomentumSnapshot(
    GRT ENTRY CONFIG
 ============================================================ */
 
-/*
-   Execution score required after
-   momentum has already produced BUY NOW.
-*/
-
 const GRT_MIN_EXECUTION_SCORE =
   60;
-
-
-/*
-   Suggested SL reference.
-
-   This is NOT an automatic market sell.
-*/
 
 const GRT_DEFAULT_SL_PCT =
   1.20;
 
-
-/*
-   Maximum number of iterations when
-   quantity changes the practical
-   orderbook entry price.
-*/
-
 const GRT_ORDER_PLAN_MAX_ITERATIONS =
   4;
 
-
-/*
-   TP2 is only shown when projected
-   market room is meaningfully larger.
-*/
-
 const GRT_TP2_MIN_EXTRA_ROOM_PCT =
   0.70;
+
+
+/* ============================================================
+   GRT ENTRY REJECTION STATE
+
+   Stores latest reason why BUY NOW did not
+   become a practical Scalping Entry.
+
+   Useful later for:
+   - Telegram
+   - /status
+   - learning
+   - adaptive trade review
+============================================================ */
+
+const GRT_ENTRY_REJECTION_STATE = {
+  lastRejectedAt:
+    null,
+
+  reason:
+    null,
+
+  score:
+    null,
+
+  details:
+    null,
+};
+
+
+function setGRTEntryRejection(
+  reason,
+  details = {}
+) {
+  GRT_ENTRY_REJECTION_STATE
+    .lastRejectedAt =
+    Date.now();
+
+  GRT_ENTRY_REJECTION_STATE
+    .reason =
+    reason ||
+    "UNKNOWN";
+
+  GRT_ENTRY_REJECTION_STATE
+    .score =
+    Number.isFinite(
+      Number(
+        details.score
+      )
+    )
+      ? Number(
+          details.score
+        )
+      : null;
+
+  GRT_ENTRY_REJECTION_STATE
+    .details =
+    details;
+
+  return {
+    ...GRT_ENTRY_REJECTION_STATE,
+  };
+}
+
+
+function clearGRTEntryRejection() {
+  GRT_ENTRY_REJECTION_STATE
+    .lastRejectedAt =
+    null;
+
+  GRT_ENTRY_REJECTION_STATE
+    .reason =
+    null;
+
+  GRT_ENTRY_REJECTION_STATE
+    .score =
+    null;
+
+  GRT_ENTRY_REJECTION_STATE
+    .details =
+    null;
+}
 
 
 /* ============================================================
@@ -8170,9 +8479,11 @@ function confidenceLabel(
 
    Momentum already passed in PART 4.
 
-   This score therefore focuses on:
-   - 15M / 60M context
-   - pressure
+   This score focuses on:
+   - 15M context
+   - 1H context
+   - executed pressure
+   - market direction
    - support
    - resistance room
 ============================================================ */
@@ -8223,6 +8534,7 @@ function getScalpingScore({
       0
     );
 
+
   /* ========================================================
      15M DIRECTION
   ======================================================== */
@@ -8259,8 +8571,9 @@ function getScalpingScore({
       5;
   }
 
+
   /* ========================================================
-     60M CONTEXT
+     1H CONTEXT
   ======================================================== */
 
   if (
@@ -8288,6 +8601,7 @@ function getScalpingScore({
     score -=
       3;
   }
+
 
   /* ========================================================
      EXECUTED PRESSURE
@@ -8327,6 +8641,7 @@ function getScalpingScore({
       5;
   }
 
+
   /* ========================================================
      MARKET DIRECTION
   ======================================================== */
@@ -8365,6 +8680,7 @@ function getScalpingScore({
       4;
   }
 
+
   /* ========================================================
      SUPPORT LOCATION
   ======================================================== */
@@ -8393,6 +8709,7 @@ function getScalpingScore({
         3;
     }
   }
+
 
   /* ========================================================
      RESISTANCE ROOM
@@ -8487,10 +8804,9 @@ function getGRTBuyNowCooldown() {
 /* ============================================================
    PROJECTED GRT REACH
 
-   This is momentum / structure based.
+   TP is determined from market condition.
 
-   It is NOT determined by user's
-   desired RM profit.
+   User desired RM profit does NOT determine TP.
 ============================================================ */
 
 async function calculateGRTProjectedReach({
@@ -8609,10 +8925,10 @@ async function calculateGRTProjectedReach({
     );
 
   /*
-     Strong nearby resistance can cap TP1.
+     Strong meaningful resistance can
+     cap projected TP.
 
-     But weak resistance does not
-     automatically kill the setup.
+     Weak resistance does not kill trade.
   */
 
   if (
@@ -8653,12 +8969,6 @@ async function calculateGRTProjectedReach({
       price,
       tp1
     );
-
-  /*
-     TP2 is an extended target,
-     only when broader momentum
-     suggests room remains.
-  */
 
   let tp2 =
     null;
@@ -8751,10 +9061,10 @@ async function calculateGRTProjectedReach({
 /* ============================================================
    QUANTITY-AWARE LIMIT ENTRY
 
-   Determines a practical LIMIT entry
-   using ask-side liquidity.
+   Checks how far into ask-side orderbook
+   required quantity may need to reach.
 
-   Does NOT place an order.
+   DOES NOT PLACE AN ORDER.
 ============================================================ */
 
 async function chooseQuantityAwareLimitEntry({
@@ -8806,16 +9116,22 @@ async function chooseQuantityAwareLimitEntry({
     };
   }
 
+  const asks =
+    [...orderBook.asks]
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          a.price -
+          b.price
+      );
+
   const quantity =
     safeNumber(
       requiredQuantity,
       0
     );
-
-  /*
-     If quantity is not known yet,
-     use best ask as preliminary entry.
-  */
 
   if (
     quantity <=
@@ -8823,7 +9139,7 @@ async function chooseQuantityAwareLimitEntry({
   ) {
     const bestAsk =
       safeNumber(
-        orderBook.asks[
+        asks[
           0
         ]?.price,
         entry
@@ -8859,7 +9175,7 @@ async function chooseQuantityAwareLimitEntry({
 
   for (
     const ask of
-    orderBook.asks
+    asks
   ) {
     accumulated +=
       safeNumber(
@@ -8882,8 +9198,8 @@ async function chooseQuantityAwareLimitEntry({
     !matchedPrice
   ) {
     matchedPrice =
-      orderBook.asks[
-        orderBook.asks.length -
+      asks[
+        asks.length -
         1
       ].price;
   }
@@ -8907,7 +9223,7 @@ async function chooseQuantityAwareLimitEntry({
     finalEntry,
 
     bestAsk:
-      orderBook.asks[
+      asks[
         0
       ]?.price ||
       null,
@@ -8949,7 +9265,7 @@ function buildEntryRiskLevels({
 
   if (
     entry <=
-    0 ||
+      0 ||
     !room
   ) {
     return null;
@@ -9028,21 +9344,16 @@ function buildEntryRiskLevels({
 /* ============================================================
    GRT MOMENTUM ENTRY QUALIFICATION
 
-   IMPORTANT:
-
-   This does NOT re-run the whole
-   momentum engine.
-
    BUY NOW already passed.
 
-   Here we mainly ask:
+   This stage asks:
 
    - Is entry chase reasonable?
-   - Is there any practical room?
-   - Is resistance directly blocking?
+   - Is projected TP available?
+   - Is practical room usable?
 
-   LOW profit room can still be shown
-   as warning instead of deleting BUY NOW.
+   Small projected room is NOT immediately
+   rejected. It is labelled LOW.
 ============================================================ */
 
 async function qualifyGRTMomentumEntry({
@@ -9142,6 +9453,9 @@ async function qualifyGRTMomentumEntry({
         "ENTRY CHASE TOO HIGH",
 
       chasePct,
+
+      maxChasePct:
+        MAX_ENTRY_CHASE_PCT,
     };
   }
 
@@ -9150,13 +9464,6 @@ async function qualifyGRTMomentumEntry({
       finalEntry,
       room.tp1
     );
-
-  /*
-     We DON'T block BUY NOW just because
-     room is small.
-
-     Instead mark it as LOW.
-  */
 
   let roomQuality =
     "GOOD";
@@ -9222,6 +9529,11 @@ async function buildGRTScalpingCandidate(
   if (
     !qualification.allowed
   ) {
+    setGRTEntryRejection(
+      qualification.reason,
+      qualification
+    );
+
     return {
       allowed:
         false,
@@ -9245,6 +9557,10 @@ async function buildGRTScalpingCandidate(
   if (
     !execution
   ) {
+    setGRTEntryRejection(
+      "EXECUTION DATA UNAVAILABLE"
+    );
+
     return {
       allowed:
         false,
@@ -9261,11 +9577,6 @@ async function buildGRTScalpingCandidate(
         5
     );
 
-  /*
-     Live sell danger can still block
-     the practical entry after BUY NOW.
-  */
-
   const liveSellDanger =
     Boolean(
       flowReady &&
@@ -9278,12 +9589,29 @@ async function buildGRTScalpingCandidate(
   if (
     liveSellDanger
   ) {
+    const details = {
+      sellVolumePct:
+        execution.flow
+          .sellVolumePct,
+
+      sellFrequencyPct:
+        execution.flow
+          .sellFrequencyPct,
+    };
+
+    setGRTEntryRejection(
+      "LIVE SELL PRESSURE TOO STRONG",
+      details
+    );
+
     return {
       allowed:
         false,
 
       reason:
         "LIVE SELL PRESSURE TOO STRONG",
+
+      ...details,
     };
   }
 
@@ -9313,9 +9641,10 @@ async function buildGRTScalpingCandidate(
         execution.resistancePrice,
     });
 
-  /*
-     Momentum score can add up to +20.
-  */
+
+  /* ========================================================
+     MOMENTUM SCORE BONUS
+  ======================================================== */
 
   score +=
     Math.min(
@@ -9364,7 +9693,7 @@ async function buildGRTScalpingCandidate(
   }
 
   /*
-     Weak resistance is not bearish.
+     Weak resistance is not considered bearish.
   */
 
   if (
@@ -9385,10 +9714,33 @@ async function buildGRTScalpingCandidate(
       )
     );
 
+
+  /* ========================================================
+     EXECUTION SCORE FILTER
+  ======================================================== */
+
   if (
     score <
     GRT_MIN_EXECUTION_SCORE
   ) {
+    const details = {
+      score,
+
+      minimumScore:
+        GRT_MIN_EXECUTION_SCORE,
+
+      pressure:
+        execution.pressure,
+
+      direction:
+        execution.direction,
+    };
+
+    setGRTEntryRejection(
+      "EXECUTION SCORE TOO LOW",
+      details
+    );
+
     return {
       allowed:
         false,
@@ -9397,6 +9749,11 @@ async function buildGRTScalpingCandidate(
         "EXECUTION SCORE TOO LOW",
 
       score,
+
+      minimumScore:
+        GRT_MIN_EXECUTION_SCORE,
+
+      execution,
     };
   }
 
@@ -9422,12 +9779,21 @@ async function buildGRTScalpingCandidate(
   if (
     !risk
   ) {
+    setGRTEntryRejection(
+      "RISK LEVELS UNAVAILABLE",
+      {
+        score,
+      }
+    );
+
     return {
       allowed:
         false,
 
       reason:
         "RISK LEVELS UNAVAILABLE",
+
+      score,
     };
   }
 
@@ -9436,9 +9802,9 @@ async function buildGRTScalpingCandidate(
 
   if (
     momentumDecision.reason ===
-    "EARLY REVERSAL CONFIRMED" ||
+      "EARLY REVERSAL CONFIRMED" ||
     momentumDecision.reason ===
-    "EARLY REVERSAL + 2H BUY SUPPORT"
+      "EARLY REVERSAL + 2H BUY SUPPORT"
   ) {
     setup =
       "EARLY REVERSAL";
@@ -9461,6 +9827,8 @@ async function buildGRTScalpingCandidate(
     setup =
       "EARLY ACCELERATION";
   }
+
+  clearGRTEntryRejection();
 
   return {
     allowed:
@@ -9507,6 +9875,9 @@ async function buildGRTScalpingCandidate(
     sl:
       risk.sl,
 
+    slPct:
+      risk.slPct,
+
     durationHours:
       risk.durationHours,
 
@@ -9537,10 +9908,89 @@ async function buildGRTScalpingCandidate(
 
 
 /* ============================================================
+   SCALPING REJECTION MESSAGE
+
+   Example:
+
+   🟢 BUY NOW
+
+   ⚠️ SCALPING ENTRY NOT READY
+   Reason : EXECUTION SCORE TOO LOW
+   Score  : 54/100
+============================================================ */
+
+function buildGRTScalpingRejectionMessage(
+  entryResult
+) {
+  if (
+    !entryResult ||
+    entryResult.triggered
+  ) {
+    return null;
+  }
+
+  const reason =
+    entryResult.reason ||
+    entryResult
+      ?.candidateResult
+      ?.reason ||
+    "ENTRY NOT READY";
+
+  const score =
+    entryResult
+      ?.candidateResult
+      ?.score ??
+    entryResult
+      ?.candidateResult
+      ?.qualification
+      ?.score ??
+    GRT_ENTRY_REJECTION_STATE
+      .score;
+
+  let scoreText =
+    "";
+
+  if (
+    Number.isFinite(
+      Number(
+        score
+      )
+    )
+  ) {
+    scoreText =
+      `\nScore  : ${Math.round(
+        Number(
+          score
+        )
+      )}/100`;
+  }
+
+  let heading =
+    "⚠️ SCALPING ENTRY NOT READY";
+
+  if (
+    reason.includes(
+      "ACTIVE"
+    ) ||
+    reason.includes(
+      "COOLDOWN"
+    )
+  ) {
+    heading =
+      "⚠️ SCALPING ENTRY BLOCKED";
+  }
+
+  return `🟢 BUY NOW
+
+${heading}
+Reason : ${reason}${scoreText}`;
+}
+
+
+/* ============================================================
    SEND SCALPING ENTRY
 
-   Generic enough to be reused later
-   by PART 6 altcoin scanner.
+   Generic enough for PART 6 altcoin scanner.
 ============================================================ */
 
 async function sendScalpingEntry(
@@ -9597,21 +10047,22 @@ async function sendScalpingEntry(
     };
   }
 
- if (
-  !options.bypassGlobalCooldown &&
-  LAST_GLOBAL_SIGNAL &&
-  Date.now() -
-    LAST_GLOBAL_SIGNAL <
-    GLOBAL_SCALPING_COOLDOWN
-) {
-  return {
-    sent:
-      false,
+  if (
+    !options.bypassGlobalCooldown &&
+    LAST_GLOBAL_SIGNAL &&
+    Date.now() -
+      LAST_GLOBAL_SIGNAL <
+      GLOBAL_SCALPING_COOLDOWN
+  ) {
+    return {
+      sent:
+        false,
 
-    reason:
-      "GLOBAL SCALPING COOLDOWN",
-  };
-}
+      reason:
+        "GLOBAL SCALPING COOLDOWN",
+    };
+  }
+
   PENDING_ENTRIES[
     candidate.coin
   ] =
@@ -9803,7 +10254,7 @@ ${candidate.durationHours} hours`;
 /* ============================================================
    TRIGGER GRT SCALPING ENTRY
 
-   PART 4 BUY NOW enters here.
+   BUY NOW from PART 4 enters here.
 ============================================================ */
 
 async function triggerMomentumScalpingEntry(
@@ -9831,13 +10282,19 @@ async function triggerMomentumScalpingEntry(
     PENDING_ENTRIES
       .GRT
   ) {
-    return {
+    const result = {
       triggered:
         false,
 
       reason:
         "TRADE OR ENTRY ALREADY ACTIVE",
     };
+
+    setGRTEntryRejection(
+      result.reason
+    );
+
+    return result;
   }
 
   const candidateResult =
@@ -9865,11 +10322,30 @@ async function triggerMomentumScalpingEntry(
       candidateResult
     );
 
+  if (
+    !result?.sent
+  ) {
+    setGRTEntryRejection(
+      result?.reason ||
+      "SCALPING ENTRY SEND FAILED",
+      {
+        score:
+          candidateResult.score,
+      }
+    );
+  }
+
   return {
     triggered:
       Boolean(
         result?.sent
       ),
+
+    reason:
+      result?.sent
+        ? "SCALPING ENTRY SENT"
+        : result?.reason ||
+          "SCALPING ENTRY NOT SENT",
 
     result,
 
@@ -10025,11 +10501,6 @@ async function handleGRTBuyNowSignal(
   const cooldown =
     getGRTBuyNowCooldown();
 
-  /*
-     Learning record is written only
-     for a new BUY NOW signal.
-  */
-
   if (
     !cooldown.active
   ) {
@@ -10041,12 +10512,6 @@ async function handleGRTBuyNowSignal(
       momentumDecision
     );
   }
-
-  /*
-     Even when BUY NOW is in cooldown,
-     an existing pending entry prevents
-     duplicate scalping alerts anyway.
-  */
 
   const entryResult =
     await triggerMomentumScalpingEntry(
@@ -10251,11 +10716,13 @@ async function sendImmediateGRTBuyNowAlert(
    PROCESS GRT MASTER RESULT
 
    BUY NOW:
-   1. Immediate BUY NOW notification
-   2. Scalping Entry opportunity
+
+   1. Send BUY NOW alert.
+   2. Run practical Scalping Entry engine.
+   3. If Scalping Entry rejected, expose reason.
 
    VERIFYING / DON'T BUY:
-   state only.
+   No entry trigger.
 ============================================================ */
 
 async function processGRTMasterScanResult(
@@ -10294,6 +10761,9 @@ async function processGRTMasterScanResult(
 
       buyHandler:
         null,
+
+      rejectionAlert:
+        null,
     };
   }
 
@@ -10308,6 +10778,60 @@ async function processGRTMasterScanResult(
       decision
     );
 
+  let rejectionAlert =
+    null;
+
+  const entryResult =
+    buyHandler
+      ?.entryResult ||
+    null;
+
+  /*
+     BUY NOW occurred but practical
+     Scalping Entry was rejected.
+
+     Do not silently swallow rejection.
+  */
+
+  if (
+    entryResult &&
+    !entryResult.triggered
+  ) {
+    const rejectionMessage =
+      buildGRTScalpingRejectionMessage(
+        entryResult
+      );
+
+    if (
+      rejectionMessage
+    ) {
+      /*
+         If immediate BUY alert was already sent,
+         this second compact message explains
+         why Scalping Entry did not appear.
+      */
+
+      const rejectionSent =
+        await sendTelegram(
+          rejectionMessage
+        );
+
+      rejectionAlert = {
+        sent:
+          Boolean(
+            rejectionSent
+          ),
+
+        message:
+          rejectionMessage,
+
+        reason:
+          entryResult.reason ||
+          null,
+      };
+    }
+  }
+
   return {
     processed:
       true,
@@ -10318,6 +10842,8 @@ async function processGRTMasterScanResult(
     immediateAlert,
 
     buyHandler,
+
+    rejectionAlert,
   };
 }
 
@@ -10325,15 +10851,22 @@ async function processGRTMasterScanResult(
 /* ============================================================
    FINAL ORDER PLAN
 
-   User enters desired NET profit.
+   Existing manual Scalping Entry flow:
 
-   Quantity is calculated from:
-   - actual entry
+   User provides desired NET profit.
+
+   Bot calculates quantity based on:
+   - practical entry price
    - projected TP1
-   - Luno BUY + SELL fees
+   - BUY fee
+   - SELL fee
 
    HARD RULE:
-   GRT quantity MUST be <= 30,000.
+   GRT quantity <= 30,000.
+
+   NOTE:
+   Future Auto Trade module will use CAPITAL amount
+   rather than this legacy target-profit workflow.
 ============================================================ */
 
 async function buildFinalOrderPlan({
@@ -10428,10 +10961,6 @@ async function buildFinalOrderPlan({
       quantityResult
         .quantity;
 
-    /*
-       GRT maximum 30,000 units.
-    */
-
     if (
       candidate.coin ===
         "GRT" &&
@@ -10503,7 +11032,7 @@ async function buildFinalOrderPlan({
     }
 
     /*
-       Entry stabilised.
+       Entry price stabilised.
     */
 
     if (
@@ -10521,6 +11050,34 @@ async function buildFinalOrderPlan({
 
           sellPrice,
         });
+
+      if (
+        !feeEstimate
+      ) {
+        return {
+          allowed:
+            false,
+
+          reason:
+            "FEE CALCULATION FAILED",
+        };
+      }
+
+      if (
+        feeEstimate.netProfit <=
+        0
+      ) {
+        return {
+          allowed:
+            false,
+
+          reason:
+            "NET PROFIT NEGATIVE AFTER FEES",
+
+          estimatedNetProfit:
+            feeEstimate.netProfit,
+        };
+      }
 
       return {
         allowed:
@@ -10554,13 +11111,11 @@ async function buildFinalOrderPlan({
 
         estimatedNetProfit:
           feeEstimate
-            ?.netProfit ||
-          0,
+            .netProfit,
 
         estimatedNetProfitPct:
           feeEstimate
-            ?.netProfitPct ||
-          0,
+            .netProfitPct,
 
         feeEstimate,
 
@@ -10579,9 +11134,8 @@ async function buildFinalOrderPlan({
     }
 
     /*
-       Orderbook moved.
-       Recalculate quantity again
-       using new practical entry.
+       Orderbook depth changed practical entry.
+       Recalculate required quantity on next loop.
     */
 
     entryPrice =
@@ -11002,8 +11556,6 @@ function getAltcoinHardDanger({
 
 /* ============================================================
    ALTCOIN OPPORTUNITY SCORE
-
-   Intentionally lighter than GRT.
 ============================================================ */
 
 function calculateAltcoinOpportunityScore({
@@ -11053,6 +11605,7 @@ function calculateAltcoinOpportunityScore({
         ?.change15m,
       0
     );
+
 
   /* ========================================================
      PRICE MOMENTUM
@@ -11114,6 +11667,7 @@ function calculateAltcoinOpportunityScore({
       8;
   }
 
+
   /* ========================================================
      EXECUTED BUY FLOW
   ======================================================== */
@@ -11152,6 +11706,7 @@ function calculateAltcoinOpportunityScore({
       2;
   }
 
+
   /* ========================================================
      EXECUTED PRICE RESPONSE
   ======================================================== */
@@ -11169,6 +11724,7 @@ function calculateAltcoinOpportunityScore({
     score +=
       2;
   }
+
 
   /* ========================================================
      2H CONTEXT
@@ -11203,6 +11759,7 @@ function calculateAltcoinOpportunityScore({
     score -=
       3;
   }
+
 
   /* ========================================================
      MARKET STRUCTURE
@@ -11380,10 +11937,6 @@ async function buildAltcoinScalpingCandidate(
     structure
       .priceResponse;
 
-  /*
-     Need some minimum executed data.
-  */
-
   if (
     !flow ||
     flow.totalCount <
@@ -11447,13 +12000,13 @@ async function buildAltcoinScalpingCandidate(
     };
   }
 
-  /*
-     Require at least some positive
-     current evidence.
 
-     We don't want a score inherited
-     purely from old 2H context.
-  */
+  /* ========================================================
+     CURRENT EVIDENCE FILTER
+
+     Prevent 2H context alone from creating
+     a stale entry.
+  ======================================================== */
 
   const currentPositive =
     Boolean(
@@ -11550,14 +12103,6 @@ async function buildAltcoinScalpingCandidate(
       entryPrice,
       projection.tp1
     );
-
-  /*
-     Generic scanner can be slightly
-     more permissive than GRT.
-
-     But completely useless room
-     should not trigger an opportunity.
-  */
 
   if (
     grossRoomPct <
@@ -11677,6 +12222,9 @@ async function buildAltcoinScalpingCandidate(
     sl:
       risk.sl,
 
+    slPct:
+      risk.slPct,
+
     durationHours:
       risk.durationHours,
 
@@ -11731,17 +12279,26 @@ async function scanSingleAltcoinOpportunity(
         score:
           candidate.score ??
           null,
+
+        candidate,
       };
     }
 
-const result =
-  await sendScalpingEntry(
-    candidate,
-    {
-      bypassGlobalCooldown:
-        true,
-    }
-  );
+    /*
+       Each qualified altcoin may send its own
+       alert during this scheduled scan.
+
+       Per-coin cooldown still remains active.
+    */
+
+    const result =
+      await sendScalpingEntry(
+        candidate,
+        {
+          bypassGlobalCooldown:
+            true,
+        }
+      );
 
     return {
       coin,
@@ -11751,6 +12308,12 @@ const result =
           result
             ?.sent
         ),
+
+      reason:
+        result?.sent
+          ? "OPPORTUNITY SENT"
+          : result?.reason ||
+            "ENTRY NOT SENT",
 
       candidate,
 
@@ -11782,11 +12345,9 @@ const result =
 
    Every 30 minutes.
 
-   IMPORTANT:
-
-   - No opportunity = no Telegram message.
-   - Qualified opportunity only =
-     sendScalpingEntry().
+   RULE:
+   - No setup = no Telegram alert.
+   - Qualified setup = sendScalpingEntry().
 ============================================================ */
 
 async function runAltcoinScalpingScanner() {
@@ -11822,13 +12383,10 @@ async function runAltcoinScalpingScanner() {
       [];
 
     /*
-       Sequential scanning prevents
-       multiple opportunities from
-       racing global cooldown at exactly
-       the same millisecond.
+       Sequential scan avoids unnecessary
+       request bursts.
 
-       Maximum four coins only,
-       so this is fine.
+       Only four coins are checked.
     */
 
     for (
@@ -11972,6 +12530,7 @@ function getAltcoinScannerStatus() {
 /* ============================================================
    END PART 6
 ============================================================ */
+
 /* ============================================================
    PART 7 — ACTIVE TRADE MONITORING
 
@@ -11995,44 +12554,21 @@ function getAltcoinScannerStatus() {
    ACTIVE TRADE CONFIG
 ============================================================ */
 
-/*
-   Avoid repeating the same monitoring
-   notification every 15 seconds.
-*/
-
 const ACTIVE_TRADE_ALERT_COOLDOWN_MS =
   5 *
   60 *
   1000;
 
-
-/*
-   Near TP notification.
-
-   Example:
-   if price is within 0.30% of TP1,
-   bot can highlight it.
-*/
-
 const ACTIVE_TRADE_NEAR_TP_PCT =
   0.30;
-
-
-/*
-   Caution threshold from entry.
-
-   This is descriptive only.
-   SL remains the stronger danger reference.
-*/
 
 const ACTIVE_TRADE_CAUTION_LOSS_PCT =
   -0.60;
 
 
-/*
-   TP1 can be marked hit once.
-   TP2 can be marked hit once.
-*/
+/* ============================================================
+   ACTIVE TRADE RUNTIME
+============================================================ */
 
 const ACTIVE_TRADE_RUNTIME = {
   running:
@@ -12061,18 +12597,7 @@ const ACTIVE_TRADE_RUNTIME = {
 /* ============================================================
    CREATE ACTIVE TRADE FROM MATCHED ORDER
 
-   Used after user confirms the actual
-   quantity filled by Luno.
-
-   Gross matched quantity is the quantity
-   BEFORE buy fee.
-
-   Example:
-   matched = 7,000 GRT
-      ↓
-   BUY fee
-      ↓
-   net tradeable quantity
+   Gross matched quantity = quantity BEFORE buy fee.
 ============================================================ */
 
 function createActiveTradeFromMatchedOrder({
@@ -12124,11 +12649,6 @@ function createActiveTradeFromMatchedOrder({
       0
     );
 
-  /*
-     GRT hard ceiling stays enforced
-     even at matched-order stage.
-  */
-
   if (
     coin ===
       "GRT" &&
@@ -12151,14 +12671,14 @@ function createActiveTradeFromMatchedOrder({
     null;
 
   const buyPrice =
-   safeNumber(
-    state.matchedBuyPrice ||
-    state.entryPrice ||
-    plan?.entryPrice ||
-    entry.preliminaryEntry ||
-    entry.currentPrice,
-    0
-  );
+    safeNumber(
+      state.matchedBuyPrice ||
+      state.entryPrice ||
+      plan?.entryPrice ||
+      entry.preliminaryEntry ||
+      entry.currentPrice,
+      0
+    );
 
   if (
     buyPrice <=
@@ -12353,8 +12873,8 @@ function createActiveTradeFromMatchedOrder({
 /* ============================================================
    CURRENT ACTIVE TRADE P/L
 
-   Calculates value if position were sold
-   at the supplied current price now.
+   Calculates current NET value if position
+   were sold at supplied current price.
 ============================================================ */
 
 function calculateActiveTradePnL(
@@ -12447,7 +12967,8 @@ function getDistanceToTarget(
 /* ============================================================
    ACTIVE TRADE DECISION
 
-   This is NOT a market order.
+   IMPORTANT:
+   This is NOT an automatic market sell.
 
    Output:
    HOLD
@@ -12486,9 +13007,10 @@ function getActiveTradeDecision({
       0
     );
 
-  /*
-     SL is highest-priority danger.
-  */
+
+  /* ========================================================
+     SL — HIGHEST PRIORITY DANGER
+  ======================================================== */
 
   if (
     trade.sl &&
@@ -12504,9 +13026,10 @@ function getActiveTradeDecision({
     };
   }
 
-  /*
-     TP2 takes priority over TP1.
-  */
+
+  /* ========================================================
+     TP2 BEFORE TP1
+  ======================================================== */
 
   if (
     trade.tp2 &&
@@ -12536,11 +13059,10 @@ function getActiveTradeDecision({
     };
   }
 
-  /*
-     General caution when trade
-     is losing meaningfully even
-     before the SL reference.
-  */
+
+  /* ========================================================
+     CAUTION
+  ======================================================== */
 
   if (
     netPct <=
@@ -12555,9 +13077,10 @@ function getActiveTradeDecision({
     };
   }
 
-  /*
-     Warn when close to TP1.
-  */
+
+  /* ========================================================
+     NEAR TP1
+  ======================================================== */
 
   if (
     trade.tp &&
@@ -12739,8 +13262,6 @@ function updateActiveTradeRuntime({
    - TP2 newly hit
    - SL newly touched
    - near TP state appears
-
-   plus cooldown protection.
 ============================================================ */
 
 function shouldSendActiveTradeAlert({
@@ -12810,11 +13331,6 @@ function shouldSendActiveTradeAlert({
     };
   }
 
-  /*
-     Major TP / SL event bypasses
-     ordinary repeated-alert cooldown.
-  */
-
   const critical =
     [
       "TP1_HIT",
@@ -12836,6 +13352,7 @@ function shouldSendActiveTradeAlert({
         false,
 
       type,
+
       reason:
         "ALERT COOLDOWN",
     };
@@ -13371,9 +13888,6 @@ function getActiveTradeMonitorStatus() {
 
 /* ============================================================
    GET ACTIVE TRADE CURRENT SNAPSHOT
-
-   Used later by Telegram interactive
-   / status flow.
 ============================================================ */
 
 async function getActiveTradeSnapshot(
@@ -13422,8 +13936,10 @@ async function getActiveTradeSnapshot(
     pnl
       ? getActiveTradeDecision({
           trade,
+
           currentPrice:
             ticker.currentPrice,
+
           pnl,
         })
       : null;
@@ -13443,12 +13959,15 @@ async function getActiveTradeSnapshot(
 /* ============================================================
    CLOSE ACTIVE TRADE
 
-   User supplies actual matched sell price.
+   User supplies ACTUAL matched sell price.
 
    IMPORTANT:
-   Realised P/L uses the actual matched
-   sell price — NOT TP price and NOT
-   Telegram current price.
+   Realised P/L uses actual matched sell price.
+
+   NOT:
+   - TP reference
+   - current ticker price
+   - estimated sell price
 ============================================================ */
 
 function closeActiveTrade({
@@ -13653,13 +14172,44 @@ ${trade.confidence}`;
    PART 8 — ALERTS + REPORTS
 
    PURPOSE:
-   - BTC + GRT price alert
+   - BTC + GRT rolling Price Alert
+   - BTC 15M market context
+   - GRT 5M / 15M / 1H movement
+   - Natural GRT movement classification
    - Market structure alert
    - 2H flow report
    - GRT 24H / daily report
    - User-friendly formatting
    - No raw JSON dump
 ============================================================ */
+
+
+/* ============================================================
+   PRICE ALERT CONFIG
+
+   Rolling timeframe.
+   NOT candle close.
+
+   BTC:
+   15M threshold ±0.20%
+
+   GRT:
+   5M  threshold ±0.10%
+   15M threshold ±0.20%
+   1H   threshold ±0.40%
+============================================================ */
+
+const BTC_PRICE_ALERT_15M_THRESHOLD_PCT =
+  0.20;
+
+const GRT_PRICE_ALERT_5M_THRESHOLD_PCT =
+  0.10;
+
+const GRT_PRICE_ALERT_15M_THRESHOLD_PCT =
+  0.20;
+
+const GRT_PRICE_ALERT_1H_THRESHOLD_PCT =
+  0.40;
 
 
 /* ============================================================
@@ -13716,6 +14266,390 @@ const MARKET_STRUCTURE_RUNTIME = {
   errors:
     0,
 };
+
+
+/* ============================================================
+   ROLLING MOVE STATE
+
+   Returns:
+   UP
+   DOWN
+   NEUTRAL
+   BUILDING
+============================================================ */
+
+function classifyRollingMove(
+  rolling,
+  thresholdPct
+) {
+  if (
+    !rolling ||
+    !rolling.ready
+  ) {
+    return "BUILDING";
+  }
+
+  const change =
+    safeNumber(
+      rolling.changePct,
+      0
+    );
+
+  if (
+    change >=
+    thresholdPct
+  ) {
+    return "UP";
+  }
+
+  if (
+    change <=
+    -thresholdPct
+  ) {
+    return "DOWN";
+  }
+
+  return "NEUTRAL";
+}
+
+
+/* ============================================================
+   FORMAT ROLLING PRICE MOVEMENT
+============================================================ */
+
+function formatRollingPriceMove(
+  rolling,
+  thresholdPct
+) {
+  if (
+    !rolling ||
+    !rolling.ready
+  ) {
+    return "BUILDING 🩶";
+  }
+
+  const change =
+    safeNumber(
+      rolling.changePct,
+      0
+    );
+
+  const state =
+    classifyRollingMove(
+      rolling,
+      thresholdPct
+    );
+
+  let emoji =
+    "🩶";
+
+  if (
+    state ===
+    "UP"
+  ) {
+    emoji =
+      "🟢";
+  } else if (
+    state ===
+    "DOWN"
+  ) {
+    emoji =
+      "🔴";
+  }
+
+  return `${formatPercent(
+    change
+  )} ${emoji}`;
+}
+
+
+/* ============================================================
+   BTC 15M DIRECTION
+============================================================ */
+
+function getBTC15mDirection(
+  rolling15m
+) {
+  const state =
+    classifyRollingMove(
+      rolling15m,
+      BTC_PRICE_ALERT_15M_THRESHOLD_PCT
+    );
+
+  if (
+    state ===
+    "UP"
+  ) {
+    return "📈 NAIK";
+  }
+
+  if (
+    state ===
+    "DOWN"
+  ) {
+    return "📉 DROP";
+  }
+
+  if (
+    state ===
+    "BUILDING"
+  ) {
+    return "🩶 BUILDING DATA";
+  }
+
+  return "↔️ SIDEWAY";
+}
+
+
+/* ============================================================
+   NATURAL GRT MOVEMENT LABEL
+
+   Rules:
+
+   5M UP + 15M neutral/down + 1H neutral/down
+   → MULA NAIK
+
+   5M UP + 15M UP + 1H neutral/down
+   → SEDANG NAIK
+
+   5M UP + 15M UP + 1H UP
+   → TELAH NAIK
+
+   5M DOWN + 15M UP + 1H UP
+   → TURUN SEKETIKA
+
+   5M DOWN + 15M DOWN + 1H neutral/up
+   → SEDANG DROP
+
+   5M DOWN + 15M DOWN + 1H DOWN
+   → DROP LAJU
+============================================================ */
+
+function getGRTNaturalMovementLabel({
+  rolling5m,
+  rolling15m,
+  rolling1h,
+}) {
+  const state5m =
+    classifyRollingMove(
+      rolling5m,
+      GRT_PRICE_ALERT_5M_THRESHOLD_PCT
+    );
+
+  const state15m =
+    classifyRollingMove(
+      rolling15m,
+      GRT_PRICE_ALERT_15M_THRESHOLD_PCT
+    );
+
+  const state1h =
+    classifyRollingMove(
+      rolling1h,
+      GRT_PRICE_ALERT_1H_THRESHOLD_PCT
+    );
+
+  if (
+    [
+      state5m,
+      state15m,
+      state1h,
+    ].includes(
+      "BUILDING"
+    )
+  ) {
+    return {
+      state:
+        "BUILDING",
+
+      text:
+        "🩶 BUILDING DATA",
+    };
+  }
+
+
+  /* ========================================================
+     STRONG / CONFIRMED RISE
+  ======================================================== */
+
+  if (
+    state5m ===
+      "UP" &&
+    state15m ===
+      "UP" &&
+    state1h ===
+      "UP"
+  ) {
+    return {
+      state:
+        "TELAH_NAIK",
+
+      text:
+        "🟢 TELAH NAIK",
+    };
+  }
+
+
+  /* ========================================================
+     MID-STAGE RISE
+  ======================================================== */
+
+  if (
+    state5m ===
+      "UP" &&
+    state15m ===
+      "UP" &&
+    state1h !==
+      "UP"
+  ) {
+    return {
+      state:
+        "SEDANG_NAIK",
+
+      text:
+        "🟠 SEDANG NAIK",
+    };
+  }
+
+
+  /* ========================================================
+     EARLY RISE
+  ======================================================== */
+
+  if (
+    state5m ===
+      "UP" &&
+    state15m !==
+      "UP"
+  ) {
+    return {
+      state:
+        "MULA_NAIK",
+
+      text:
+        "🟡 MULA NAIK",
+    };
+  }
+
+
+  /* ========================================================
+     SHORT PULLBACK IN BULLISH STRUCTURE
+  ======================================================== */
+
+  if (
+    state5m ===
+      "DOWN" &&
+    state15m ===
+      "UP" &&
+    state1h ===
+      "UP"
+  ) {
+    return {
+      state:
+        "TURUN_SEKETIKA",
+
+      text:
+        "🟡 TURUN SEKETIKA",
+    };
+  }
+
+
+  /* ========================================================
+     FAST / CONFIRMED DROP
+  ======================================================== */
+
+  if (
+    state5m ===
+      "DOWN" &&
+    state15m ===
+      "DOWN" &&
+    state1h ===
+      "DOWN"
+  ) {
+    return {
+      state:
+        "DROP_LAJU",
+
+      text:
+        "🔴 DROP LAJU",
+    };
+  }
+
+
+  /* ========================================================
+     DEVELOPING DROP
+  ======================================================== */
+
+  if (
+    state5m ===
+      "DOWN" &&
+    state15m ===
+      "DOWN"
+  ) {
+    return {
+      state:
+        "SEDANG_DROP",
+
+      text:
+        "🔴 SEDANG DROP",
+    };
+  }
+
+
+  /* ========================================================
+     5M NEUTRAL WHILE HIGHER TF STILL POSITIVE
+  ======================================================== */
+
+  if (
+    state5m ===
+      "NEUTRAL" &&
+    (
+      state15m ===
+        "UP" ||
+      state1h ===
+        "UP"
+    )
+  ) {
+    return {
+      state:
+        "NAIK_BERTAHAN",
+
+      text:
+        "🟢 NAIK MASIH BERTAHAN",
+    };
+  }
+
+
+  /* ========================================================
+     5M NEUTRAL WHILE HIGHER TF NEGATIVE
+  ======================================================== */
+
+  if (
+    state5m ===
+      "NEUTRAL" &&
+    (
+      state15m ===
+        "DOWN" ||
+      state1h ===
+        "DOWN"
+    )
+  ) {
+    return {
+      state:
+        "DROP_BERTAHAN",
+
+      text:
+        "🔴 TEKANAN DROP MASIH ADA",
+    };
+  }
+
+  return {
+    state:
+      "SIDEWAY",
+
+    text:
+      "🩶 SIDEWAY SEKETIKA",
+  };
+}
 
 
 /* ============================================================
@@ -14278,6 +15212,14 @@ function loadDailyWatchState() {
 
 /* ============================================================
    PRICE ALERT SNAPSHOT — BTC
+
+   New format:
+   - Current price
+   - Rolling 15M only
+   - Direction
+
+   BTC BUY SURGE remains available internally,
+   but is NOT displayed in compact Price Alert.
 ============================================================ */
 
 async function getBTCPriceAlertSnapshot() {
@@ -14306,32 +15248,39 @@ async function getBTCPriceAlertSnapshot() {
     ticker.currentPrice
   );
 
-  const ref5m =
-    getReferencePrice(
+  const rolling15m =
+    getRollingPriceChange(
       "BTC",
-      FIVE_MINUTES
+      ticker.currentPrice,
+      FIFTEEN_MINUTES
     );
 
-  const change5m =
-    ref5m
-      ? percentChange(
-          ref5m.price,
-          ticker.currentPrice
-        )
-      : 0;
+  /*
+     Keep old BTC surge engine alive internally.
+     Price Alert no longer needs to display it.
+  */
 
   const surge =
     await getBTCBuySurge();
 
-  const surgeText =
-    surge.active
-      ? "🟢 BUY SURGE ON"
-      : "🔴 BUY SURGE OFF";
+  const direction =
+    getBTC15mDirection(
+      rolling15m
+    );
 
   return {
     ticker,
 
-    change5m,
+    rolling15m,
+
+    change15m:
+      safeNumber(
+        rolling15m
+          ?.changePct,
+        0
+      ),
+
+    direction,
 
     surge,
 
@@ -14339,30 +15288,25 @@ async function getBTCPriceAlertSnapshot() {
       `₿ BTC RM${formatPrice(
         "BTC",
         ticker.currentPrice
-      )}${
-        Math.abs(
-          change5m
-        ) >=
-        0.01
-          ? ` ${
-              change5m >
-              0
-                ? "⬆️"
-                : "⬇️"
-            } ${formatPercent(
-              change5m
-            )} (5M)`
-          : ""
-      }
-
-⚡ MOMENTUM:
-${surgeText}`,
+      )}
+15M : ${formatRollingPriceMove(
+        rolling15m,
+        BTC_PRICE_ALERT_15M_THRESHOLD_PCT
+      )}  ${direction}`,
   };
 }
 
 
 /* ============================================================
    PRICE ALERT SNAPSHOT — GRT
+
+   Rolling:
+   - 5M
+   - 15M
+   - 1H
+
+   Natural movement classification is separate
+   from PART 4 Momentum Decision.
 ============================================================ */
 
 async function getGRTPriceAlertSnapshot(
@@ -14410,31 +15354,59 @@ async function getGRTPriceAlertSnapshot(
     ticker.currentPrice
   );
 
-  const change5m =
-    safeNumber(
-      decision
-        ?.sustainedMove
-        ?.change5m,
-      0
+  const rolling5m =
+    getRollingPriceChange(
+      "GRT",
+      ticker.currentPrice,
+      FIVE_MINUTES
     );
 
-  const change15m =
-    safeNumber(
-      decision
-        ?.sustainedMove
-        ?.change15m,
-      0
+  const rolling15m =
+    getRollingPriceChange(
+      "GRT",
+      ticker.currentPrice,
+      FIFTEEN_MINUTES
     );
 
-  let validatingText =
+  const rolling1h =
+    getRollingPriceChange(
+      "GRT",
+      ticker.currentPrice,
+      ONE_HOUR
+    );
+
+  const movement =
+    getGRTNaturalMovementLabel({
+      rolling5m,
+      rolling15m,
+      rolling1h,
+    });
+
+  let momentumText =
+    normalized
+      ?.directionText ||
+    decision
+      ?.directionText ||
+    "";
+
+  if (
+    !momentumText
+  ) {
+    momentumText =
+      normalized
+        ?.text ||
+      "🩶 WAITING";
+  }
+
+  let verifyingText =
     "";
 
   if (
     normalized
       ?.validating
   ) {
-    validatingText =
-      "\n🔎 VALIDATING";
+    verifyingText =
+      "\n🔎 VERIFYING...";
   }
 
   return {
@@ -14444,37 +15416,34 @@ async function getGRTPriceAlertSnapshot(
 
     normalized,
 
+    rolling5m,
+
+    rolling15m,
+
+    rolling1h,
+
+    movement,
+
     section:
       `🪙 GRT RM${formatPrice(
         "GRT",
         ticker.currentPrice
-      )}${
-        Math.abs(
-          change5m
-        ) >=
-        0.01
-          ? ` ${
-              change5m >
-              0
-                ? "⬆️"
-                : "⬇️"
-            } ${formatPercent(
-              change5m
-            )}`
-          : ""
-      }
-
-⏱ 5M:
-${formatPercent(
-        change5m
-      )} | 15M:
-${formatPercent(
-        change15m
       )}
+5M  : ${formatRollingPriceMove(
+        rolling5m,
+        GRT_PRICE_ALERT_5M_THRESHOLD_PCT
+      )}
+15M : ${formatRollingPriceMove(
+        rolling15m,
+        GRT_PRICE_ALERT_15M_THRESHOLD_PCT
+      )}
+1H  : ${formatRollingPriceMove(
+        rolling1h,
+        GRT_PRICE_ALERT_1H_THRESHOLD_PCT
+      )}
+${movement.text}
 
-⚡ ${normalized.text}
-
-${normalized.directionText}${validatingText}`,
+⚡ MOMENTUM: ${momentumText}${verifyingText}`,
   };
 }
 
@@ -14528,12 +15497,10 @@ async function runPriceAlert() {
       ]);
 
     const message =
-      `📡 PRICE ALERT
+      `🚨 PRICE ALERT
 
 ${btcAlert.section}
-
-━━━━━━━━━━━━━━
-
+━━━━━━━━━━━━━━━━━━
 ${grtAlert.section}`;
 
     const sent =
@@ -14600,6 +15567,14 @@ ${grtAlert.section}`;
 
 /* ============================================================
    RUN MARKET STRUCTURE ALERT
+
+   NOTE:
+   Current Luno structure remains fully active.
+
+   GLOBAL LEAD is NOT fabricated here.
+   External global market source will only be
+   connected once a real exchange source/API
+   is configured.
 ============================================================ */
 
 async function runMarketStructureAlert() {
@@ -14775,9 +15750,6 @@ ${sections.join(
 
 /* ============================================================
    BUILD 2H FLOW REPORT
-
-   Human-readable.
-   No JSON.stringify dump.
 ============================================================ */
 
 async function build2HFlowReport() {
@@ -15127,6 +16099,8 @@ function getMarketStructureAlertStatus() {
    - /buylast
    - /tuning
    - /status
+   - /autostatus
+   - /autooff
 
    INTERACTIVE SCALPING:
    SCALPING ENTRY
@@ -15139,27 +16113,33 @@ function getMarketStructureAlertStatus() {
       ↓
    CONFIRM ORDER
       ↓
-   MATCHED QUANTITY
+   ACTUAL MATCHED BUY PRICE
+      ↓
+   ACTUAL MATCHED QUANTITY
       ↓
    ACTIVE TRADE
       ↓
-   SELL
+   SELL / CLOSE
       ↓
-   MATCHED SELL PRICE
+   ACTUAL MATCHED SELL PRICE
       ↓
    TRADE CLOSED
+      ↓
+   ASK:
+   DO YOU WANT TO AUTO TRADE?
+      ↓
+   YES
+      ↓
+   AUTO SESSION ARMED
+      ↓
+   PART 10 TAKES OVER NEXT CYCLE
 
-   MANUAL GRT HOLD:
-   /grthold
-      ↓
-   ENTRY PRICE
-      ↓
-   QUANTITY
-      ↓
-   CURRENT NET P/L
-   BREAK EVEN
-   DISTANCE
-   PROJECTED TP
+   IMPORTANT:
+   - First trade is initiated by user.
+   - Auto Mode is NEVER enabled before first trade closes.
+   - User must explicitly press YES.
+   - Restart defaults to AUTO OFF.
+   - No withdrawal functionality.
 ============================================================ */
 
 
@@ -15234,6 +16214,680 @@ async function answerCallback(
     );
   }
 }
+
+
+/* ============================================================
+   AUTO TRADE SESSION
+
+   IMPORTANT:
+   Session starts OFF.
+
+   It can only become enabled after:
+   1. A real monitored trade closes.
+   2. Bot asks user whether to continue automatically.
+   3. User explicitly presses YES.
+
+   PART 10 will run the background cycle.
+============================================================ */
+
+const AUTO_TRADE_SESSION = {
+  enabled:
+    false,
+
+  armed:
+    false,
+
+  status:
+    "OFF",
+
+  chatId:
+    null,
+
+  coin:
+    null,
+
+  capital:
+    null,
+
+  lastTradeCapital:
+    null,
+
+  previousTrade: null,
+
+  sourceTradeId:
+    null,
+
+  startedAt:
+    null,
+
+  lastCycleAt:
+    null,
+
+  lastDecisionAt:
+    null,
+
+  cycleCount:
+    0,
+
+  successfulTrades:
+    0,
+
+  failedTrades:
+    0,
+
+  awaitingSetup:
+    false,
+
+  positionActive:
+    false,
+
+  frozen:
+    false,
+
+  freezeReason:
+    null,
+
+  stopRequested:
+    false,
+};
+
+
+/* ============================================================
+   RESET AUTO TRADE SESSION
+============================================================ */
+
+function resetAutoTradeSession(
+  reason =
+    "USER STOP"
+) {
+  AUTO_TRADE_SESSION.enabled =
+    false;
+
+  AUTO_TRADE_SESSION.armed =
+    false;
+
+  AUTO_TRADE_SESSION.status =
+    "OFF";
+
+  AUTO_TRADE_SESSION.chatId =
+    null;
+
+  AUTO_TRADE_SESSION.coin =
+    null;
+
+  AUTO_TRADE_SESSION.capital =
+    null;
+
+  AUTO_TRADE_SESSION.lastTradeCapital =
+    null;
+
+  AUTO_TRADE_SESSION.previousTrade =
+    null;
+
+  AUTO_TRADE_SESSION.sourceTradeId =
+    null;
+
+  AUTO_TRADE_SESSION.startedAt =
+    null;
+
+  AUTO_TRADE_SESSION.lastCycleAt =
+    null;
+
+  AUTO_TRADE_SESSION.lastDecisionAt =
+    null;
+
+  AUTO_TRADE_SESSION.cycleCount =
+    0;
+
+  AUTO_TRADE_SESSION.awaitingSetup =
+    false;
+
+  AUTO_TRADE_SESSION.positionActive =
+    false;
+
+  AUTO_TRADE_SESSION.frozen =
+    false;
+
+  AUTO_TRADE_SESSION.freezeReason =
+    null;
+
+  AUTO_TRADE_SESSION.stopRequested =
+    false;
+
+  console.log(
+    `🤖 AUTO TRADE OFF: ${reason}`
+  );
+}
+
+
+/* ============================================================
+   FREEZE AUTO TRADE SESSION
+
+   If state becomes uncertain, do not continue
+   opening additional positions.
+============================================================ */
+
+function freezeAutoTradeSession(
+  reason
+) {
+  AUTO_TRADE_SESSION.enabled =
+    false;
+
+  AUTO_TRADE_SESSION.armed =
+    false;
+
+  AUTO_TRADE_SESSION.status =
+    "FROZEN";
+
+  AUTO_TRADE_SESSION.awaitingSetup =
+    false;
+
+  AUTO_TRADE_SESSION.positionActive =
+    false;
+
+  AUTO_TRADE_SESSION.frozen =
+    true;
+
+  AUTO_TRADE_SESSION.freezeReason =
+    reason ||
+    "UNKNOWN STATE";
+
+  console.log(
+    "🧊 AUTO TRADE FROZEN:",
+    AUTO_TRADE_SESSION.freezeReason
+  );
+}
+
+
+/* ============================================================
+   GET AUTO TRADE SESSION STATUS
+============================================================ */
+
+function getAutoTradeSessionStatus() {
+  return {
+    enabled:
+      AUTO_TRADE_SESSION.enabled,
+
+    armed:
+      AUTO_TRADE_SESSION.armed,
+
+    status:
+      AUTO_TRADE_SESSION.status,
+
+    coin:
+      AUTO_TRADE_SESSION.coin,
+
+    capital:
+      AUTO_TRADE_SESSION.capital,
+
+    cycleCount:
+      AUTO_TRADE_SESSION.cycleCount,
+
+    successfulTrades:
+      AUTO_TRADE_SESSION.successfulTrades,
+
+    failedTrades:
+      AUTO_TRADE_SESSION.failedTrades,
+
+    awaitingSetup:
+      AUTO_TRADE_SESSION.awaitingSetup,
+
+    positionActive:
+      AUTO_TRADE_SESSION.positionActive,
+
+    frozen:
+      AUTO_TRADE_SESSION.frozen,
+
+    freezeReason:
+      AUTO_TRADE_SESSION.freezeReason,
+
+    startedAt:
+      AUTO_TRADE_SESSION.startedAt,
+  };
+}
+
+
+/* ============================================================
+   CALCULATE CAPITAL FROM CLOSED TRADE
+============================================================ */
+
+function getClosedTradeCapital(
+  result
+) {
+  const realised =
+    result?.realised ||
+    result?.trade?.realised ||
+    result?.closedTrade?.realised ||
+    null;
+
+  const netSellValue =
+    safeNumber(
+      realised?.netSellValue,
+      0
+    );
+
+  if (
+    netSellValue >
+    0
+  ) {
+    return netSellValue;
+  }
+
+  const trade =
+    result?.trade ||
+    result?.closedTrade ||
+    null;
+
+  if (
+    !trade
+  ) {
+    return null;
+  }
+
+  const buyCost =
+    safeNumber(
+      trade.totalBuyCost,
+      0
+    );
+
+  if (
+    buyCost >
+    0
+  ) {
+    return buyCost;
+  }
+
+  const quantity =
+    safeNumber(
+      trade.grossQuantity ||
+      trade.quantity,
+      0
+    );
+
+  const buyPrice =
+    safeNumber(
+      trade.buyPrice,
+      0
+    );
+
+  if (
+    quantity >
+      0 &&
+    buyPrice >
+      0
+  ) {
+    return (
+      quantity *
+      buyPrice
+    );
+  }
+
+  return null;
+}
+
+
+/* ============================================================
+   PREPARE AUTO TRADE OFFER
+
+   Called AFTER a trade has successfully closed.
+============================================================ */
+
+function prepareAutoTradeOffer({
+  chatId,
+  result,
+  coin,
+}) {
+  const trade =
+    result?.trade ||
+    result?.closedTrade ||
+    null;
+
+  const capital =
+    getClosedTradeCapital(
+      result
+    );
+
+  AUTO_TRADE_SESSION.enabled =
+    false;
+
+  AUTO_TRADE_SESSION.armed =
+    false;
+
+  AUTO_TRADE_SESSION.status =
+    "WAIT_USER_PERMISSION";
+
+  AUTO_TRADE_SESSION.chatId =
+    chatId;
+
+  AUTO_TRADE_SESSION.coin =
+    String(
+      coin ||
+      trade?.coin ||
+      "GRT"
+    ).toUpperCase();
+
+  AUTO_TRADE_SESSION.capital =
+    capital;
+
+  AUTO_TRADE_SESSION.lastTradeCapital =
+    capital;
+
+  AUTO_TRADE_SESSION.previousTrade =
+    trade ||
+    null;
+
+  AUTO_TRADE_SESSION.sourceTradeId =
+    trade?.id ||
+    trade?.tradeId ||
+    null;
+
+  AUTO_TRADE_SESSION.startedAt =
+    null;
+
+  AUTO_TRADE_SESSION.lastCycleAt =
+    null;
+
+  AUTO_TRADE_SESSION.lastDecisionAt =
+    null;
+
+  AUTO_TRADE_SESSION.cycleCount =
+    0;
+
+  AUTO_TRADE_SESSION.awaitingSetup =
+    false;
+
+  AUTO_TRADE_SESSION.positionActive =
+    false;
+
+  AUTO_TRADE_SESSION.frozen =
+    false;
+
+  AUTO_TRADE_SESSION.freezeReason =
+    null;
+
+  AUTO_TRADE_SESSION.stopRequested =
+    false;
+
+  return AUTO_TRADE_SESSION;
+}
+
+
+/* ============================================================
+   ENABLE AUTO TRADE AFTER EXPLICIT YES
+============================================================ */
+
+function enableAutoTradeSession() {
+  if (
+    AUTO_TRADE_SESSION.status !==
+    "WAIT_USER_PERMISSION"
+  ) {
+    return {
+      enabled:
+        false,
+
+      reason:
+        "NO AUTO TRADE OFFER PENDING",
+    };
+  }
+
+  if (
+    !AUTO_TRADE_SESSION.coin
+  ) {
+    return {
+      enabled:
+        false,
+
+      reason:
+        "COIN UNAVAILABLE",
+    };
+  }
+
+  const capital =
+    safeNumber(
+      AUTO_TRADE_SESSION.capital,
+      0
+    );
+
+  if (
+    capital <=
+    0
+  ) {
+    return {
+      enabled:
+        false,
+
+      reason:
+        "TRADE CAPITAL UNAVAILABLE",
+    };
+  }
+
+  AUTO_TRADE_SESSION.enabled =
+    true;
+
+  AUTO_TRADE_SESSION.armed =
+    true;
+
+  AUTO_TRADE_SESSION.status =
+    "WAITING_SETUP";
+
+  AUTO_TRADE_SESSION.startedAt =
+    Date.now();
+
+  AUTO_TRADE_SESSION.lastCycleAt =
+    null;
+
+  AUTO_TRADE_SESSION.lastDecisionAt =
+    null;
+
+  AUTO_TRADE_SESSION.awaitingSetup =
+    true;
+
+  AUTO_TRADE_SESSION.positionActive =
+    false;
+
+  AUTO_TRADE_SESSION.stopRequested =
+    false;
+
+  return {
+    enabled:
+      true,
+
+    session:
+      AUTO_TRADE_SESSION,
+  };
+}
+
+
+/* ============================================================
+   BUILD AUTO TRADE QUESTION
+============================================================ */
+
+async function askAutoTradeAfterClose({
+  chatId,
+  result,
+  coin,
+}) {
+  const session =
+    prepareAutoTradeOffer({
+      chatId,
+      result,
+      coin,
+    });
+
+  const capital =
+    safeNumber(
+      session.capital,
+      0
+    );
+
+  await replyTelegram(
+    chatId,
+    `🤖 DO YOU WANT TO AUTO TRADE?
+
+🪙 Coin:
+${session.coin}
+
+💳 Next Trade Capital:
+${
+  capital >
+  0
+    ? `RM${capital.toFixed(
+        2
+      )}`
+    : "N/A"
+}
+
+Kalau tekan YES:
+
+✅ Auto Mode akan diaktifkan
+✅ Bot akan tunggu setup seterusnya
+✅ Tak paksa entry kalau setup tak cukup syarat
+✅ Modal cycle seterusnya bermula daripada hasil SELL bersih trade tadi
+
+Tekan YES hanya kalau mahu sambung Auto Mode.`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text:
+                "✅ YES — AUTO TRADE",
+
+              callback_data:
+                `AUTO_TRADE_YES:${session.coin}`,
+            },
+
+            {
+              text:
+                "❌ NO",
+
+              callback_data:
+                `AUTO_TRADE_NO:${session.coin}`,
+            },
+          ],
+        ],
+      },
+    }
+  );
+}
+
+
+/* ============================================================
+   /AUTOSTATUS
+============================================================ */
+
+bot.onText(
+  /^\/autostatus(?:@\w+)?$/i,
+  async (
+    msg
+  ) => {
+    const chatId =
+      msg.chat.id;
+
+    const status =
+      getAutoTradeSessionStatus();
+
+    await replyTelegram(
+      chatId,
+      `🤖 AUTO TRADE STATUS
+
+Status:
+${status.status}
+
+Enabled:
+${status.enabled
+  ? "YES"
+  : "NO"}
+
+Armed:
+${status.armed
+  ? "YES"
+  : "NO"}
+
+🪙 Coin:
+${status.coin ||
+  "N/A"}
+
+💳 Capital:
+${
+  status.capital
+    ? `RM${safeNumber(
+        status.capital,
+        0
+      ).toFixed(
+        2
+      )}`
+    : "N/A"
+}
+
+🔁 Cycles:
+${status.cycleCount}
+
+✅ Successful:
+${status.successfulTrades}
+
+❌ Failed:
+${status.failedTrades}
+
+🔎 Waiting Setup:
+${status.awaitingSetup
+  ? "YES"
+  : "NO"}
+
+📈 Position Active:
+${status.positionActive
+  ? "YES"
+  : "NO"}
+
+🧊 Frozen:
+${status.frozen
+  ? "YES"
+  : "NO"}
+
+${
+  status.freezeReason
+    ? `Reason:
+${status.freezeReason}`
+    : ""
+}`
+    );
+  }
+);
+
+
+/* ============================================================
+   /AUTOOFF
+============================================================ */
+
+bot.onText(
+  /^\/autooff(?:@\w+)?$/i,
+  async (
+    msg
+  ) => {
+    const chatId =
+      msg.chat.id;
+
+    const wasActive =
+      AUTO_TRADE_SESSION.enabled ||
+      AUTO_TRADE_SESSION.status !==
+        "OFF";
+
+    resetAutoTradeSession(
+      "USER /autooff"
+    );
+
+    await replyTelegram(
+      chatId,
+      wasActive
+        ? `⛔ AUTO TRADE OFF
+
+Auto session dihentikan.
+
+Bot kembali ke manual monitoring mode.`
+        : "⛔ AUTO TRADE memang OFF."
+    );
+  }
+);
 
 
 /* ============================================================
@@ -15376,9 +17030,6 @@ ${error.message}`
 
 /* ============================================================
    /FLOW
-
-   FIXED:
-   No raw JSON.
 ============================================================ */
 
 bot.onText(
@@ -15412,8 +17063,6 @@ ${error.message}`
 
 /* ============================================================
    /GRT24
-
-   Handler is explicitly restored.
 ============================================================ */
 
 bot.onText(
@@ -15438,8 +17087,7 @@ bot.onText(
 
         return;
       }
-
-      await replyTelegram(
+            await replyTelegram(
         chatId,
         report
       );
@@ -15458,13 +17106,6 @@ ${error.message}`
 
 /* ============================================================
    MANUAL GRT HOLD — COMMAND
-
-   Standalone.
-
-   NOT connected to:
-   ACTIVE_TRADES
-   PENDING_ENTRIES
-   scalping BUY NOW.
 ============================================================ */
 
 bot.onText(
@@ -15556,7 +17197,7 @@ function getManualGRTHoldStatus(
 
   if (
     momentumDecision.direction ===
-      "MASIH_DROP"
+    "MASIH_DROP"
   ) {
     return {
       status:
@@ -15570,23 +17211,23 @@ function getManualGRTHoldStatus(
     };
   }
 
-if (
-  momentumDecision.reason ===
-    "HARD BEARISH" ||
-  momentumDecision.reason ===
-    "PRICE FAILED"
-) {
-  return {
-    status:
-      "CAUTION",
+  if (
+    momentumDecision.reason ===
+      "HARD BEARISH" ||
+    momentumDecision.reason ===
+      "PRICE FAILED"
+  ) {
+    return {
+      status:
+        "CAUTION",
 
-    emoji:
-      "🟡",
+      emoji:
+        "🟡",
 
-    reason:
-      `Short-term bearish pressure: ${momentumDecision.reason}`,
-  };
-}
+      reason:
+        `Short-term bearish pressure: ${momentumDecision.reason}`,
+    };
+  }
 
   return {
     status:
@@ -15805,9 +17446,6 @@ ${MAX_GRT_SCALPING_QUANTITY.toLocaleString(
 
 /* ============================================================
    /STATUS
-
-   getBackgroundServicesStatus()
-   is created in PART 10.
 ============================================================ */
 
 bot.onText(
@@ -15830,6 +17468,9 @@ bot.onText(
 
       const active =
         getActiveTradeMonitorStatus();
+
+      const auto =
+        getAutoTradeSessionStatus();
 
       await replyTelegram(
         chatId,
@@ -15876,6 +17517,30 @@ ${active.activeTrades}
 
 Monitor Runs:
 ${active.totalRuns}
+
+━━━━━━━━━━━━━━
+
+🤖 AUTO TRADE:
+${auto.status}
+
+Coin:
+${auto.coin ||
+  "N/A"}
+
+Capital:
+${
+  auto.capital
+    ? `RM${safeNumber(
+        auto.capital,
+        0
+      ).toFixed(
+        2
+      )}`
+    : "N/A"
+}
+
+Cycles:
+${auto.cycleCount}
 
 ━━━━━━━━━━━━━━
 
@@ -15926,6 +17591,118 @@ bot.on(
     await answerCallback(
       query.id
     );
+
+
+    /* ========================================================
+       AUTO TRADE — USER SAID YES
+
+       This is THE point where Auto Mode becomes enabled.
+
+       It cannot be enabled before this callback.
+    ======================================================== */
+
+    if (
+      data.startsWith(
+        "AUTO_TRADE_YES:"
+      )
+    ) {
+      const coin =
+        data.split(
+          ":"
+        )[1];
+
+      if (
+        AUTO_TRADE_SESSION.status !==
+          "WAIT_USER_PERMISSION" ||
+        AUTO_TRADE_SESSION.coin !==
+          coin
+      ) {
+        await replyTelegram(
+          chatId,
+          `⚠️ AUTO TRADE OFFER EXPIRED
+
+Tiada pending permission untuk ${coin}.`
+        );
+
+        return;
+      }
+
+      const result =
+        enableAutoTradeSession();
+
+      if (
+        !result.enabled
+      ) {
+        await replyTelegram(
+          chatId,
+          `⚠️ AUTO TRADE TAK DAPAT DIAKTIFKAN
+
+Reason:
+${result.reason}`
+        );
+
+        return;
+      }
+
+      await replyTelegram(
+        chatId,
+        `🤖✅ AUTO TRADE ENABLED
+
+🪙 ${AUTO_TRADE_SESSION.coin}
+
+💳 Working Capital:
+RM${safeNumber(
+          AUTO_TRADE_SESSION.capital,
+          0
+        ).toFixed(
+          2
+        )}
+
+📌 Status:
+WAITING FOR NEXT SETUP
+
+Bot sekarang akan tunggu setup yang cukup syarat.
+
+❌ Tak ada setup cantik = TAK TRADE
+✅ Setup cukup syarat = cycle seterusnya boleh bermula
+
+Untuk hentikan:
+/autooff`
+      );
+
+      return;
+    }
+
+
+    /* ========================================================
+       AUTO TRADE — USER SAID NO
+    ======================================================== */
+
+    if (
+      data.startsWith(
+        "AUTO_TRADE_NO:"
+      )
+    ) {
+      const coin =
+        data.split(
+          ":"
+        )[1];
+
+      resetAutoTradeSession(
+        "USER SELECTED NO"
+      );
+
+      await replyTelegram(
+        chatId,
+        `👍 AUTO TRADE NOT ENABLED
+
+🪙 ${coin}
+
+Bot kekal dalam manual mode.`
+      );
+
+      return;
+    }
 
 
     /* ========================================================
@@ -16033,7 +17810,9 @@ ${
 
 
     /* ========================================================
-       CONFIRM ORDER
+       CONFIRM ORDER PLAN
+
+       User still executes the FIRST trade manually.
     ======================================================== */
 
     if (
@@ -16065,27 +17844,31 @@ ${
         return;
       }
 
-setTelegramUserState(
-  chatId,
-  {
-    ...state,
+      setTelegramUserState(
+        chatId,
+        {
+          ...state,
 
-    step:
-      "WAIT_MATCHED_BUY_PRICE",
-  }
-);
+          step:
+            "WAIT_MATCHED_BUY_PRICE",
+        }
+      );
 
-await replyTelegram(
-  chatId,
-  `✅ ORDER CONFIRMED
+      await replyTelegram(
+        chatId,
+        `✅ ORDER PLAN CONFIRMED
 
 🪙 ${coin}
 
-Sekarang masukkan ACTUAL MATCHED BUY PRICE dari Luno.
+Sekarang buat BUY pertama di Luno.
+
+Selepas order match, masukkan:
+
+ACTUAL MATCHED BUY PRICE
 
 Contoh:
 0.0723`
-);
+      );
 
       return;
     }
@@ -16191,7 +17974,7 @@ ${formatPrice(
 
    Commands beginning with /
    are ignored here because onText handlers
-   above already process them.
+   already process them.
 ============================================================ */
 
 bot.on(
@@ -16860,69 +18643,71 @@ ${plan.setup}`,
       return;
     }
 
-/* ========================================================
-   MATCHED BUY PRICE
-======================================================== */
 
-if (
-  state.step ===
-  "WAIT_MATCHED_BUY_PRICE"
-) {
-  const matchedBuyPrice =
-    Number(
-      text.replace(
-        ",",
-        "."
-      )
-    );
+    /* ========================================================
+       MATCHED BUY PRICE
+    ======================================================== */
 
-  if (
-    !Number.isFinite(
-      matchedBuyPrice
-    ) ||
-    matchedBuyPrice <=
-      0
-  ) {
-    await replyTelegram(
-      chatId,
-      `⚠️ Matched buy price tak sah.
+    if (
+      state.step ===
+      "WAIT_MATCHED_BUY_PRICE"
+    ) {
+      const matchedBuyPrice =
+        Number(
+          text.replace(
+            ",",
+            "."
+          )
+        );
+
+      if (
+        !Number.isFinite(
+          matchedBuyPrice
+        ) ||
+        matchedBuyPrice <=
+          0
+      ) {
+        await replyTelegram(
+          chatId,
+          `⚠️ Matched buy price tak sah.
 
 Contoh:
 0.0723`
-    );
+        );
 
-    return;
-  }
+        return;
+      }
 
-  setTelegramUserState(
-    chatId,
-    {
-      ...state,
+      setTelegramUserState(
+        chatId,
+        {
+          ...state,
 
-      matchedBuyPrice,
+          matchedBuyPrice,
 
-      step:
-        "WAIT_MATCHED_QUANTITY",
-    }
-  );
+          step:
+            "WAIT_MATCHED_QUANTITY",
+        }
+      );
 
-  await replyTelegram(
-    chatId,
-    `✅ MATCHED BUY PRICE SAVED
+      await replyTelegram(
+        chatId,
+        `✅ MATCHED BUY PRICE SAVED
 
 💵 RM${formatPrice(
-      state.coin,
-      matchedBuyPrice
-    )}
+          state.coin,
+          matchedBuyPrice
+        )}
 
 Sekarang masukkan ACTUAL MATCHED QUANTITY dari Luno.
 
 Contoh:
 7000`
-  );
+      );
 
-  return;
-}
+      return;
+    }
+
 
     /* ========================================================
        MATCHED BUY QUANTITY
@@ -16940,69 +18725,69 @@ Contoh:
           )
         );
 
-if (
-  !Number.isFinite(
-    matchedQuantity
-  ) ||
-  matchedQuantity <
-    0
-) {
-  await replyTelegram(
-    chatId,
-    `⚠️ Matched quantity tak sah.
+      if (
+        !Number.isFinite(
+          matchedQuantity
+        ) ||
+        matchedQuantity <
+          0
+      ) {
+        await replyTelegram(
+          chatId,
+          `⚠️ Matched quantity tak sah.
 
 Masukkan:
 0 = order tak match
 
 atau quantity sebenar, contoh:
 7000`
-  );
+        );
 
-  return;
-}
+        return;
+      }
 
-if (
-  matchedQuantity ===
-  0
-) {
-  const coin =
-    state.coin;
+      if (
+        matchedQuantity ===
+        0
+      ) {
+        const coin =
+          state.coin;
 
-  const coinSignalTime =
-    LAST_SIGNAL[
-      coin
-    ] ||
-    0;
+        const coinSignalTime =
+          LAST_SIGNAL[
+            coin
+          ] ||
+          0;
 
-  delete PENDING_ENTRIES[
-    coin
-  ];
+        delete PENDING_ENTRIES[
+          coin
+        ];
 
-  LAST_SIGNAL[
-    coin
-  ] =
-    0;
+        LAST_SIGNAL[
+          coin
+        ] =
+          0;
 
-  if (
-    coinSignalTime &&
-    LAST_GLOBAL_SIGNAL &&
-    Math.abs(
-      LAST_GLOBAL_SIGNAL -
-      coinSignalTime
-    ) <=
-      2000
-  ) {
-    LAST_GLOBAL_SIGNAL =
-      0;
-  }
+        if (
+          coinSignalTime &&
+          LAST_GLOBAL_SIGNAL &&
+          Math.abs(
+            LAST_GLOBAL_SIGNAL -
+            coinSignalTime
+          ) <=
+            2000
+        ) {
+          LAST_GLOBAL_SIGNAL =
+            0;
+        }
 
-  clearTelegramUserState(
-    chatId
-  );
+        clearTelegramUserState(
+          chatId
+        );
 
-  await replyTelegram(
-    chatId,
-    `❌ ${coin} ORDER NOT MATCHED
+        await replyTelegram(
+          chatId,
+          `❌ ${coin} ORDER NOT MATCHED
 
 Matched Quantity: 0
 
@@ -17010,10 +18795,10 @@ Matched Quantity: 0
 ✅ Coin cooldown released
 
 Bot boleh cari entry baru semula.`
-  );
+        );
 
-  return;
-}
+        return;
+      }
 
       const entry =
         PENDING_ENTRIES[
@@ -17145,6 +18930,10 @@ ACTIVE`,
 
     /* ========================================================
        MATCHED SELL PRICE
+
+       IMPORTANT CHANGE:
+       After successful close,
+       ASK USER WHETHER TO ENABLE AUTO TRADE.
     ======================================================== */
 
     if (
@@ -17176,10 +18965,12 @@ Masukkan actual matched sell price.`
         return;
       }
 
+      const coin =
+        state.coin;
+
       const result =
         closeActiveTrade({
-          coin:
-            state.coin,
+          coin,
 
           matchedSellPrice:
             sellPrice,
@@ -17212,6 +19003,23 @@ ${result.reason}`
         message
       );
 
+
+      /* ======================================================
+         NEW FLOW
+
+         First trade has now CLOSED.
+
+         Only now do we offer AUTO TRADE.
+      ====================================================== */
+
+      await askAutoTradeAfterClose({
+        chatId,
+
+        result,
+
+        coin,
+      });
+
       return;
     }
   }
@@ -17233,6 +19041,7 @@ ${result.reason}`
    - Market structure 15 minutes
    - Active trade monitor 15 seconds
    - GRT BUY NOW learning monitor
+   - AUTO TRADE SESSION background monitor
    - Daily / 24H maintenance
    - Persistence
    - Scheduler
@@ -17241,8 +19050,91 @@ ${result.reason}`
    - Express server
    - Final bootstrap
 
-   THIS IS THE FINAL PART.
+   AUTO TRADE FLOW:
+   First trade closed
+      ↓
+   User presses YES in PART 9
+      ↓
+   AUTO_TRADE_SESSION.enabled = true
+      ↓
+   PART 10 monitors next setup
+      ↓
+   Setup qualifies
+      ↓
+   Setup is locked for the session
+      ↓
+   Telegram notification sent
+
+   IMPORTANT:
+   - AUTO TRADE DOES NOT START ON SERVER BOOT.
+   - Restart always means AUTO OFF.
+   - User permission in PART 9 is mandatory.
+   - No withdrawal functionality.
+   - No automatic financial order submission.
 ============================================================ */
+
+
+/* ============================================================
+   AUTO TRADE BACKGROUND CONFIG
+============================================================ */
+
+const AUTO_TRADE_SCAN_INTERVAL_MS =
+  60 * 1000;
+
+const AUTO_TRADE_NOTIFY_COOLDOWN_MS =
+  5 * 60 * 1000;
+
+const AUTO_TRADE_SETUP_MAX_AGE_MS =
+  12 * 60 * 1000;
+
+const AUTO_TRADE_ENTRY_CHANGE_NOTIFY_PCT =
+  0.15;
+
+
+/* ============================================================
+   AUTO TRADE BACKGROUND RUNTIME
+============================================================ */
+
+const AUTO_TRADE_RUNTIME = {
+  running:
+    false,
+
+  lastStartedAt:
+    null,
+
+  lastCompletedAt:
+    null,
+
+  lastDurationMs:
+    null,
+
+  totalRuns:
+    0,
+
+  skippedRuns:
+    0,
+
+  errors:
+    0,
+
+  setupsDetected:
+    0,
+
+  notifications:
+    0,
+
+  lastSetupAt:
+    null,
+
+  lastNotificationAt:
+    null,
+
+  lastProposal:
+    null,
+
+  lastReason:
+    null,
+};
 
 
 /* ============================================================
@@ -17575,6 +19467,891 @@ function loadGRTTuning() {
 
 
 /* ============================================================
+   AUTO TRADE — GET CURRENT SETUP
+
+   This reads the setup already produced by
+   the normal GRT / altcoin engines.
+
+   It does NOT bypass existing qualification rules.
+============================================================ */
+
+function getAutoTradePendingSetup(
+  coin
+) {
+  const normalizedCoin =
+    String(
+      coin ||
+      ""
+    ).toUpperCase();
+
+  const candidate =
+    PENDING_ENTRIES[
+      normalizedCoin
+    ];
+
+  if (
+    !candidate
+  ) {
+    return null;
+  }
+
+  const rawCreatedAt =
+    safeNumber(
+      candidate.createdAt ||
+      candidate.timestamp ||
+      candidate.signalAt,
+      0
+    );
+
+  if (
+    rawCreatedAt <=
+    0
+  ) {
+    candidate.createdAt =
+      Date.now();
+  }
+
+  const createdAt =
+    safeNumber(
+      candidate.createdAt,
+      Date.now()
+    );
+
+  if (
+    createdAt >
+      0 &&
+    Date.now() -
+      createdAt >
+      AUTO_TRADE_SETUP_MAX_AGE_MS
+  ) {
+    return null;
+  }
+
+  return candidate;
+}
+
+
+/* ============================================================
+   AUTO TRADE — PROPOSAL FINGERPRINT
+============================================================ */
+
+function getAutoTradeProposalFingerprint(
+  proposal
+) {
+  if (
+    !proposal
+  ) {
+    return null;
+  }
+
+  return [
+    proposal.coin,
+
+    Number(
+      proposal.entryPrice ||
+      0
+    ).toFixed(
+      8
+    ),
+
+    Number(
+      proposal.tp ||
+      proposal.tp1 ||
+      0
+    ).toFixed(
+      8
+    ),
+
+    Number(
+      proposal.sl ||
+      0
+    ).toFixed(
+      8
+    ),
+
+    safeNumber(
+      proposal.score,
+      0
+    ),
+  ].join(
+    "|"
+  );
+}
+
+
+/* ============================================================
+   AUTO TRADE — MATERIAL CHANGE CHECK
+============================================================ */
+
+function hasAutoTradeProposalChanged(
+  previous,
+  next
+) {
+  if (
+    !previous ||
+    !next
+  ) {
+    return true;
+  }
+
+  const previousEntry =
+    safeNumber(
+      previous.entryPrice,
+      0
+    );
+
+  const nextEntry =
+    safeNumber(
+      next.entryPrice,
+      0
+    );
+
+  if (
+    previousEntry <=
+      0 ||
+    nextEntry <=
+      0
+  ) {
+    return (
+      getAutoTradeProposalFingerprint(
+        previous
+      ) !==
+      getAutoTradeProposalFingerprint(
+        next
+      )
+    );
+  }
+
+  const entryMove =
+    Math.abs(
+      percentChange(
+        previousEntry,
+        nextEntry
+      )
+    );
+
+  if (
+    entryMove >=
+    AUTO_TRADE_ENTRY_CHANGE_NOTIFY_PCT
+  ) {
+    return true;
+  }
+
+  if (
+    safeNumber(
+      previous.score,
+      0
+    ) !==
+    safeNumber(
+      next.score,
+      0
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    previous.setup !==
+    next.setup
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+
+/* ============================================================
+   AUTO TRADE — BUILD NEXT TRADE PROPOSAL
+
+   Uses working capital stored after previous trade.
+
+   This is a planning calculation only.
+============================================================ */
+
+function buildAutoTradeNextProposal(
+  candidate
+) {
+  if (
+    !candidate
+  ) {
+    return {
+      allowed:
+        false,
+
+      reason:
+        "NO CANDIDATE",
+    };
+  }
+
+  const coin =
+    String(
+      candidate.coin ||
+      AUTO_TRADE_SESSION.coin ||
+      ""
+    ).toUpperCase();
+
+  const entryPrice =
+    safeNumber(
+      candidate.preliminaryEntry ||
+      candidate.entryPrice ||
+      candidate.suggestedEntry ||
+      candidate.limitEntry ||
+      candidate.currentPrice,
+      0
+    );
+
+  if (
+    entryPrice <=
+    0
+  ) {
+    return {
+      allowed:
+        false,
+
+      reason:
+        "ENTRY PRICE UNAVAILABLE",
+    };
+  }
+
+  const capital =
+    safeNumber(
+      AUTO_TRADE_SESSION.capital,
+      0
+    );
+
+  if (
+    capital <=
+    0
+  ) {
+    return {
+      allowed:
+        false,
+
+      reason:
+        "AUTO CAPITAL UNAVAILABLE",
+    };
+  }
+
+  /*
+     Conservative quantity estimate using
+     the bot's configured BUY_FEE assumption.
+  */
+
+  const grossQuantity =
+    capital /
+    (
+      entryPrice *
+      (
+        1 +
+        BUY_FEE
+      )
+    );
+
+  let quantity =
+    Math.floor(
+      grossQuantity
+    );
+
+  if (
+    coin ===
+    "GRT"
+  ) {
+    quantity =
+      Math.min(
+        quantity,
+        MAX_GRT_SCALPING_QUANTITY
+      );
+  }
+
+  if (
+    quantity <=
+    0
+  ) {
+    return {
+      allowed:
+        false,
+
+      reason:
+        "CAPITAL TOO SMALL FOR ENTRY",
+    };
+  }
+
+  const tp =
+    safeNumber(
+      candidate.tp ||
+      candidate.tp1 ||
+      candidate.projectedTP1,
+      0
+    );
+
+  const tp2 =
+    safeNumber(
+      candidate.tp2 ||
+      candidate.projectedTP2,
+      0
+    );
+
+  const sl =
+    safeNumber(
+      candidate.sl ||
+      candidate.stopLoss,
+      0
+    );
+
+  if (
+    tp <=
+    entryPrice
+  ) {
+    return {
+      allowed:
+        false,
+
+      reason:
+        "VALID TP UNAVAILABLE",
+    };
+  }
+
+  if (
+    sl <=
+    0
+  ) {
+    return {
+      allowed:
+        false,
+
+      reason:
+        "VALID SL UNAVAILABLE",
+    };
+  }
+
+  const estimated =
+    calculateTradeAfterFees({
+      quantity,
+
+      entryPrice,
+            sellPrice:
+        tp,
+    });
+
+  return {
+    allowed:
+      true,
+
+    coin,
+
+    capital,
+
+    entryPrice,
+
+    quantity,
+
+    tp,
+
+    tp2:
+      tp2 >
+      tp
+        ? tp2
+        : null,
+
+    sl,
+
+    score:
+      safeNumber(
+        candidate.score ||
+        candidate.executionScore ||
+        candidate.scalpingScore,
+        0
+      ),
+
+    confidence:
+      candidate.confidence ||
+      confidenceLabel(
+        safeNumber(
+          candidate.score ||
+          candidate.executionScore ||
+          candidate.scalpingScore,
+          0
+        )
+      ),
+
+    setup:
+      candidate.setup ||
+      candidate.reason ||
+      "QUALIFIED SETUP",
+
+    estimatedNetProfit:
+      estimated
+        ?.netProfit ??
+      null,
+
+    candidate,
+
+    generatedAt:
+      Date.now(),
+  };
+}
+
+
+/* ============================================================
+   AUTO TRADE — MESSAGE
+============================================================ */
+
+function buildAutoTradeSetupMessage(
+  proposal
+) {
+  return `🤖 AUTO TRADE — SETUP READY
+
+🪙 ${proposal.coin}
+
+💳 Working Capital:
+RM${proposal.capital.toFixed(
+    2
+  )}
+
+━━━━━━━━━━━━━━
+
+💵 Suggested Entry:
+RM${formatPrice(
+    proposal.coin,
+    proposal.entryPrice
+  )}
+
+📦 Estimated Quantity:
+${proposal.quantity.toLocaleString(
+    "en-MY"
+  )}
+
+🎯 TP1:
+RM${formatPrice(
+    proposal.coin,
+    proposal.tp
+  )}
+
+🚀 TP2:
+${
+  proposal.tp2
+    ? `RM${formatPrice(
+        proposal.coin,
+        proposal.tp2
+      )}`
+    : "N/A"
+}
+
+🛑 SL:
+RM${formatPrice(
+    proposal.coin,
+    proposal.sl
+  )}
+
+💰 Estimated NET @ TP1:
+${
+  Number.isFinite(
+    proposal.estimatedNetProfit
+  )
+    ? `RM${proposal.estimatedNetProfit.toFixed(
+        2
+      )}`
+    : "N/A"
+}
+
+⭐ Score:
+${proposal.score}
+
+📊 Confidence:
+${proposal.confidence}
+
+🧠 Setup:
+${proposal.setup}
+
+━━━━━━━━━━━━━━
+
+🤖 AUTO SESSION:
+ACTIVE
+
+⚠️ Order sebenar tidak dihantar oleh bot.
+Gunakan setup ini untuk execution di Luno.
+
+Untuk hentikan:
+/autooff`;
+}
+
+
+/* ============================================================
+   AUTO TRADE — BACKGROUND MONITOR
+
+   IMPORTANT:
+   1. Runs only when user explicitly enabled Auto Mode.
+   2. Does nothing while positionActive = true.
+   3. Does nothing if session is frozen.
+   4. Uses existing scanner output.
+   5. Does not submit BUY / SELL orders.
+============================================================ */
+
+async function runAutoTradeBackgroundMonitor() {
+  if (
+    AUTO_TRADE_RUNTIME.running
+  ) {
+    AUTO_TRADE_RUNTIME.skippedRuns++;
+
+    return {
+      skipped:
+        true,
+
+      reason:
+        "PREVIOUS AUTO TRADE SCAN STILL RUNNING",
+    };
+  }
+
+  if (
+    !AUTO_TRADE_SESSION.enabled ||
+    !AUTO_TRADE_SESSION.armed
+  ) {
+    return {
+      skipped:
+        true,
+
+      reason:
+        "AUTO TRADE OFF",
+    };
+  }
+
+  if (
+    AUTO_TRADE_SESSION.frozen
+  ) {
+    return {
+      skipped:
+        true,
+
+      reason:
+        "AUTO TRADE FROZEN",
+    };
+  }
+
+  if (
+    AUTO_TRADE_SESSION.stopRequested
+  ) {
+    resetAutoTradeSession(
+      "STOP REQUESTED"
+    );
+
+    return {
+      skipped:
+        true,
+
+      reason:
+        "AUTO TRADE STOPPED",
+    };
+  }
+
+  if (
+    AUTO_TRADE_SESSION.positionActive
+  ) {
+    return {
+      skipped:
+        true,
+
+      reason:
+        "AUTO POSITION ALREADY ACTIVE",
+    };
+  }
+
+  const chatId =
+    AUTO_TRADE_SESSION.chatId;
+
+  const coin =
+    String(
+      AUTO_TRADE_SESSION.coin ||
+      ""
+    ).toUpperCase();
+
+  if (
+    !chatId ||
+    !coin
+  ) {
+    freezeAutoTradeSession(
+      "INVALID AUTO SESSION STATE"
+    );
+
+    return {
+      skipped:
+        true,
+
+      reason:
+        "INVALID AUTO SESSION",
+    };
+  }
+
+  AUTO_TRADE_RUNTIME.running =
+    true;
+
+  AUTO_TRADE_RUNTIME.lastStartedAt =
+    Date.now();
+
+  const startedAt =
+    Date.now();
+
+  try {
+    AUTO_TRADE_SESSION.lastCycleAt =
+      Date.now();
+
+    /*
+       Make sure the latest market engines
+       have an opportunity to refresh.
+
+       GRT:
+       master scanner runs every 1 minute.
+
+       Altcoins:
+       their own scanner remains 30 minutes
+       to avoid API burst.
+
+       We DO NOT launch extra altcoin scans
+       every 60 seconds.
+    */
+
+    if (
+      coin ===
+      "GRT"
+    ) {
+      if (
+        !MASTER_SCANNER_RUNTIME.running
+      ) {
+        await runMasterScanner1M();
+      }
+    }
+
+    const candidate =
+      getAutoTradePendingSetup(
+        coin
+      );
+
+    if (
+      !candidate
+    ) {
+      AUTO_TRADE_SESSION.status =
+        "WAITING_SETUP";
+
+      AUTO_TRADE_SESSION.awaitingSetup =
+        true;
+
+      AUTO_TRADE_RUNTIME.lastReason =
+        "NO QUALIFIED SETUP";
+
+      AUTO_TRADE_RUNTIME.lastCompletedAt =
+        Date.now();
+
+      AUTO_TRADE_RUNTIME.lastDurationMs =
+        Date.now() -
+        startedAt;
+
+      AUTO_TRADE_RUNTIME.totalRuns++;
+
+      return {
+        skipped:
+          false,
+
+        ready:
+          false,
+
+        reason:
+          "NO QUALIFIED SETUP",
+      };
+    }
+
+    const proposal =
+      buildAutoTradeNextProposal(
+        candidate
+      );
+
+    if (
+      !proposal.allowed
+    ) {
+      AUTO_TRADE_RUNTIME.lastReason =
+        proposal.reason;
+
+      AUTO_TRADE_RUNTIME.lastCompletedAt =
+        Date.now();
+
+      AUTO_TRADE_RUNTIME.lastDurationMs =
+        Date.now() -
+        startedAt;
+
+      AUTO_TRADE_RUNTIME.totalRuns++;
+
+      return {
+        skipped:
+          false,
+
+        ready:
+          false,
+
+        reason:
+          proposal.reason,
+      };
+    }
+
+    AUTO_TRADE_RUNTIME.setupsDetected++;
+
+    AUTO_TRADE_RUNTIME.lastSetupAt =
+      Date.now();
+
+    const previous =
+      AUTO_TRADE_RUNTIME.lastProposal;
+
+    const changed =
+      hasAutoTradeProposalChanged(
+        previous,
+        proposal
+      );
+
+    const notificationCooldownPassed =
+      !AUTO_TRADE_RUNTIME.lastNotificationAt ||
+      Date.now() -
+        AUTO_TRADE_RUNTIME.lastNotificationAt >=
+        AUTO_TRADE_NOTIFY_COOLDOWN_MS;
+
+    const firstReady =
+      AUTO_TRADE_SESSION.status !==
+      "SETUP_READY";
+
+    AUTO_TRADE_SESSION.status =
+      "SETUP_READY";
+
+    AUTO_TRADE_SESSION.awaitingSetup =
+      false;
+
+    AUTO_TRADE_SESSION.lastDecisionAt =
+      Date.now();
+
+    AUTO_TRADE_RUNTIME.lastProposal =
+      proposal;
+
+    AUTO_TRADE_RUNTIME.lastReason =
+      "QUALIFIED SETUP READY";
+
+    /*
+       Prevent Telegram spam.
+
+       Notify:
+       - first qualified setup
+       - materially changed setup after cooldown
+    */
+
+    if (
+      firstReady ||
+      (
+        changed &&
+        notificationCooldownPassed
+      )
+    ) {
+      await replyTelegram(
+        chatId,
+        buildAutoTradeSetupMessage(
+          proposal
+        )
+      );
+
+      AUTO_TRADE_RUNTIME.notifications++;
+
+      AUTO_TRADE_RUNTIME.lastNotificationAt =
+        Date.now();
+    }
+
+    AUTO_TRADE_RUNTIME.lastCompletedAt =
+      Date.now();
+
+    AUTO_TRADE_RUNTIME.lastDurationMs =
+      Date.now() -
+      startedAt;
+
+    AUTO_TRADE_RUNTIME.totalRuns++;
+
+    return {
+      skipped:
+        false,
+
+      ready:
+        true,
+
+      proposal,
+    };
+  } catch (
+    error
+  ) {
+    AUTO_TRADE_RUNTIME.errors++;
+
+    AUTO_TRADE_RUNTIME.lastReason =
+      error.message;
+
+    console.log(
+      "Auto trade background monitor error:",
+      error.message
+    );
+
+    return {
+      skipped:
+        false,
+
+      error:
+        error.message,
+    };
+  } finally {
+    AUTO_TRADE_RUNTIME.running =
+      false;
+  }
+}
+
+
+/* ============================================================
+   AUTO TRADE BACKGROUND STATUS
+============================================================ */
+
+function getAutoTradeBackgroundStatus() {
+  return {
+    running:
+      AUTO_TRADE_RUNTIME.running,
+
+    totalRuns:
+      AUTO_TRADE_RUNTIME.totalRuns,
+
+    skippedRuns:
+      AUTO_TRADE_RUNTIME.skippedRuns,
+
+    errors:
+      AUTO_TRADE_RUNTIME.errors,
+
+    setupsDetected:
+      AUTO_TRADE_RUNTIME.setupsDetected,
+
+    notifications:
+      AUTO_TRADE_RUNTIME.notifications,
+
+    lastStartedAt:
+      AUTO_TRADE_RUNTIME.lastStartedAt,
+
+    lastCompletedAt:
+      AUTO_TRADE_RUNTIME.lastCompletedAt,
+
+    lastDurationMs:
+      AUTO_TRADE_RUNTIME.lastDurationMs,
+
+    lastSetupAt:
+      AUTO_TRADE_RUNTIME.lastSetupAt,
+
+    lastNotificationAt:
+      AUTO_TRADE_RUNTIME.lastNotificationAt,
+
+    lastReason:
+      AUTO_TRADE_RUNTIME.lastReason,
+
+    session:
+      getAutoTradeSessionStatus(),
+  };
+}
+
+
+/* ============================================================
    COLLECT EXECUTED TRADES FOR ONE COIN
 ============================================================ */
 
@@ -17852,7 +20629,7 @@ async function runPriceMemoryCollector() {
     }
 
     runtime.lastCompletedAt =
-      Date.now();
+          Date.now();
 
     runtime.lastDurationMs =
       Date.now() -
@@ -18557,6 +21334,21 @@ function startScheduler() {
   );
 
   /*
+     AUTO TRADE SESSION MONITOR.
+
+     Runs every 60 seconds,
+     but does nothing unless user
+     has explicitly enabled AUTO MODE
+     from PART 9.
+  */
+
+  createSafeInterval(
+    "autoTradeMonitor",
+    runAutoTradeBackgroundMonitor,
+    AUTO_TRADE_SCAN_INTERVAL_MS
+  );
+
+  /*
      BUY NOW learning.
   */
 
@@ -18659,6 +21451,9 @@ function getExtraBackgroundStatus() {
     activeTradeMonitor:
       getActiveTradeMonitorStatus(),
 
+    autoTrade:
+      getAutoTradeBackgroundStatus(),
+
     grtLearning: {
       running:
         GRT_LEARNING_RUNTIME
@@ -18682,8 +21477,6 @@ function getExtraBackgroundStatus() {
     },
   };
 }
-
-
 /* ============================================================
    BACKGROUND SERVICES STATUS
 ============================================================ */
@@ -18720,9 +21513,91 @@ function getBackgroundServicesStatus() {
     alerts:
       getAlertDeliveryStatus(),
 
+    autoTrade:
+      getAutoTradeBackgroundStatus(),
+
     extraBackground:
       getExtraBackgroundStatus(),
   };
+}
+
+
+/* ============================================================
+   RESET AUTO TRADE ON BOOT
+
+   CRITICAL SAFETY RULE:
+
+   Server restart / Render redeploy
+   must NEVER resume an old auto session.
+
+   User must finish first trade again
+   and explicitly press YES again.
+============================================================ */
+
+function enforceAutoTradeOffOnBoot() {
+  AUTO_TRADE_SESSION.enabled =
+    false;
+
+  AUTO_TRADE_SESSION.armed =
+    false;
+
+  AUTO_TRADE_SESSION.status =
+    "OFF";
+
+  AUTO_TRADE_SESSION.chatId =
+    null;
+
+  AUTO_TRADE_SESSION.coin =
+    null;
+
+  AUTO_TRADE_SESSION.capital =
+    null;
+
+  AUTO_TRADE_SESSION.lastTradeCapital =
+    null;
+
+  AUTO_TRADE_SESSION.previousTrade =
+    null;
+
+  AUTO_TRADE_SESSION.sourceTradeId =
+    null;
+
+  AUTO_TRADE_SESSION.startedAt =
+    null;
+
+  AUTO_TRADE_SESSION.lastCycleAt =
+    null;
+
+  AUTO_TRADE_SESSION.lastDecisionAt =
+    null;
+
+  AUTO_TRADE_SESSION.cycleCount =
+    0;
+
+  AUTO_TRADE_SESSION.awaitingSetup =
+    false;
+
+  AUTO_TRADE_SESSION.positionActive =
+    false;
+
+  AUTO_TRADE_SESSION.frozen =
+    false;
+
+  AUTO_TRADE_SESSION.freezeReason =
+    null;
+
+  AUTO_TRADE_SESSION.stopRequested =
+    false;
+
+  AUTO_TRADE_RUNTIME.lastProposal =
+    null;
+
+  AUTO_TRADE_RUNTIME.lastNotificationAt =
+    null;
+
+  console.log(
+    "🤖 AUTO TRADE: OFF ON STARTUP"
+  );
 }
 
 
@@ -18823,7 +21698,19 @@ async function startAllBackgroundServices() {
 
   try {
     /*
-       Restore persisted data first.
+       CRITICAL:
+       Auto trade always OFF after
+       process startup / restart.
+    */
+
+    enforceAutoTradeOffOnBoot();
+
+    /*
+       Restore persisted analytical
+       data only.
+
+       AUTO TRADE SESSION IS NOT
+       PERSISTED OR RESTORED.
     */
 
     loadGRTBuyNowHistory();
@@ -18890,6 +21777,14 @@ async function startAllBackgroundServices() {
       warmup,
 
       altcoinWarmup,
+
+      autoTrade: {
+        enabled:
+          AUTO_TRADE_SESSION.enabled,
+
+        status:
+          AUTO_TRADE_SESSION.status,
+      },
     };
   } catch (
     error
@@ -18948,6 +21843,9 @@ async function sendStartupMessage() {
 📈 TRADE MONITOR:
 15 SEC
 
+🤖 AUTO SESSION CHECK:
+1 MIN
+
 🪙 ALTCOIN SCANNER:
 30 MIN
 
@@ -18961,6 +21859,14 @@ ${MAX_GRT_SCALPING_QUANTITY.toLocaleString(
 
 🪙 GRT STATE:
 ${GRT_MOMENTUM_RUNTIME.phase}
+
+🤖 AUTO TRADE:
+OFF
+
+⚠️ Auto Mode requires:
+1️⃣ First trade completed
+2️⃣ Trade closed
+3️⃣ User presses YES
 
 📍 SERVICE:
 ${SERVICE_CODE}
@@ -18992,6 +21898,10 @@ async function bootstrapBackgroundServices() {
     ) {
       console.log(
         "✅ BACKGROUND BOOTSTRAP COMPLETE"
+      );
+
+      console.log(
+        "🤖 AUTO TRADE ENGINE: READY — SESSION OFF"
       );
 
       await sendStartupMessage();
@@ -19042,6 +21952,20 @@ app.get(
 
       serviceCode:
         SERVICE_CODE,
+
+      autoTrade: {
+        enabled:
+          AUTO_TRADE_SESSION
+            .enabled,
+
+        status:
+          AUTO_TRADE_SESSION
+            .status,
+
+        coin:
+          AUTO_TRADE_SESSION
+            .coin,
+      },
 
       uptimeSeconds:
         Math.floor(
@@ -19105,6 +22029,47 @@ app.get(
 
         engineReady:
           GRT_ENGINE_HAS_BEEN_READY,
+      },
+
+      autoTrade: {
+        enabled:
+          AUTO_TRADE_SESSION
+            .enabled,
+
+        armed:
+          AUTO_TRADE_SESSION
+            .armed,
+
+        status:
+          AUTO_TRADE_SESSION
+            .status,
+
+        coin:
+          AUTO_TRADE_SESSION
+            .coin,
+
+        capital:
+          AUTO_TRADE_SESSION
+            .capital,
+
+        cycleCount:
+          AUTO_TRADE_SESSION
+            .cycleCount,
+
+        positionActive:
+          AUTO_TRADE_SESSION
+            .positionActive,
+
+        frozen:
+          AUTO_TRADE_SESSION
+            .frozen,
+
+        freezeReason:
+          AUTO_TRADE_SESSION
+            .freezeReason,
+
+        runtime:
+          getAutoTradeBackgroundStatus(),
       },
 
       activeTrades:
@@ -19175,6 +22140,12 @@ process.on(
 
 /* ============================================================
    SAVE STATE BEFORE EXIT
+
+   IMPORTANT:
+   AUTO TRADE SESSION IS DELIBERATELY
+   NOT SAVED.
+
+   Restart = AUTO OFF.
 ============================================================ */
 
 function saveAllPersistentState() {
@@ -19189,6 +22160,10 @@ function saveAllPersistentState() {
 process.on(
   "SIGTERM",
   () => {
+    /*
+       Do NOT persist AUTO_TRADE_SESSION.
+    */
+
     saveAllPersistentState();
 
     process.exit(
@@ -19201,6 +22176,10 @@ process.on(
 process.on(
   "SIGINT",
   () => {
+    /*
+       Do NOT persist AUTO_TRADE_SESSION.
+    */
+
     saveAllPersistentState();
 
     process.exit(
@@ -19223,6 +22202,10 @@ app.listen(
 
     console.log(
       `Service code: ${SERVICE_CODE}`
+    );
+
+    console.log(
+      "🤖 AUTO TRADE DEFAULT: OFF"
     );
   }
 );
