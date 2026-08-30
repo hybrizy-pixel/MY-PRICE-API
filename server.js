@@ -21206,7 +21206,6 @@ async function getBTCPriceAlertSnapshot() {
 
     section:
       `₿ BTC RM${formatPrice(
-        "BTC",
         ticker.currentPrice
       )}
 15M : ${formatRollingPriceMove(
@@ -21314,7 +21313,6 @@ async function getGRTPriceAlertSnapshot(
 
     section:
       `🪙 GRT RM${formatPrice(
-        "GRT",
         ticker.currentPrice
       )}
 5M  : ${formatRollingPriceMove(
@@ -21675,7 +21673,6 @@ async function buildGRT24Report() {
     open >
       0
       ? `RM${formatPrice(
-          "GRT",
           open
         )}`
       : "N/A"
@@ -21684,7 +21681,6 @@ async function buildGRT24Report() {
     high >
       0
       ? `RM${formatPrice(
-          "GRT",
           high
         )}`
       : "N/A"
@@ -21693,7 +21689,6 @@ async function buildGRT24Report() {
     low >
       0
       ? `RM${formatPrice(
-          "GRT",
           low
         )}`
       : "N/A"
@@ -21702,7 +21697,6 @@ async function buildGRT24Report() {
     current >
       0
       ? `RM${formatPrice(
-          "GRT",
           current
         )}`
       : "N/A"
