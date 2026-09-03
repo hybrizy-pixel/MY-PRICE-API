@@ -2968,7 +2968,10 @@ function getRollingPriceChange(
     return null;
   }
 
-  return {
+   return {
+    ready:
+      true,
+
     coin:
       normalized,
 
@@ -21192,7 +21195,7 @@ async function getBTCPriceAlertSnapshot() {
     ticker.currentPrice
   );
 
-  
+
 const rolling15m =
   getRollingPriceChange(
     "BTC",
