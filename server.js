@@ -21192,12 +21192,13 @@ async function getBTCPriceAlertSnapshot() {
     ticker.currentPrice
   );
 
-  const rolling15m =
-    getRollingPriceChange(
-      "BTC",
-      ticker.currentPrice,
-      FIFTEEN_MINUTES
-    );
+  
+const rolling15m =
+  getRollingPriceChange(
+    "BTC",
+    FIFTEEN_MINUTES,
+    ticker.currentPrice
+  );
 
   return {
     ticker,
@@ -21262,26 +21263,26 @@ async function getGRTPriceAlertSnapshot(
     ticker.currentPrice
   );
 
-  const rolling5m =
-    getRollingPriceChange(
-      "GRT",
-      ticker.currentPrice,
-      FIVE_MINUTES
-    );
+const rolling5m =
+  getRollingPriceChange(
+    "GRT",
+    FIVE_MINUTES,
+    ticker.currentPrice
+  );
 
-  const rolling15m =
-    getRollingPriceChange(
-      "GRT",
-      ticker.currentPrice,
-      FIFTEEN_MINUTES
-    );
+const rolling15m =
+  getRollingPriceChange(
+    "GRT",
+    FIFTEEN_MINUTES,
+    ticker.currentPrice
+  );
 
-  const rolling1h =
-    getRollingPriceChange(
-      "GRT",
-      ticker.currentPrice,
-      ONE_HOUR
-    );
+const rolling1h =
+  getRollingPriceChange(
+    "GRT",
+    ONE_HOUR,
+    ticker.currentPrice
+  );
 
   const movement =
     getGRTNaturalMovementLabel({
