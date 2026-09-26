@@ -26468,9 +26468,9 @@ async function sxAsk(msg,question,original=null,allowPositions=false,keepFree=fa
     if(SX.sessions.get(key)?.token!==token)return;
     const stale=sxPacketStale(p);if(stale){answer.verdict='TUNGGU';answer.direction='WAIT';answer.explanation='Data berubah atau sudah lama ketika analisis disiapkan. Semak semula sebelum membuat keputusan.';}
     const owned=Object.values(SAF_STATE.setups).filter(s=>s.status==='BOUGHT'&&String(s.chatId)===String(msg.chat.id));
-    const text=(recovery&&!answer.explanation.startsWith('Data berubah')?'Status recovery: '+recovery+'\n':'')+sxResearchReport(p,answer,stale,owned)+(answer.direction==='WAIT'?'\nAI: '+answer.explanation:'');
-    await sxReply(msg.chat.id,text,sxSpeechOptions(msg.chat.id,text,{reply_markup:{inline_keyboard:[[{text:'Semak semula',callback_data:'SX:ASK:direction'},{text:'Tamat Sembang',callback_data:'SX:EXIT'}]]}}));
-    await sxAutoSpeak(msg,text,session);
+    const text=sxResearchReport(p,{...answer,recovery:!!recovery},stale,owned);
+    await sxReply(msg.chat.id,text,sxSpeechOptions(msg.chat.id,sxReportPlain(text),{parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:'Semak semula',callback_data:'SX:ASK:direction'},{text:'Tamat Sembang',callback_data:'SX:EXIT'}]]}}));
+    await sxAutoSpeak(msg,sxReportPlain(text),session);
     session.at=Date.now();session.history.push({role:'user',content:q},{role:'assistant',content:JSON.stringify(answer)});session.history=session.history.slice(-6);session.last={at:p.at,feature:p.feature};
     sxAudit('AI_REVIEW',{direction:answer.direction,engine:p.feature?.direction||'WAIT',verdict:answer.verdict,evidence:answer.evidence,featureAt:p.at,price:p.feature?.price||null,end:Date.now()+15*60000,lastAt:Date.now(),model:SX_CFG.model});sxSave();
   }catch(e){const code=/^[A-Z_]+$/.test(e.message||'')?e.message:'AI_RESPONSE_INVALID';await replyTelegram(msg.chat.id,`AI belum dapat melengkapkan semakan (${code}).\n${sxGroqHelp(code)}\nData/angka tidak direka. /grtcondition masih tersedia.`);}
@@ -26615,46 +26615,47 @@ function sxResearchLevels(p){const f=p.feature,price=f?.price;if(!safPositive(pr
   // A historical rejection below price is not automatically proven support (and vice versa).
   return {gap,below:choose(all.filter(x=>x.price<price&&/dasar|lantunan|pesanan beli|low/.test(x.source)).sort((a,b)=>b.price-a.price)),above:choose(all.filter(x=>x.price>price&&/puncak|penolakan|pesanan jual|high/.test(x.source)).sort((a,b)=>a.price-b.price))};
 }
+function sxReportPlain(text){return String(text).replace(/<\/?b>/g,'').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');}
 function sxResearchReport(p,answer,stale=false,positions=[]){
-  const f=sxDisplayFeature(p),d=p.day,t=p.technical,money=x=>'RM'+safFmt(x,4);
-  if(stale||sxPacketStale(p)||!f)return '🧠 GRT AI · DATA PERLU DISEGARKAN\n• Bacaan sudah lama atau belum tersedia. Tekan Semak semula sebelum menilai harga.';
-  const levels=sxResearchLevels(p),s=levels.below[0],s2=levels.below[1],r=levels.above[0],r2=levels.above[1];
-  const trend=t?.ready&&Number.isFinite(t.ma9)&&Number.isFinite(t.ma20)?t.ma9>t.ma20?'naik':t.ma9<t.ma20?'turun':'mendatar':'belum jelas';
-  const flowKnown=f.flowCovered===true&&f.trades>0&&!f.flowConflict,flowUp=flowKnown&&f.buyMYR>f.sellMYR,flowDown=flowKnown&&f.sellMYR>f.buyMYR;
-  const fusion=sxFusion(p),direction=sxFusionText(p);
-  let out=`🧠 KAJIAN GRT\nHarga rujukan: ${money(f.price)}\n${direction}\n\nPRICE TO WATCH\n`;
-  out+=r?`• Upside: harga perlu breakout ${money(r.price)} dan hold di atasnya. ${r2?'Jika buy pressure ikut kuat, next zone '+money(r2.price)+'.':'Next target belum cukup jelas.'}\n`:'• Paras kenaikan yang cukup berasingan daripada harga sekarang belum jelas.\n';
-  out+=s?`• Downside: watch support ${money(s.price)}. ${s2?'Jika breakdown dan gagal reclaim, next zone '+money(s2.price)+'.':'Paras lebih bawah belum cukup jelas.'}\n`:'• Paras bawah yang cukup jelas belum tersedia.\n';
-  out+='• Ini kawasan untuk diperhatikan, bukan jaminan harga akan sampai. Paras terlalu rapat telah digabungkan atau diketepikan.\n';
-  out+='\nBUKTI UTAMA\n';
-  if(d?.ready){out+=`• Dalam rekod 24 jam lengkap, harga berubah ${safFmt(d.change)}%; terendah ${money(d.low)}, tertinggi ${money(d.high)}.\n`;if(safPositive(d.vwap))out+=`• Harga sekarang ${f.price>=d.vwap?'di atas':'di bawah'} purata dagangan ${money(d.vwap)}. Ini konteks trend, bukan pengesahan harga akan terus ${f.price>=d.vwap?'naik':'turun'}.\n`;}
-  else out+='• Rekod lengkap 24 jam belum tersedia; ia tidak digunakan untuk membuat kesimpulan.\n';
-  if(f.flowConflict)out+=`• Rekod stream dan REST tidak sepadan. REST menerima ${f.trades} transaksi seminit; pengesahan tekanan ditangguhkan sehingga sumber sepadan.\n`;
-  else if(flowKnown)out+=`• Dalam seminit yang direkodkan: belian RM${safFmt(f.buyMYR)} dan jualan RM${safFmt(f.sellMYR)}. ${flowUp?'Belian lebih besar.':flowDown?'Jualan lebih besar.':'Kedua-duanya seimbang.'}\n`;
-  else if(f.flowCovered&&f.trades===0)out+='• Tiada transaksi diterima dalam tetingkap seminit ini. Itu bukan bukti tiada dagangan sepanjang sesi; arah belum disahkan melalui transaksi.\n';
-  else out+='• Rekod transaksi seminit belum lengkap. Jumlah kosong tidak dianggap RM0 dagangan sebenar.\n';
-  if(Number.isFinite(f.imbalance))out+=`• Order book lebih berat di sebelah ${f.imbalance>0?'beli':f.imbalance<0?'jual':'yang seimbang'}. Ia boleh dibatalkan, jadi belum membuktikan harga akan bergerak ke arah itu.\n`;
-  if(flowKnown&&p.quality?.streamSynchronized&&f.resistance?.added!=null){const net=f.resistance.added-f.resistance.executed-f.resistance.cancelled;if(net>0)out+='• Sell wall bertambah bersih — upside boleh tersekat.\n';else if(net<0)out+='• Sell wall berkurang — mungkin cancellation, bukan semuanya dimakan buyer.\n';}
-  if(flowKnown&&Number.isFinite(f.imbalance)&&((f.imbalance>0&&flowDown)||(f.imbalance<0&&flowUp)))out+='• Conflict: order book dan executed flow berlawan. Utamakan transaksi yang benar-benar berlaku; jangan ikut wall sahaja.\n';
-  if(d?.ready&&((d.change>0&&trend==='turun')||(d.change<0&&trend==='naik')))out+='• Conflict timeframe: trend pendek berlawanan dengan perubahan 24 jam. Ini boleh jadi pullback/rebound, belum cukup untuk panggil reversal.\n';
-  out+='\nEARLY DETECTION & CROSS-CHECK\n';
-  for(const cue of fusion.notes.slice(0,3))out+='• '+cue+'\n';
-  if(!fusion.notes.length)out+='• Belum ada early cue yang cukup jelas; tiada signal dipaksa.\n';
-  for(const c of fusion.conflicts.slice(0,3))out+='• '+c+'\n';
-  out+=`• ${fusion.agreement}/${fusion.available||0} keluarga bukti memihak bias utama. Ini bukan probability.\n`;
-  out+='\nENTRY WATCH\n';
-  out+=s?`• Dekat ${money(s.price)}: watch bounce + buy pressure. Touch support sahaja bukan entry confirmation.\n`:'';
-  out+=r?`• Di atas ${money(r.price)}: watch breakout → retest → hold. Jangan chase satu spike.\n`:'';
-  if(r){const gross=safPct(f.price,r.price),feeMove=((1+BUY_FEE)/(1-SELL_FEE)-1)*100;out+=`• Ruang ke halangan terdekat sekitar ${safFmt(gross)}%. Anggaran kenaikan untuk menampung fee beli+jual ialah ${safFmt(feeMove)}%${gross<=feeMove?'; ruang ini belum menampung fee, jadi bukan sasaran untung bersih.':'; spread dan gelinciran harga masih perlu diambil kira.'}\n`;}
-  out+='\nHOLDING / RISK WATCH\n';
-  out+=s?`• Perhatikan ${money(s.price)}: breakdown + gagal reclaim menambah downside risk.\n`:'';
-  out+=r?`• Perhatikan ${money(r.price)}: rejection + sell pressure meningkat boleh menandakan upside makin lemah.\n`:'';
-  const bought=positions.filter(x=>safPositive(x.actualEntryPrice)).slice(-1)[0];if(bought){const fill=bought.actualEntryPrice;out+=`• Harga belian direkodkan ${money(fill)}; perubahan harga ${safFmt(safPct(fill,f.price))}%. Anggaran pulang modal selepas fee ${money(fill*(1+BUY_FEE)/(1-SELL_FEE))}.\n`;}
-  out+='\nVERDICT\n';
-  const aiConflict=answer.verdict==='TOLAK'||answer.direction!=='WAIT'&&answer.direction!==fusion.direction;
-  out+=`• ${direction}. ${aiConflict?'AI review tidak sependapat; kekalkan watch sahaja.':fusion.confirmed?'Bukti asas sehaluan; entry masih perlu memenuhi retest, risk dan fee.':'Watch zone dahulu; belum cukup confirmation untuk entry.'}\n`;
-  const forecasts=(p.forecasts||[]).filter(q=>q.ready);if(forecasts.length){const q=forecasts[0];out+=`• Model ${q.h} minit menganggarkan julat ${money(q.lower)}–${money(q.upper)}; harga boleh keluar daripada julat ini.\n`;}
-  out+='• Ini bukan model ramalan 24 jam yang telah diuji. Tiada order dibuat.\n'+sxMYTime(p.at);
+  const esc=x=>String(x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const head=x=>'━━━━━━━━━━━━━━\n<b>'+esc(x)+'</b>\n';
+  const money=x=>safPositive(x)?'RM'+safFmt(x,4):'belum tersedia';
+  const f=sxDisplayFeature(p);
+  if(stale||sxPacketStale(p)||!f)return head('🧠 GRT · DATA LAMA')+'Segarkan data sebelum menilai harga.';
+  const x=sxFusion(p),levels=sxResearchLevels(p),lo=levels.below[0],lo2=levels.below[1],hi=levels.above[0],hi2=levels.above[1];
+  const bias=x.direction==='UP'?'NAIK':x.direction==='DOWN'?'TURUN':'BERCAMPUR';
+  let out=head('🧠 GRT RINGKAS')+money(f.price)+' · '+bias+' · '+(x.confirmed?'bukti sehaluan':'belum disahkan')+'\n';
+  out+=head('🔮 EARLY PREDICTION');
+  // Consume existing validated forecasts; never turn heuristic votes into probabilities.
+  const models=(p.forecasts||[]).filter(q=>q.ready&&p.quality?.ready&&f.ready&&!f.flowConflict&&[q.h,q.expectedPrice,q.lower,q.upper].every(Number.isFinite)&&q.h>0&&q.lower>0&&q.upper>=q.lower&&q.expectedPrice>0).sort((a,b)=>a.h-b.h);
+  const q=models.find(q=>q.h===15)||models[0];
+  if(q){
+    out+='Model '+q.h+' min: '+money(q.expectedPrice)+'; julat '+money(q.lower)+'–'+money(q.upper)+'.\n';
+    if(q.metrics&&Number.isFinite(q.metrics.coverage)&&Number.isFinite(q.metrics.validation))out+='Liputan julat dalam ujian: '+safFmt(q.metrics.coverage*100,0)+'% / '+q.metrics.validation+' sampel; bukan jaminan.\n';
+    const modelDir=q.expectedPrice>f.price?'UP':q.expectedPrice<f.price?'DOWN':'WAIT';
+    if(x.direction!=='WAIT'&&modelDir!==x.direction)out+='Model dan bias semasa berbeza — conviction rendah.\n';
+  }else out+='Model statistik belum layak; sasaran berikut ialah senario, bukan ramalan masa.\n';
+  if(x.direction==='UP'&&hi)out+='Bias awal → '+money(hi.price)+(hi2?'; jika pecah & hold → '+money(hi2.price):'')+'. Batal bias jika '+(lo?'jatuh bawah '+money(lo.price):'tekanan beli hilang')+'.\n';
+  else if(x.direction==='DOWN'&&lo)out+='Bias awal → '+money(lo.price)+(lo2?'; jika pecah → '+money(lo2.price):'')+'. Batal bias jika '+(hi?'reclaim '+money(hi.price):'tekanan jual hilang')+'.\n';
+  else out+='Dua hala: '+money(lo?.price)+' ↔ '+money(hi?.price)+'. Tunggu pecahan + transaksi; tiada arah dipaksa.\n';
+  out+=head('🟢 BUYER WATCH · BELUM BELI');
+  out+='Rebound: '+(lo?money(lo.price)+' + lantunan & belian sebenar.':'support belum jelas.')+'\n';
+  out+='Breakout: '+(hi?'atas '+money(hi.price)+' → retest & hold'+(hi2?'; zon '+money(hi2.price):'')+'.':'paras belum jelas.')+'\n';
+  out+=head('🔴 SELLER WATCH · TEKANAN JUAL');
+  out+='Halangan: '+(hi?money(hi.price)+'; rejection + jualan kuat menambah risiko.':'belum jelas.')+'\n';
+  out+='Breakdown: '+(lo?'bawah '+money(lo.price)+' & gagal reclaim'+(lo2?' → '+money(lo2.price):'')+'.':'support belum jelas.')+'\n';
+  const owned=positions.filter(v=>safPositive(v.actualEntryPrice)).slice(-1)[0];
+  if(owned)out+='Pegangan direkodkan: entry '+money(owned.actualEntryPrice)+'; BE anggaran '+money(owned.actualEntryPrice*(1+BUY_FEE)/(1-SELL_FEE))+'.\n';
+  out+=head('📊 BUKTI & KEPUTUSAN');
+  const flow=f.flowConflict?'flow bercanggah':!f.flowCovered?'flow belum lengkap':f.trades===0?'0 transaksi/min':f.trades+' transaksi/min; beli RM'+safFmt(f.buyMYR,0)+' / jual RM'+safFmt(f.sellMYR,0);
+  out+=esc(flow)+'. Bukti sehaluan '+x.agreement+'/'+(x.available||0)+' (bukan odds).\n';
+  const reason=x.notes?.[0]||x.groups?.find(g=>g.v)?.why;
+  if(reason)out+=esc(reason)+'\n';
+  if(x.conflicts?.length)out+=esc(x.conflicts[0])+'\n';
+  if(hi){const gross=safPct(f.price,hi.price),fees=((1+BUY_FEE)/(1-SELL_FEE)-1)*100;out+='Ruang '+safFmt(gross)+'% vs fee '+safFmt(fees)+'%'+(gross<=fees?' — belum lepas fee.':' — belum tolak spread/slippage.')+'\n';}
+  const aiConflict=answer.verdict==='TOLAK'||answer.direction!=='WAIT'&&answer.direction!==x.direction;
+  out+=(answer.recovery?'AI tidak tersedia; bacaan berasaskan engine. ':aiConflict?'AI/engine bercanggah. ':'')+(x.confirmed&&!aiConflict&&!answer.recovery?'Pantau setup; syarat entry asal kekal.':'TUNGGU pengesahan; bukan signal entry.')+'\n';
+  out+='Sasaran bersyarat, bukan jaminan. Tiada order.\n'+esc(sxMYTime(p.at));
   return out;
 }
 
