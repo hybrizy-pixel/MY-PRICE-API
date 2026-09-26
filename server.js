@@ -84,6 +84,10 @@ const bot =
 
 
 bot.setMyCommands([
+  { command: "portfolio", description: "MAIN portfolio (read only)" },
+  { command: "watchtrade", description: "Monitor a MAIN trade" },
+  { command: "lasttrade", description: "Latest MAIN trade" },
+  { command: "grtsignals", description: "GRT detectors and monitors" },
   {
     command: "start",
     description: "Show bot commands",
@@ -24249,6 +24253,8 @@ Old SELL button is now invalid.`
 async function handlePart9TextState(
   msg
 ) {
+  // Explicit ForceReply ownership keeps fill/date text out of legacy capital input.
+  if (safOwnsReply(msg)) return false;
   const chatId =
     msg?.chat?.id;
 
@@ -24992,6 +24998,9 @@ bot.on(
         ""
       );
 
+    // SAF analytics owns its callback namespace; do not acknowledge twice.
+    if (data.startsWith("SAF:")) return;
+
     if (
       !chatId ||
       !data
@@ -25253,6 +25262,711 @@ bot.on(
 /* ============================================================
    END PART 9
 ============================================================ */
+/* ============================================================
+   SAF ANALYTICS V1 - ADDITIVE MASTER BLUEPRINT IMPLEMENTATION
+   All numbers below are NEW detector defaults for forward validation.
+   They do not tune, overwrite or replace any Part 4/5/7 parameter.
+   No order submission, cancellation, transfer or execution intent here.
+   Existing master scanner supplies one snapshot; no new market polling.
+============================================================ */
+const SAF_CONFIG = Object.freeze({
+  version: 1, maxAgeMs: 150000, minTrades: 6, minFlowSpanMs: 120000,
+  setupTtlMs: 30 * 60000, promptTtlMs: 5 * 60000,
+  repeatCooldownMs: 10 * 60000, materialScore: 15, materialMovePct: 0.5,
+  recoveryScans: 3, confirmationScans: 2, maxGapMs: 150000,
+  maxChasePct: 0.35, minRoomPct: 1.20, maxSpreadPct: 0.40,
+  supportBreakPct: 0.15, supportReclaimPct: 0.08,
+  upLevels: Object.freeze([25, 45, 62, 78]),
+  downLevels: Object.freeze([25, 45, 65, 82]),
+  maxRecords: 1500, maxSetups: 200, maxWatch: 12,
+  outcomeTargetPct: 1, outcomeStopPct: 1, horizons: Object.freeze([5, 15, 30, 60]),
+});
+const SAF_UP = Object.freeze(['NORMAL', 'PRE-FLIGHT', 'IGNITION', 'ENTRY WINDOW', 'ENTRY READY']);
+const SAF_DOWN = Object.freeze(['NORMAL', 'WEAKNESS WATCH', 'SELL PRESSURE', 'BREAKDOWN RISK', 'DOWNSIDE CONFIRMED']);
+const SAF_FILE = require('path').resolve(process.env.SAF_ANALYTICS_STATE_FILE || 'saf-analytics-state.json');
+function safDetector() { return { state: 'NORMAL', since: 0, candidate: null, count: 0, lowerCount: 0, lastSampleAt: 0, lastAlert: null }; }
+function safInitial() {
+  return { version: SAF_CONFIG.version, savedAt: 0, up: safDetector(), down: safDetector(),
+    previous: null, supportAnchor: null, resistanceAnchor: null, breakSince: 0,
+    cycle: null, setups: {}, records: [], watches: {}, shadowAt: {}, lastSnapshot: null };
+}
+let SAF_STATE = safInitial();
+const SAF_RUNTIME = { loaded: false, persistenceError: null, readBlocked: false, lastScanAt: 0,
+  lastError: null, dataReady: false, missing: [], prompts: new Map(), busy: new Set(),
+  feeCache: new Map(), historyCache: new Map(), invalidPrompts: new Set() };
+const safNum = v => v === null || v === undefined || v === '' || typeof v === 'boolean' ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
+const safPositive = v => safNum(v) !== null && Number(v) > 0;
+const safPct = (a,b) => safPositive(a) && safPositive(b) ? (b/a-1)*100 : null;
+const safId = () => crypto.randomBytes(8).toString('hex');
+const safClone = v => JSON.parse(JSON.stringify(v));
+const safFmt = (v,d=2) => safNum(v) === null ? 'N/A' : Number(v).toFixed(d);
+function safSave() {
+  if (SAF_RUNTIME.readBlocked) return false;
+  try {
+    const path = require('path');
+    fs.mkdirSync(path.dirname(SAF_FILE), { recursive: true });
+    SAF_STATE.savedAt = Date.now();
+    const temp = SAF_FILE + '.tmp';
+    const fd = fs.openSync(temp, 'w', 0o600);
+    try { fs.writeFileSync(fd, JSON.stringify(SAF_STATE)); fs.fsyncSync(fd); }
+    finally { fs.closeSync(fd); }
+    fs.renameSync(temp, SAF_FILE);
+    SAF_RUNTIME.persistenceError = null;
+    return true;
+  } catch (e) { SAF_RUNTIME.persistenceError = String(e.message); return false; }
+}
+function safRestore(raw, now) {
+  if (!raw || raw.version !== SAF_CONFIG.version || !raw.setups || typeof raw.setups !== 'object' || Array.isArray(raw.setups) || !Array.isArray(raw.records)) throw new Error('Invalid analytics state/schema; original file preserved');
+  const result = safInitial();
+  for (const side of ['up','down']) {
+    const states = side === 'up' ? [...SAF_UP,'SETUP EXPIRED',"DON'T CHASE"] : SAF_DOWN;
+    const d = raw[side];
+    if (d && states.includes(d.state)) {
+      result[side] = { ...safDetector(), state:d.state, since:safNum(d.since)||0,
+        lastAlert: d.lastAlert && safNum(d.lastAlert.at) !== null ? d.lastAlert : null };
+    }
+  }
+  for (const [id, s] of Object.entries(raw.setups)) {
+    if (!/^[a-f0-9]{16}$/.test(id) || s.id !== id || !safPositive(s.signalPrice) || !safPositive(s.createdAt) || !safPositive(s.expiresAt) || !['OFFERED','SKIPPED','MONITORING','BOUGHT','CANCELLED','EXPIRED'].includes(s.status)) throw new Error('Invalid saved setup');
+    if (s.status === 'BOUGHT' && (!safPositive(s.actualEntryPrice) || !safPositive(s.boughtAt))) throw new Error('BOUGHT missing actual fill');
+    if (s.chatId != null && String(s.chatId) !== String(CHAT_ID)) continue;
+    const copy = safClone(s);
+    if (['OFFERED','MONITORING'].includes(copy.status) && now >= copy.expiresAt) copy.status='EXPIRED';
+    result.setups[id] = copy;
+  }
+  result.records = raw.records.filter(r => r && /^[a-f0-9]{16}$/.test(r.id) && ['UP','DOWN'].includes(r.direction) && safPositive(r.signalPrice) && safPositive(r.createdAt)).slice(-SAF_CONFIG.maxRecords).map(r=>({ ...r, interrupted: r.interrupted || !r.completed, lastObservedAt: null }));
+  for (const [id,w] of Object.entries(raw.watches || {})) {
+    if (/^[a-f0-9]{16}$/.test(id) && w.id===id && SCAN_COINS.includes(w.coin) && String(w.chatId)===String(CHAT_ID) && safPositive(w.trade?.price)) result.watches[id]=w;
+  }
+  result.shadowAt = raw.shadowAt && typeof raw.shadowAt==='object' ? raw.shadowAt : {};
+  // Cold start: do not treat a saved price/flow/orderbook as current evidence.
+  // Restore cycle identity only to prevent duplicate ENTRY READY offers after restart.
+  if (raw.cycle && safPositive(raw.cycle.startedAt) && safPositive(raw.cycle.anchorPrice)) result.cycle={ ...raw.cycle };
+  return result;
+}
+function safLoad() {
+  if (SAF_RUNTIME.loaded) return;
+  SAF_RUNTIME.loaded=true;
+  try { if (fs.existsSync(SAF_FILE)) SAF_STATE=safRestore(JSON.parse(fs.readFileSync(SAF_FILE,'utf8')),Date.now()); }
+  catch(e) { SAF_RUNTIME.readBlocked=true; SAF_RUNTIME.persistenceError=String(e.message); }
+}
+function safHealth() {
+  return { version:SAF_CONFIG.version, up:SAF_STATE.up.state, down:SAF_STATE.down.state,
+    dataReady:SAF_RUNTIME.dataReady && Date.now()-SAF_RUNTIME.lastScanAt<=SAF_CONFIG.maxAgeMs,
+    lastScanAt:SAF_RUNTIME.lastScanAt, missing:SAF_RUNTIME.missing, lastError:SAF_RUNTIME.lastError,
+    persistence:SAF_RUNTIME.persistenceError || 'READY', readBlocked:SAF_RUNTIME.readBlocked,
+    setups:Object.values(SAF_STATE.setups).filter(s=>['MONITORING','BOUGHT'].includes(s.status)).length,
+    outcomes:SAF_STATE.records.length, stateFile:SAF_FILE };
+}
+function safHealthText() {
+  const h=safHealth();
+  return `UP ${h.up} | DOWN ${h.down}\nData: ${h.dataReady?'READY':'WARMUP/STALE'} | Save: ${h.persistence}\nLast scan: ${h.lastScanAt ? new Date(h.lastScanAt).toISOString() : 'NONE'}${h.lastError?'\nDetector error: '+h.lastError:''}`;
+}
+function safRolling(memory, price, minutes, now) {
+  if (!safPositive(price) || !Array.isArray(memory) || !memory.length) return null;
+  const valid=memory.filter(x=>safPositive(x.price)&&safPositive(x.timestamp)&&x.timestamp<=now);
+  const latest=valid[valid.length-1];
+  if (!latest || now-latest.timestamp>SAF_CONFIG.maxAgeMs) return null;
+  const target=now-minutes*60000;
+  let ref=null;
+  for (const x of valid) if (x.timestamp<=target && (!ref || x.timestamp>ref.timestamp)) ref=x;
+  if (!ref || target-ref.timestamp>SAF_CONFIG.maxAgeMs) return null;
+  return safPct(ref.price,price);
+}
+function safMakeSnapshot(ticker, decision, processed, now) {
+  const d=decision||{}, l=d.liquidity||{}, g=d.globalLead;
+  const price=safNum(ticker?.currentPrice);
+  const trades=getTradesInWindow('GRT',FIVE_MINUTES);
+  const times=trades.map(t=>safNum(t.timestamp)).filter(t=>t!==null&&t<=now);
+  const flow=getExecutedFlowSummary('GRT',FIVE_MINUTES);
+  const flowReady=flow.totalCount>=SAF_CONFIG.minTrades && times.length>=SAF_CONFIG.minTrades && now-Math.max(...times)<=SAF_CONFIG.maxAgeMs && Math.max(...times)-Math.min(...times)>=SAF_CONFIG.minFlowSpanMs;
+  const book=l.orderBook;
+  const bookReady=!!(l.ready && book && now-book.timestamp<=SAF_CONFIG.maxAgeMs && book.bids?.length && book.asks?.length && l.bidVolume+l.askVolume>0);
+  const globalMemory=GRT_GLOBAL_PRICE_MEMORY;
+  const globalLast=globalMemory[globalMemory.length-1];
+  const globalFresh=!!(g?.ready && globalLast && now-globalLast.timestamp<=SAF_CONFIG.maxAgeMs);
+  const q=processed?.candidate?.qualification;
+  return { now,price,flowReady, buyVol:flowReady?safNum(flow.buyVolumePct):null,
+    buyFreq:flowReady?safNum(flow.buyFrequencyPct):null, count:flow.totalCount,
+    m5:safRolling(PRICE_MEMORY.GRT,price,5,now),m15:safRolling(PRICE_MEMORY.GRT,price,15,now),m30:safRolling(PRICE_MEMORY.GRT,price,30,now),
+    btc15:safRolling(PRICE_MEMORY.BTC,LAST_PRICE.BTC,15,now),
+    global5:globalFresh?safRolling(globalMemory,globalLast.price,5,now):null,
+    global15:globalFresh?safRolling(globalMemory,globalLast.price,15,now):null,
+    gap:globalFresh?safNum(g.gapPct):null,
+    bookReady,askPct:bookReady?safNum(l.askLiquidityPct):null,
+    buyVolume:flowReady?safNum(flow.buyVolume):null,sellVolume:flowReady?safNum(flow.sellVolume):null,
+    spread:bookReady&&safPositive(ticker.bid)&&safPositive(ticker.ask)?safPct(ticker.bid,ticker.ask):null,
+    support:bookReady&&safPositive(l.support?.price)?{price:Number(l.support.price),rating:safNum(l.support.rating),tests:safNum(l.support.testedCount ?? l.support.tests)}:null,
+    resistance:bookReady&&safPositive(l.resistance?.price)?{price:Number(l.resistance.price),rating:safNum(l.resistance.rating),tests:safNum(l.resistance.testedCount ?? l.resistance.tests)}:null,
+    hardBearish:!!d.technical?.hardBearish, earlyReversal:!!d.earlyReversal?.detected,
+    acceleration:!!d.acceleration?.detected,
+    failedBreakout:!!q?.breakout?.falseBreakout?.detected,
+    legacyQualified:processed?.candidate?.allowed===true && q?.allowed===true,
+    legacyReason:processed?.candidate?.reason || processed?.reason || null,
+    legacyStatus:d.status,
+    legacyChase:safNum(q?.chasePct),legacyNetRoom:safNum(q?.netRoomPct) };
+}
+function safEvidence(s,prev,anchor,now) {
+  const up=[],down=[],veto=[];
+  const add=(list,condition,key,weight,family)=>{ if(condition)list.push({key,weight,family}); };
+  const ready=safPositive(s.price)&&s.flowReady&&safNum(s.buyVol)!==null&&safNum(s.buyFreq)!==null&&safNum(s.m5)!==null&&safNum(s.m15)!==null;
+  const prior=prev&&now-prev.now<=SAF_CONFIG.maxGapMs?prev:null;
+  const bv=safNum(s.buyVol),bf=safNum(s.buyFreq);
+  const flowDelta=prior&&safNum(prior.buyVol)!==null&&bv!==null?bv-prior.buyVol:null;
+  const freqDelta=prior&&safNum(prior.buyFreq)!==null&&bf!==null?bf-prior.buyFreq:null;
+  const room=s.resistance?safPct(s.price,s.resistance.price):null;
+  const supportBreak=!!(anchor?.support && s.bookReady && s.price<anchor.support.price*(1-SAF_CONFIG.supportBreakPct/100));
+  const reclaimed=!!(anchor?.support && s.bookReady && s.price>anchor.support.price*(1+SAF_CONFIG.supportReclaimPct/100));
+  const migration=!!(prior?.support&&s.support&&s.support.price>prior.support.price*1.001&&s.support.rating>=prior.support.rating);
+  const supportWeak=!!(prior?.support&&s.support&&((s.support.rating!==null&&prior.support.rating!==null&&s.support.rating<=prior.support.rating-2)||s.support.price<prior.support.price*0.998));
+  const repeatedTests=!!(prior?.support&&s.support&&s.support.tests>prior.support.tests&&s.support.rating<prior.support.rating);
+  const rejection=!!(prior?.resistance && prior.price>=prior.resistance.price*0.997 && s.price<prior.price*0.998 && bv<50);
+  const failed=!!(s.failedBreakout || (anchor?.resistance && prior && prior.price>anchor.resistance.price*1.0012 && s.price<anchor.resistance.price*0.999));
+  const falseBreak=!!(reclaimed&&s.m5>=0&&bv>=52);
+  add(up,bv>=52&&bf>=50,'buyer dominance',14,'flow');
+  add(up,flowDelta!==null&&flowDelta>=3&&freqDelta>=1&&(s.buyVolume==null||prior.buyVolume==null||s.buyVolume>=prior.buyVolume),'buyer acceleration',12,'flow');
+  add(up,flowDelta!==null&&flowDelta>=2&&s.m5>=0,'selling exhaustion',8,'flow');
+  add(up,s.m5>=0.15,'5M ignition',10,'momentum');
+  add(up,s.m15>=0.25,'15M sustained',10,'momentum');
+  add(up,s.m30!==null&&s.m30>=0.35,'30M continuation',6,'momentum');
+  add(up,s.global5!==null&&s.global5>=0.2&&s.global5>s.m5+0.1,'global upside lead',10,'global');
+  add(up,s.gap!==null&&prior?.gap!==null&&prior?.gap!==undefined&&s.gap>prior.gap+0.1&&s.global5>0,'global gap expanding',4,'global');
+  add(up,migration,'support migration',8,'structure');
+  add(up,room!==null&&room>=SAF_CONFIG.minRoomPct,'resistance room',6,'structure');
+  add(up,s.btc15!==null&&s.btc15>=0,'BTC support',4,'btc');
+  add(up,s.bookReady&&s.askPct<=45,'bid liquidity',4,'liquidity');
+  add(up,s.earlyReversal,'legacy early reversal',4,'momentum');
+  add(up,s.acceleration,'legacy acceleration',4,'momentum');
+  add(down,flowDelta!==null&&flowDelta<=-3&&freqDelta<=-1,'buyer exhaustion',12,'flow');
+  add(down,bv!==null&&bf!==null&&bv<=45&&bf<=48,'seller dominance',16,'flow');
+  add(down,flowDelta!==null&&flowDelta<=-5&&freqDelta<=-2&&(s.sellVolume==null||prior.sellVolume==null||s.sellVolume>=prior.sellVolume),'seller acceleration',10,'flow');
+  add(down,s.m5!==null&&s.m5<=-0.15,'5M rollover',10,'momentum');
+  add(down,s.m15!==null&&s.m15<=-0.25,'15M rollover',10,'momentum');
+  add(down,s.m30!==null&&s.m30<=-0.35,'30M confirmation',6,'momentum');
+  add(down,supportWeak||repeatedTests,'support deteriorating',8,'structure');
+  add(down,!!(prior?.support&&s.support&&s.price>prior.price*1.0015&&s.support.price<=prior.support.price&&bv<50),'support failed to migrate',4,'structure');
+  add(down,supportBreak,'support break',14,'structure');
+  add(down,rejection,'resistance rejection',8,'structure');
+  add(down,failed,'failed breakout',10,'structure');
+  add(down,s.global5!==null&&s.global5<=-0.2&&s.global5<s.m5-0.1,'global downside lead',10,'global');
+  add(down,s.btc15!==null&&s.btc15<=-0.3,'BTC weakness',6,'btc');
+  add(down,s.bookReady&&s.askPct>=62,'seller orderbook pressure',8,'liquidity');
+  if(s.hardBearish)veto.push('legacy technical danger');
+  if(supportBreak)veto.push('support broken');
+  if(bv!==null&&bv<42)veto.push('buyer collapse');
+  if(s.m5!==null&&s.m5<=-0.45)veto.push('price breakdown');
+  if(s.btc15!==null&&s.btc15<=-0.6)veto.push('BTC hard weakness');
+  if(s.global5!==null&&s.global5<=-0.6)veto.push('global hard weakness');
+  if(s.spread!==null&&s.spread>SAF_CONFIG.maxSpreadPct)veto.push('spread too wide');
+  if(failed)veto.push('failed breakout');
+  const score=list=>Math.min(100,list.reduce((n,e)=>n+e.weight,0));
+  return {ready,up,down,upScore:score(up),downScore:falseBreak?Math.min(24,score(down)):score(down),
+    upFamilies:new Set(up.map(e=>e.family)).size,downFamilies:new Set(down.map(e=>e.family)).size,
+    veto,room,supportBreak,reclaimed,falseBreak,failed,
+    downsideGate:ready&&bv<=45&&bf<=48&&s.m5<=-0.15&&(supportBreak||failed||s.m15<=-0.25),
+    confirmedGate:ready&&bv<=40&&bf<=45&&s.m5<=-0.3&&s.m15<=-0.25&&(supportBreak||failed||(s.m30!==null&&s.m30<=-0.35)),
+    // Analytical practical gate is independent of pending/active TRADE orders.
+    // Calling Part 5 again would both duplicate polling and inherit its pending-order lock.
+    // This is indicative room, never a quantity-aware executable order plan.
+    entryGate:ready&&s.bookReady&&s.btc15!==null&&s.global5!==null&&s.m30!==null&&s.spread!==null&&s.spread>=0&&s.spread<=SAF_CONFIG.maxSpreadPct&&room!==null&&room>=SAF_CONFIG.minRoomPct&&s.resistance.price*(1-SELL_FEE)>s.price*(1+BUY_FEE)&&s.support?.rating>=5&&!veto.length };
+}
+function safDownTarget(e) {
+  if(!e.ready)return null;
+  if(e.falseBreak)return 'NORMAL';
+  if(e.downScore>=SAF_CONFIG.downLevels[3]&&e.downFamilies>=3&&e.confirmedGate)return SAF_DOWN[4];
+  if(e.downScore>=SAF_CONFIG.downLevels[2]&&e.downFamilies>=3&&e.downsideGate)return SAF_DOWN[3];
+  if(e.downScore>=SAF_CONFIG.downLevels[1]&&e.downFamilies>=2&&e.downsideGate)return SAF_DOWN[2];
+  if(e.downScore>=SAF_CONFIG.downLevels[0]&&e.downFamilies>=2)return SAF_DOWN[1];
+  return 'NORMAL';
+}
+function safUpTarget(e,s,cycle,downState) {
+  if(!e.ready)return null;
+  if(cycle && s.now-cycle.startedAt>=SAF_CONFIG.setupTtlMs)return 'SETUP EXPIRED';
+  if(e.veto.length||SAF_DOWN.indexOf(downState)>=2)return cycle?'SETUP EXPIRED':'NORMAL';
+  if(cycle&&safPct(cycle.anchorPrice,s.price)>SAF_CONFIG.maxChasePct && e.upScore>=45)return "DON'T CHASE";
+  if(e.upScore>=SAF_CONFIG.upLevels[3]&&e.upFamilies>=3&&e.entryGate)return SAF_UP[4];
+  if(e.upScore>=SAF_CONFIG.upLevels[2]&&e.upFamilies>=3)return SAF_UP[3];
+  if(e.upScore>=SAF_CONFIG.upLevels[1]&&e.upFamilies>=2)return SAF_UP[2];
+  if(e.upScore>=SAF_CONFIG.upLevels[0]&&e.upFamilies>=2)return SAF_UP[1];
+  return cycle?'SETUP EXPIRED':'NORMAL';
+}
+function safTransition(old,target,states,now,urgent=false) {
+  const d={...old};
+  if(target===null){d.candidate=null;d.count=0;d.lowerCount=0;return d;}
+  if(d.lastSampleAt&&now-d.lastSampleAt<30000)return d;
+  if(now-d.lastSampleAt>SAF_CONFIG.maxGapMs){d.candidate=null;d.count=0;d.lowerCount=0;}
+  d.lastSampleAt=now;
+  if(target===d.state){d.candidate=null;d.count=0;d.lowerCount=0;return d;}
+  if(urgent||['SETUP EXPIRED',"DON'T CHASE"].includes(target))return {...d,state:target,since:now,candidate:null,count:0,lowerCount:0};
+  const lower=states.indexOf(target)<states.indexOf(d.state);
+  d.count=d.candidate===target?d.count+1:1;d.candidate=target;
+  if(d.count >= (lower?SAF_CONFIG.recoveryScans:SAF_CONFIG.confirmationScans))return {...d,state:target,since:now,candidate:null,count:0,lowerCount:0};
+  return d;
+}
+function safShouldAlert(last,state,score,price,now) {
+  if(!last)return state!=='NORMAL';
+  if(last.state!==state)return true;
+  if(state==='NORMAL'||now-last.at<SAF_CONFIG.repeatCooldownMs)return false;
+  return Math.abs(score-last.score)>=SAF_CONFIG.materialScore || Math.abs(safPct(last.price,price)||0)>=SAF_CONFIG.materialMovePct;
+}
+function safNewRecord(direction,s,score,shadow=false,setupId=null) {
+  return {id:safId(),setupId,direction,shadow,score,signalPrice:s.price,createdAt:s.now,
+    lastObservedAt:s.now,mfe:0,mae:0,horizons:{},firstBarrier:null,timeToMoveMs:null,completed:false,interrupted:false};
+}
+function safObserveRecord(r,price,now) {
+  if(r.completed||!safPositive(price)||now<r.createdAt)return;
+  if(!r.lastObservedAt||now-r.lastObservedAt>SAF_CONFIG.maxGapMs)r.interrupted=true;
+  const move=safPct(r.signalPrice,price)*(r.direction==='UP'?1:-1);
+  r.mfe=Math.max(r.mfe||0,move);r.mae=Math.min(r.mae||0,move);
+  if(r.timeToMoveMs==null&&move>=0.3)r.timeToMoveMs=now-r.createdAt;
+  if(!r.firstBarrier && move>=SAF_CONFIG.outcomeTargetPct)r.firstBarrier='TARGET';
+  if(!r.firstBarrier && move<=-SAF_CONFIG.outcomeStopPct)r.firstBarrier='STOP';
+  for(const m of SAF_CONFIG.horizons){
+    if(r.horizons[m]!==undefined||now<r.createdAt+m*60000)continue;
+    r.horizons[m]=now-(r.createdAt+m*60000)<=SAF_CONFIG.maxGapMs?{movePct:move,observedAt:now}: {missing:true};
+  }
+  r.lastObservedAt=now;
+  if(now-r.createdAt>=60*60000){
+    r.completed=true;
+    r.outcome=r.interrupted?'INCOMPLETE':r.firstBarrier==='TARGET'?'TARGET_FIRST':r.firstBarrier==='STOP'?'STOP_FIRST':'NO_TARGET';
+    r.falseSignal=r.interrupted?null:r.firstBarrier==='STOP';
+  }
+}
+
+function safTrim(now) {
+  SAF_STATE.records=SAF_STATE.records.filter(r=>!r.completed || now-r.createdAt<30*86400000).slice(-SAF_CONFIG.maxRecords);
+  const closed=Object.values(SAF_STATE.setups).filter(s=>!['BOUGHT','MONITORING','OFFERED'].includes(s.status)).sort((a,b)=>b.createdAt-a.createdAt);
+  for(const s of closed.slice(SAF_CONFIG.maxSetups))delete SAF_STATE.setups[s.id];
+  for(const [key,p] of SAF_RUNTIME.prompts)if(now-p.at>SAF_CONFIG.promptTtlMs){SAF_RUNTIME.prompts.delete(key);SAF_RUNTIME.invalidPrompts.add(p.messageId);}
+  if(SAF_RUNTIME.invalidPrompts.size>200)SAF_RUNTIME.invalidPrompts.delete(SAF_RUNTIME.invalidPrompts.values().next().value);
+}
+function safMonitorActions(setup) {
+  const id=setup.id;
+  if(setup.status==='OFFERED')return {inline_keyboard:[[{text:'START MONITOR',callback_data:`SAF:START:${id}`},{text:'SKIP',callback_data:`SAF:SKIP:${id}`}]]};
+  if(setup.status==='MONITORING')return {inline_keyboard:[[{text:'I BOUGHT',callback_data:`SAF:BOUGHT:${id}`},{text:'CANCEL / NO ENTRY',callback_data:`SAF:CANCEL:${id}`}]]};
+  if(setup.status==='BOUGHT')return {inline_keyboard:[[{text:'STOP MONITOR',callback_data:`SAF:CANCEL:${id}`}]]};
+  return {inline_keyboard:[]};
+}
+function safPositionText(s,price) {
+  const gross=safPct(s.actualEntryPrice,price);
+  // User fill is a price, not total cost. Fees for manual fills are explicitly estimates.
+  const estimatedPct=((price*(1-SELL_FEE))/(s.actualEntryPrice*(1+BUY_FEE))-1)*100;
+  const cash=safPositive(s.quantity)?s.quantity*(price*(1-SELL_FEE)-s.actualEntryPrice*(1+BUY_FEE)):null;
+  return `Actual fill: RM ${safFmt(s.actualEntryPrice,6)}\nSignal: RM ${safFmt(s.signalPrice,6)}\nCurrent: RM ${safFmt(price,6)}\nGross P/L: ${safFmt(gross)}%\nEstimated after fees: ${safFmt(estimatedPct)}%${cash===null?'':` / RM ${safFmt(cash)}`}\nFee estimate only: BUY 0.5%, SELL 0.5%.`;
+}
+async function safUpdateMonitors(s,e) {
+  for(const setup of Object.values(SAF_STATE.setups)){
+    if(['OFFERED','MONITORING'].includes(setup.status) && (s.now>=setup.expiresAt || (e.ready && e.veto.length>0))){
+      const was=setup.status;setup.status='EXPIRED';setup.expiredAt=s.now;
+      for(const r of SAF_STATE.records)if(r.setupId===setup.id)r.setupExpired=true;
+      safSave();
+      if(was==='MONITORING')await replyTelegram(setup.chatId,`GRT MONITOR ${setup.id}\nSETUP EXPIRED: ${s.now>=setup.expiresAt?'time window ended':e.veto.join(', ')}\nNo entry recorded.`);
+    }
+    if(setup.status==='MONITORING'&&e.ready){
+      const state=SAF_STATE.up.state;
+      if(safShouldAlert(setup.lastMonitorAlert,state,e.upScore,s.price,s.now)){
+        const sent=await replyTelegram(setup.chatId,`GRT MONITOR ${setup.id}\n${state}\nCurrent: RM ${safFmt(s.price,6)}\nNo purchase recorded.`,{reply_markup:safMonitorActions(setup)});
+        if(sent)setup.lastMonitorAlert={state,score:e.upScore,price:s.price,at:s.now};
+      }
+    }
+    if(setup.status==='BOUGHT'&&e.ready){
+      const state=SAF_STATE.down.state;
+      if(safShouldAlert(setup.lastDownAlert,state,e.downScore,s.price,s.now)){
+        const sent=await replyTelegram(setup.chatId,`GRT POSITION ${setup.id}\n${state==='NORMAL'?'PRESSURE RECOVERED':state}\n${safPositionText(setup,s.price)}\n${e.down.map(x=>x.key).join(', ')||'Downside evidence eased.'}\nAnalytical warning only; no SELL order.`,{reply_markup:safMonitorActions(setup)});
+        if(sent)setup.lastDownAlert={state,score:e.downScore,price:s.price,at:s.now};
+      }
+      setup.lastPrice=s.price;setup.lastMarkedAt=s.now;
+      setup.positionMfe=Math.max(setup.positionMfe||0,safPct(setup.actualEntryPrice,s.price));
+      setup.positionMae=Math.min(setup.positionMae||0,safPct(setup.actualEntryPrice,s.price));
+    }
+  }
+}
+async function safScanSafely(ticker,decision,processed) {
+  try {
+    if(SAF_RUNTIME.readBlocked)return;
+    const now=Date.now(), s=safMakeSnapshot(ticker,decision,processed,now);
+    const anchors={support:SAF_STATE.supportAnchor,resistance:SAF_STATE.resistanceAnchor};
+    const e=safEvidence(s,SAF_STATE.previous,anchors,now);
+    SAF_RUNTIME.lastScanAt=now;SAF_RUNTIME.dataReady=e.ready;SAF_RUNTIME.lastError=null;
+    SAF_RUNTIME.missing=[!s.flowReady?'executed flow coverage':null,s.m5===null?'5M':null,s.m15===null?'15M':null,s.m30===null?'30M':null,!s.bookReady?'orderbook':null,s.btc15===null?'BTC':null,s.global5===null?'global':null].filter(Boolean);
+    SAF_STATE.lastSnapshot={...s,upScore:e.upScore,downScore:e.downScore,entryEligible:e.entryGate&&!e.veto.length,missing:SAF_RUNTIME.missing};
+    const downTarget=safDownTarget(e);
+    // A break must remain visible for two complete scans before confirmation.
+    if(e.supportBreak){if(!SAF_STATE.breakSince)SAF_STATE.breakSince=now;}else SAF_STATE.breakSince=0;
+    const gatedTarget=downTarget==='DOWNSIDE CONFIRMED'&&e.supportBreak&&now-SAF_STATE.breakSince<60000?'BREAKDOWN RISK':downTarget;
+    const beforeDown=SAF_STATE.down.state;
+    SAF_STATE.down=safTransition(SAF_STATE.down,gatedTarget,SAF_DOWN,now);
+    const beforeUp=SAF_STATE.up.state;
+    let cycle=SAF_STATE.cycle;
+    const terminal=['SETUP EXPIRED',"DON'T CHASE"].includes(SAF_STATE.up.state);
+    if(terminal){
+      if(e.ready&&e.upScore<25){SAF_STATE.up=safTransition(SAF_STATE.up,'NORMAL',[...SAF_UP,'SETUP EXPIRED',"DON'T CHASE"],now);if(SAF_STATE.up.state==='NORMAL')SAF_STATE.cycle=null;}
+    }else{
+      if(!cycle&&e.ready&&e.upScore>=25&&e.upFamilies>=2&&!e.veto.length){cycle={startedAt:now,anchorPrice:s.price,setupId:null};SAF_STATE.cycle=cycle;}
+      SAF_STATE.up=safTransition(SAF_STATE.up,safUpTarget(e,s,cycle,SAF_STATE.down.state),SAF_UP,now);
+    }
+    if(['SETUP EXPIRED',"DON'T CHASE"].includes(SAF_STATE.up.state)&&SAF_STATE.cycle?.setupId){
+      const setup=SAF_STATE.setups[SAF_STATE.cycle.setupId];
+      if(setup&&setup.status==='OFFERED')setup.status='EXPIRED';
+      for(const r of SAF_STATE.records)if(r.setupId===SAF_STATE.cycle.setupId)r.setupExpired=true;
+    }
+    if(e.ready && beforeUp!==SAF_STATE.up.state && SAF_UP.indexOf(SAF_STATE.up.state)>0 && SAF_STATE.up.state!=='ENTRY READY'){
+      const record=safNewRecord('UP',s,e.upScore);record.stage=SAF_STATE.up.state;
+      record.cycleStartedAt=SAF_STATE.cycle?.startedAt||null;SAF_STATE.records.push(record);
+    }
+    if(['SETUP EXPIRED',"DON'T CHASE"].includes(SAF_STATE.up.state)&&SAF_STATE.cycle){
+      for(const r of SAF_STATE.records)if(r.direction==='UP'&&r.cycleStartedAt===SAF_STATE.cycle.startedAt)r.setupExpired=true;
+    }
+    let setup=null;
+    if(e.ready&&SAF_STATE.up.state==='ENTRY READY'&&e.entryGate&&SAF_STATE.cycle){
+      setup=SAF_STATE.setups[SAF_STATE.cycle.setupId];
+      if(!setup){
+        const id=safId();setup={id,createdAt:now,expiresAt:Math.min(now+SAF_CONFIG.setupTtlMs,SAF_STATE.cycle.startedAt+SAF_CONFIG.setupTtlMs),status:'OFFERED',signalPrice:s.price,actualEntryPrice:null,chatId:String(CHAT_ID)};
+        SAF_STATE.setups[id]=setup;SAF_STATE.cycle.setupId=id;
+        SAF_STATE.records.push(safNewRecord('UP',s,e.upScore,false,id));
+      }
+    }
+    if(e.ready&&beforeDown!==SAF_STATE.down.state&&SAF_DOWN.indexOf(SAF_STATE.down.state)>=1){const record=safNewRecord('DOWN',s,e.downScore);record.stage=SAF_STATE.down.state;SAF_STATE.records.push(record);}
+    for(const side of ['UP','DOWN']){
+      const score=side==='UP'?e.upScore:e.downScore;
+      const threshold=side==='UP'?78:65;
+      if(e.ready&&score>=threshold-15&&score<threshold&&now-(SAF_STATE.shadowAt[side]||0)>=15*60000){
+        SAF_STATE.records.push(safNewRecord(side,s,score,true));SAF_STATE.shadowAt[side]=now;
+      }
+    }
+    for(const r of SAF_STATE.records)safObserveRecord(r,s.price,now);
+    // Persist identity before exposing callbacks. A failed disk write suppresses new offers.
+    const saved=safSave();
+    for(const side of ['up','down']){
+      const d=SAF_STATE[side],score=side==='up'?e.upScore:e.downScore;
+      if(!e.ready||!safShouldAlert(d.lastAlert,d.state,score,s.price,now))continue;
+      if(side==='up'&&d.state==='ENTRY READY'&&(!saved||!e.entryGate||!setup))continue;
+      const evidence=side==='up'?e.up:e.down;
+      const text=`GRT ${side==='up'?'ENTRY SIGNAL':'DOWNSIDE'} - ${d.state}\nPrice: RM ${safFmt(s.price,6)} | Score: ${score}/100\n${evidence.map(x=>x.key).join(', ')||'Evidence eased.'}${e.veto.length?'\nEntry veto: '+e.veto.join(', '):''}${SAF_RUNTIME.missing.length?'\nUnavailable: '+SAF_RUNTIME.missing.join(', '):''}\n${side==='up'?'Analytical signal; no BUY order.':'Analytical warning; no SELL order.'}`;
+      const sent=await sendTelegram(text,side==='up'&&setup?.status==='OFFERED'?{reply_markup:safMonitorActions(setup)}:{});
+      if(sent)d.lastAlert={state:d.state,score,price:s.price,at:now};
+    }
+    await safUpdateMonitors(s,e);
+    await safUpdateWatches(now);
+    // Keep the pre-break support until recovery so falling bid walls cannot erase a break.
+    if(s.support && (!SAF_STATE.supportAnchor || (SAF_STATE.down.state==='NORMAL' && (!e.supportBreak || (e.ready&&s.m15>=0&&s.buyVol>=52&&s.support.rating>=5)))))SAF_STATE.supportAnchor=s.support;
+    if(s.resistance && (!SAF_STATE.resistanceAnchor || SAF_STATE.down.state==='NORMAL'))SAF_STATE.resistanceAnchor=s.resistance;
+    SAF_STATE.previous=s;
+    safTrim(now);safSave();
+  }catch(e){SAF_RUNTIME.lastError=String(e.message);console.log('SAF analytics:',e.message);}
+}
+
+/* MAIN reads have a closed endpoint allowlist; no caller selects method/account. */
+async function safMainRead(endpoint,params={}) {
+  if(!['/api/1/balance','/api/1/listtrades','/api/1/fee_info'].includes(endpoint))throw new Error('MAIN endpoint not allowed');
+  if(!LUNO_API_STATUS.mainReady)throw new Error('MAIN credentials not configured');
+  const data=await lunoRequest({method:'GET',endpoint,params,authenticated:true,accountType:'MAIN'});
+  if(!data||data.error||data.error_code)throw new Error('MAIN API returned an error or empty response');
+  return data;
+}
+async function safMainFee(coin) {
+  const cached=SAF_RUNTIME.feeCache.get(coin);
+  if(cached&&Date.now()-cached.at<3600000)return cached;
+  try{
+    const d=await safMainRead('/api/1/fee_info',{pair:getPair(coin)});
+    const buy=safNum(d.taker_fee_buy??d.taker_fee),sell=safNum(d.taker_fee_sell??d.taker_fee);
+    if(buy===null||sell===null||buy<0||sell<0||buy>=1||sell>=1)throw new Error('Fee data unavailable');
+    const fee={buy,sell,source:'current MAIN taker fee estimate',at:Date.now()};SAF_RUNTIME.feeCache.set(coin,fee);return fee;
+  }catch(_){return {buy:null,sell:null,source:'MAIN fee unavailable',at:Date.now()};}
+}
+function safNormalizeTrade(t,coin) {
+  // is_buy describes the market taker, NOT this account's side. Use type exclusively.
+  const type=String(t.type||'').toUpperCase();
+  const qty=safNum(t.base??t.volume),price=safNum(t.price),counter=safNum(t.counter);
+  const timestamp=safNum(t.timestamp),feeBase=safNum(t.fee_base),feeCounter=safNum(t.fee_counter);
+  if(!['BID','ASK'].includes(type)||!safPositive(qty)||!safPositive(price)||!safPositive(timestamp)||t.pair!==getPair(coin)|| (t.sequence!=null&&!/^\d+$/.test(String(t.sequence))))return null;
+  const gross=counter===null?qty*price:counter;
+  if(gross<=0 || (feeBase!==null&&(feeBase<0||feeBase>=qty))||(feeCounter!==null&&(feeCounter<0||feeCounter>=gross)))return null;
+  return {coin,side:type==='BID'?'BUY':'SELL',quantity:qty,price,counter:gross,timestamp,
+    orderId:String(t.order_id||''),sequence:t.sequence==null?null:String(t.sequence),
+    feeBase,feeCounter,feesKnown:feeBase!==null&&feeCounter!==null};
+}
+async function safMainHistory(coin,since=null,before=Date.now()+1) {
+  const rows=[],seen=new Set();let cursor=null,complete=false,invalid=0;
+  for(let page=0;page<5;page++){
+    const params={pair:getPair(coin),limit:100,sort_desc:true,before};
+    if(since!==null)params.since=since;
+    if(cursor!==null)params.before_seq=cursor;
+    const data=await safMainRead('/api/1/listtrades',params);
+    if(!Array.isArray(data.trades))throw new Error('Unexpected MAIN trade response');
+    for(const t of data.trades){const r=safNormalizeTrade(t,coin);if(!r){invalid++;continue;}const key=`${r.sequence}:${r.orderId}:${r.timestamp}:${r.side}:${r.quantity}`;if(!seen.has(key)){seen.add(key);rows.push(r);}}
+    if(data.trades.length<100){complete=true;break;}
+    const seqs=data.trades.map(t=>String(t.sequence??'')).filter(v=>/^\d+$/.test(v));
+    if(seqs.length!==data.trades.length)break;
+    const next=seqs.reduce((a,b)=>BigInt(a)<BigInt(b)?a:b);
+    if(cursor!==null&&BigInt(next)>=BigInt(cursor))break;
+    cursor=next;
+  }
+  rows.sort((a,b)=>b.timestamp-a.timestamp || (a.sequence&&b.sequence ? (BigInt(a.sequence)>BigInt(b.sequence)?-1:1):0));
+  return {rows,complete,invalid,since,before};
+}
+function safBalances(data) {
+  if(!Array.isArray(data.balance))throw new Error('Unexpected MAIN balance response');
+  const rows=[];
+  for(const b of data.balance){
+    const total=safNum(b.balance),reserved=safNum(b.reserved);
+    if(total===null||reserved===null)throw new Error('MAIN balance contains invalid amount');
+    const coin=b.asset==='XBT'?'BTC':String(b.asset||'').toUpperCase();
+    rows.push({coin,total,reserved,available:total-reserved});
+  }
+  return rows;
+}
+function safCachedPrice(coin,now=Date.now()) {
+  const memory=PRICE_MEMORY[coin]||[],last=memory[memory.length-1];
+  return last&&safPositive(last.price)&&now-last.timestamp<=SAF_CONFIG.maxAgeMs?Number(last.price):null;
+}
+async function safPortfolio(chatId) {
+  const rows=safBalances(await safMainRead('/api/1/balance'));
+  const totals={};for(const r of rows){if(!totals[r.coin])totals[r.coin]={total:0,reserved:0,available:0};for(const k of ['total','reserved','available'])totals[r.coin][k]+=r[k];}
+  const cash=totals.MYR||{total:0,reserved:0,available:0};let coins=0,partial=false;
+  const lines=[`MAIN PORTFOLIO (read only)`,`MYR available: ${safFmt(cash.available)}`,`MYR reserved: ${safFmt(cash.reserved)}`,`MYR total: ${safFmt(cash.total)}`];
+  for(const [coin,b] of Object.entries(totals)){
+    if(coin==='MYR'||b.total===0)continue;
+    const price=SCAN_COINS.includes(coin)?safCachedPrice(coin):null;
+    const value=price===null?null:b.total*price;
+    if(value===null)partial=true;else coins+=value;
+    lines.push(`${coin}: ${safFmt(b.total,8)} (reserved ${safFmt(b.reserved,8)}) = ${value===null?'NOT VALUED':`RM ${safFmt(value)}`}`);
+  }
+  lines.push(`Valued coin total: RM ${safFmt(coins)}`,`${partial?'PARTIAL valued subtotal':'Portfolio total'}: RM ${safFmt(coins+cash.total)}`,'Market values exclude exit fees. Unconfirmed balances excluded.');
+  await replyTelegram(chatId,lines.join('\n'));
+}
+function safLotLedger(history) {
+  const lots=[],sales=new Map();let unmatched=false;
+  for(const t of [...history.rows].reverse()){
+    if(t.side==='BUY'){
+      lots.push({trade:t,remaining:t.quantity-(t.feeBase||0),unitCost:t.feesKnown?(t.counter+t.feeCounter)/(t.quantity-t.feeBase):null});continue;
+    }
+    let needed=t.quantity+(t.feeBase||0),cost=0,known=t.feesKnown;const used=[];
+    while(needed>1e-10&&lots.length){
+      const lot=lots[0],take=Math.min(needed,lot.remaining);if(lot.unitCost===null)known=false;else cost+=take*lot.unitCost;
+      used.push({orderId:lot.trade.orderId,quantity:take});lot.remaining-=take;needed-=take;if(lot.remaining<=1e-10)lots.shift();
+    }
+    if(needed>1e-10){unmatched=true;known=false;}
+    sales.set(`${t.sequence}:${t.orderId}`,{pnl:known?t.counter-t.feeCounter-cost:null,used,unmatched:needed>1e-10});
+  }
+  return {lots,sales,unmatched};
+}
+function safTradeKey(t){return `${t.sequence}:${t.orderId}`;}
+function safTradeReport(t,history,price,fee) {
+  const lines=[`MAIN ${t.coin} ${t.side}`,new Date(t.timestamp).toLocaleString('en-GB',{timeZone:'Asia/Kuala_Lumpur'})+' MYT',`Fill: RM ${safFmt(t.price,6)} | Qty: ${safFmt(t.quantity,8)}`,`Order: ${t.orderId||'N/A'}`,`Historical fees: ${t.feesKnown?`${safFmt(t.feeBase,8)} ${t.coin} + RM ${safFmt(t.feeCounter,6)}`:'unavailable; no invented fee'}`];
+  const ledger=safLotLedger(history);
+  if(t.side==='BUY'){
+    const lot=ledger.lots.find(x=>safTradeKey(x.trade)===safTradeKey(t));
+    if(!lot){lines.push('This fill has no remaining quantity in the retrieved FIFO trade ledger.');}
+    else{
+      lines.push(`Remaining in trade ledger: ${safFmt(lot.remaining,8)} ${t.coin}`);
+      if(price!==null){
+        lines.push(`Current value: RM ${safFmt(lot.remaining*price)}`);
+        if(lot.unitCost!==null&&fee.sell!==null)lines.push(`Estimated unrealized P/L after exit fee: RM ${safFmt(lot.remaining*(price*(1-fee.sell)-lot.unitCost))}`);
+        else lines.push('Net P/L unavailable: historical/current fee missing.');
+      }else lines.push('Current price unavailable/stale.');
+      lines.push('Trade-ledger estimate; wallet holdings may differ due to transfers or other activity.');
+    }
+  }else{
+    const sale=ledger.sales.get(safTradeKey(t));
+    if(history.complete&&history.since===null&&history.invalid===0&&!ledger.unmatched&&sale?.pnl!==null&&sale?.pnl!==undefined)lines.push(`Realized FIFO P/L within exchange trade history: RM ${safFmt(sale.pnl)}`);
+    else lines.push('Realized P/L not established: matching/history/fees incomplete.');
+  }
+  if(!history.complete||history.invalid)lines.push(`History incomplete${history.invalid?` (${history.invalid} invalid records)`:''}; no whole-account P/L claim.`);
+  return lines.join('\n');
+}
+async function safLastTrade(chatId,coin=null) {
+  const coins=coin?[coin]:SCAN_COINS;
+  const found=[],errors=[];
+  for(const c of coins){try{const h=await safMainHistory(c);if(h.rows.length)found.push({coin:c,h,t:h.rows[0]});}catch(_){errors.push(c);}}
+  found.sort((a,b)=>b.t.timestamp-a.t.timestamp);
+  if(!found.length)return replyTelegram(chatId,errors.length?`MAIN history unavailable for ${errors.join(', ')}. Check API permissions/connectivity.`:'No exchange trade found in supported MAIN pairs.');
+  const x=found[0],fee=await safMainFee(x.coin);
+  await replyTelegram(chatId,`${errors.length?'Latest among successful pair reads only; unavailable: '+errors.join(', ')+'\n':''}${safTradeReport(x.t,x.h,safCachedPrice(x.coin),fee)}`);
+}
+
+/* MAIN watch UI: independent sessions, dated lookup, pagination, immutable fill ID. */
+function safMalaysiaRange(text) {
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(text))return null;
+  const start=Date.parse(text+'T00:00:00+08:00');
+  if(!Number.isFinite(start)||new Date(start+8*3600000).toISOString().slice(0,10)!==text)return null;
+  return {start,end:start+86400000};
+}
+async function safWatchMenu(chatId) {
+  const buttons=SCAN_COINS.map(c=>[{text:c,callback_data:`SAF:COIN:${c}`}]);
+  for(const w of Object.values(SAF_STATE.watches))if(String(w.chatId)===String(chatId))buttons.push([{text:`STOP ${w.coin} watch ${w.id.slice(0,6)}`,callback_data:`SAF:UNWATCH:${w.id}`}]);
+  await replyTelegram(chatId,'MAIN WATCHTRADE\nPilih coin, kemudian tarikh transaksi. Bacaan sahaja.',{reply_markup:{inline_keyboard:buttons}});
+}
+async function safShowTradePage(chatId,token,page=0) {
+  const session=SAF_RUNTIME.historyCache.get(token);
+  if(!session||String(session.chatId)!==String(chatId)||Date.now()-session.at>10*60000)throw new Error('Trade selection expired. Use /watchtrade again.');
+  const selected=session.history.rows.slice(page*8,page*8+8);
+  if(!selected.length)return replyTelegram(chatId,'No exchange trades found for that date/pair.');
+  const buttons=selected.map((t,i)=>[{text:`${t.side} ${safFmt(t.quantity,4)} @ ${safFmt(t.price,5)}`,callback_data:`SAF:WATCH:${token}:${page*8+i}`}]);
+  const nav=[];if(page>0)nav.push({text:'Previous',callback_data:`SAF:PAGE:${token}:${page-1}`});
+  if((page+1)*8<session.history.rows.length)nav.push({text:'Next',callback_data:`SAF:PAGE:${token}:${page+1}`});if(nav.length)buttons.push(nav);
+  await replyTelegram(chatId,`MAIN ${session.coin} ${session.date}\nPilih fill untuk detail${session.history.complete?'':' (bounded history; may be incomplete)'}.\nBUY fills boleh dipantau; SELL memaparkan detail sahaja.`,{reply_markup:{inline_keyboard:buttons}});
+}
+async function safUpdateWatches(now) {
+  for(const w of Object.values(SAF_STATE.watches)){
+    const price=safCachedPrice(w.coin,now);
+    if(price===null)continue;
+    if(w.lastAlertAt&&now-w.lastAlertAt<10*60000)continue;
+    if(w.lastPrice&&Math.abs(safPct(w.lastPrice,price))<1)continue;
+    const t=w.trade,netQty=t.quantity-(t.feeBase||0),cost=t.feesKnown?t.counter+t.feeCounter:null;
+    const value=netQty*price,pnl=cost!==null&&w.sellFee!==null?value*(1-w.sellFee)-cost:null;
+    const sent=await replyTelegram(w.chatId,`MAIN WATCHTRADE ${w.coin}\nHistorical fill: RM ${safFmt(t.price,6)}\nCurrent: RM ${safFmt(price,6)}\nReference fill value: RM ${safFmt(value)}\nEstimated P/L if still held: ${pnl===null?'N/A':`RM ${safFmt(pnl)}`}\nReference monitoring only; subsequent sales/transfers are not inferred. Fee estimate from watch start.`,{reply_markup:{inline_keyboard:[[{text:'STOP WATCH',callback_data:`SAF:UNWATCH:${w.id}`}]]}});
+    if(sent){w.lastPrice=price;w.lastAlertAt=now;}
+  }
+}
+function safOwnsReply(msg) {
+  const reply=msg?.reply_to_message;
+  return !!(reply && (SAF_RUNTIME.prompts.has(`${msg.chat?.id}:${reply.message_id}`) || SAF_RUNTIME.invalidPrompts.has(reply.message_id) || /\[SAF INPUT (FILL|DATE)\]/.test(String(reply.text||''))));
+}
+async function safPrompt(chatId,kind,details) {
+  // Only an explicit reply to this message is input to this module.
+  for(const [key,p] of SAF_RUNTIME.prompts)if(String(p.chatId)===String(chatId)){SAF_RUNTIME.invalidPrompts.add(p.messageId);SAF_RUNTIME.prompts.delete(key);}
+  const text=kind==='FILL'?'Reply harga fill sebenar dalam MYR. Contoh: 0.125 atau 0.125 1000 (harga, kuantiti).\nTaip CANCEL untuk batal input. Ini hanya merekod pembelian yang telah kau buat.':'Reply tarikh MYT YYYY-MM-DD, atau RECENT untuk transaksi terkini. Taip CANCEL untuk batal.';
+  const sent=await replyTelegram(chatId,`[SAF INPUT ${kind}]\n${text}`,{reply_markup:{force_reply:true,selective:true}});
+  if(!sent)throw new Error('Unable to send input prompt; state unchanged');
+  SAF_RUNTIME.prompts.set(`${chatId}:${sent.message_id}`,{kind,details,chatId:String(chatId),messageId:sent.message_id,at:Date.now()});
+}
+function safParseFill(text) {
+  const parts=String(text).trim().split(/\s+/);
+  if(parts.length<1||parts.length>2||parts.some(p=>!/^\d+(?:\.\d+)?$/.test(p)))return null;
+  const price=Number(parts[0]),quantity=parts.length===2?Number(parts[1]):null;
+  return safPositive(price)&&(quantity===null||safPositive(quantity))?{price,quantity}:null;
+}
+function safApplyMonitorAction(setup,action,now,fill=null) {
+  const s={...setup};
+  if(['OFFERED','MONITORING'].includes(s.status)&&now>=s.expiresAt)s.status='EXPIRED';
+  if(action==='START'&&s.status==='OFFERED'){s.status='MONITORING';s.monitorStartedAt=now;return s;}
+  if(action==='SKIP'&&s.status==='OFFERED'){s.status='SKIPPED';return s;}
+  if(action==='CANCEL'&&['OFFERED','MONITORING','BOUGHT'].includes(s.status)){s.status='CANCELLED';s.cancelledAt=now;return s;}
+  if(action==='FILL'&&s.status==='MONITORING'&&fill&&safPositive(fill.price)){
+    s.status='BOUGHT';s.actualEntryPrice=fill.price;s.quantity=fill.quantity;s.boughtAt=now;s.fillSource='USER_REPORTED';return s;
+  }
+  throw new Error(`Action unavailable for ${s.status}; use /grtsignals to check current monitor.`);
+}
+function safCommitSetup(id,next) {
+  const previous=SAF_STATE.setups[id];SAF_STATE.setups[id]=next;
+  if(!safSave()){SAF_STATE.setups[id]=previous;throw new Error('Cannot persist monitor. No change accepted; check /health.');}
+}
+async function safHandleText(msg) {
+  if(!isPart9AuthorizedChat(msg?.chat?.id)||!safOwnsReply(msg))return false;
+  const key=`${msg.chat.id}:${msg.reply_to_message.message_id}`,p=SAF_RUNTIME.prompts.get(key);
+  if(!p||Date.now()-p.at>SAF_CONFIG.promptTtlMs){SAF_RUNTIME.prompts.delete(key);await replyTelegram(msg.chat.id,'Input expired/restarted. Reopen I BOUGHT or /watchtrade.');return true;}
+  if(SAF_RUNTIME.busy.has(key))return true;
+  SAF_RUNTIME.busy.add(key);
+  try{
+    const text=String(msg.text||'').trim();
+    if(/^cancel$/i.test(text)){SAF_RUNTIME.prompts.delete(key);SAF_RUNTIME.invalidPrompts.add(p.messageId);await replyTelegram(msg.chat.id,'Input cancelled; monitor unchanged.');return true;}
+    if(p.kind==='FILL'){
+      const fill=safParseFill(text);if(!fill){await replyTelegram(msg.chat.id,'Format tidak sah. Reply harga positif, kemudian kuantiti optional. Contoh: 0.125 1000');return true;}
+      const setup=SAF_STATE.setups[p.details.id];
+      if(!setup||String(setup.chatId)!==String(msg.chat.id))throw new Error('Monitor unavailable');
+      const next=safApplyMonitorAction(setup,'FILL',Date.now(),fill);safCommitSetup(setup.id,next);
+      SAF_RUNTIME.prompts.delete(key);SAF_RUNTIME.invalidPrompts.add(p.messageId);
+      await replyTelegram(msg.chat.id,`GRT BOUGHT RECORDED\nActual fill: RM ${safFmt(fill.price,6)}\nSignal price remains: RM ${safFmt(next.signalPrice,6)}\nUser-reported fill; no order submitted.`,{reply_markup:safMonitorActions(next)});
+    }else if(p.kind==='DATE'){
+      const range=safMalaysiaRange(text);
+      if(!range&&!/^recent$/i.test(text)){await replyTelegram(msg.chat.id,'Gunakan YYYY-MM-DD atau RECENT.');return true;}
+      const h=await safMainHistory(p.details.coin,range?.start??null,range?.end??Date.now()+1);
+      const token=safId();SAF_RUNTIME.historyCache.set(token,{chatId:String(msg.chat.id),coin:p.details.coin,date:text,history:h,at:Date.now()});
+      SAF_RUNTIME.prompts.delete(key);SAF_RUNTIME.invalidPrompts.add(p.messageId);
+      for(const [k,v] of SAF_RUNTIME.historyCache)if(Date.now()-v.at>10*60000)SAF_RUNTIME.historyCache.delete(k);
+      await safShowTradePage(msg.chat.id,token);
+    }
+  }catch(e){await replyTelegram(msg.chat.id,`Analytics: ${safPublicError(e)}`);}
+  finally{SAF_RUNTIME.busy.delete(key);}
+  return true;
+}
+function safPublicError(e) {
+  // Never echo axios request config, auth, response bodies or raw server messages.
+  if(e?.isAxiosError||e?.response)return `MAIN request failed${e?.response?.status?' (HTTP '+Number(e.response.status)+')':''}. Check connectivity and read permissions.`;
+  return String(e?.message||'Request failed').slice(0,220);
+}
+async function safHandleCallback(query) {
+  const data=String(query?.data||'');if(!data.startsWith('SAF:'))return false;
+  const chatId=query?.message?.chat?.id;
+  if(!isPart9AuthorizedChat(chatId)){try{await bot.answerCallbackQuery(query.id,{text:'Unauthorized'});}catch(_){}return true;}
+  const [,action,id,extra]=data.split(':');
+  const lock=String(chatId);
+  try{await bot.answerCallbackQuery(query.id);}catch(_){}
+  if(SAF_RUNTIME.busy.has(lock))return true;
+  SAF_RUNTIME.busy.add(lock);
+  try{
+    if(SAF_RUNTIME.readBlocked)throw new Error('Analytics persistence blocked; check /health');
+    if(action==='COIN'){
+      if(!SCAN_COINS.includes(id))throw new Error('Unsupported coin');
+      await safPrompt(chatId,'DATE',{coin:id});return true;
+    }
+    if(action==='PAGE'){
+      if(!/^\d+$/.test(extra||''))throw new Error('Invalid page');
+      await safShowTradePage(chatId,id,Number(extra));return true;
+    }
+    if(action==='WATCH'){
+      const session=SAF_RUNTIME.historyCache.get(id);
+      if(!session||session.chatId!==String(chatId)||Date.now()-session.at>10*60000||!/^\d+$/.test(extra||''))throw new Error('Selection expired; use /watchtrade');
+      const trade=session.history.rows[Number(extra)];if(!trade)throw new Error('Trade unavailable');
+      const fee=await safMainFee(session.coin);
+      await replyTelegram(chatId,safTradeReport(trade,session.history,safCachedPrice(session.coin),fee));
+      if(trade.side==='BUY'){
+        const exists=Object.values(SAF_STATE.watches).find(w=>w.coin===trade.coin&&safTradeKey(w.trade)===safTradeKey(trade));
+        if(exists){await replyTelegram(chatId,'This fill is already watched.');return true;}
+        if(Object.keys(SAF_STATE.watches).length>=SAF_CONFIG.maxWatch)throw new Error('Watch limit reached. Stop an existing watch first.');
+        const watchId=safId();SAF_STATE.watches[watchId]={id:watchId,coin:session.coin,trade,chatId:String(chatId),sellFee:fee.sell,createdAt:Date.now(),lastAlertAt:0,lastPrice:null};
+        if(!safSave()){delete SAF_STATE.watches[watchId];throw new Error('Watch save failed');}
+        await replyTelegram(chatId,'MAIN reference watch started. No trade execution.',{reply_markup:{inline_keyboard:[[{text:'STOP WATCH',callback_data:`SAF:UNWATCH:${watchId}`}]]}});
+      }
+      return true;
+    }
+    if(action==='UNWATCH'){
+      const w=SAF_STATE.watches[id];if(!w||String(w.chatId)!==String(chatId))throw new Error('Watch no longer active');
+      delete SAF_STATE.watches[id];if(!safSave()){SAF_STATE.watches[id]=w;throw new Error('Watch save failed');}
+      await replyTelegram(chatId,'MAIN watch stopped.');return true;
+    }
+    const setup=SAF_STATE.setups[id];if(!setup||String(setup.chatId)!==String(chatId))throw new Error('Setup unavailable; use /grtsignals');
+    if(action==='BOUGHT'){
+      if(setup.status!=='MONITORING'||Date.now()>=setup.expiresAt)throw new Error('Monitor is not active');
+      await safPrompt(chatId,'FILL',{id});return true;
+    }
+    if(!['START','SKIP','CANCEL'].includes(action))throw new Error('Unknown analytics action');
+    if(action==='START' && (Date.now()-SAF_RUNTIME.lastScanAt>SAF_CONFIG.maxAgeMs||!SAF_RUNTIME.dataReady||SAF_STATE.up.state!=='ENTRY READY'||!SAF_STATE.lastSnapshot?.entryEligible))throw new Error('Setup no longer ENTRY READY or data stale; wait for a new signal');
+    const next=safApplyMonitorAction(setup,action,Date.now());safCommitSetup(id,next);
+    await replyTelegram(chatId,`GRT ${next.status}\n${action==='START'?'Monitoring started. Belum ada belian direkodkan.':action==='SKIP'?'Setup skipped; discovery continues.':'Monitor stopped. No SELL order; this does not claim the position was closed.'}`,{reply_markup:safMonitorActions(next)});
+  }catch(e){await replyTelegram(chatId,`Analytics: ${safPublicError(e)}`);}
+  finally{SAF_RUNTIME.busy.delete(lock);}
+  return true;
+}
+async function safSignals(chatId) {
+  await replyTelegram(chatId,`GRT SIGNALS\n${safHealthText()}\nNew detector defaults require forward validation; legacy Part 4/5 thresholds unchanged.\nMAIN: /portfolio /watchtrade /lasttrade [COIN]`);
+  for(const s of Object.values(SAF_STATE.setups).filter(s=>['OFFERED','MONITORING','BOUGHT'].includes(s.status))){
+    const price=safCachedPrice('GRT');
+    await replyTelegram(chatId,`GRT ${s.id} ${s.status}\n${s.status==='BOUGHT'&&price!==null?safPositionText(s,price):`Signal: RM ${safFmt(s.signalPrice,6)}\nExpires: ${new Date(s.expiresAt).toISOString()}`}`,{reply_markup:safMonitorActions(s)});
+  }
+  const records=SAF_STATE.records,completed=records.filter(r=>r.completed&&!r.interrupted);
+  await replyTelegram(chatId,`OUTCOME / SHADOW\nRecords: ${records.length} | Shadow: ${records.filter(r=>r.shadow).length}\nComplete observed outcomes: ${completed.length}\nUP target-first: ${completed.filter(r=>r.direction==='UP'&&r.outcome==='TARGET_FIRST').length}\nDOWN target-first: ${completed.filter(r=>r.direction==='DOWN'&&r.outcome==='TARGET_FIRST').length}\nMFE/MAE use sampled prices; downtime marked incomplete. No automatic threshold tuning.`);
+}
+bot.on('callback_query',async query=>{try{await safHandleCallback(query);}catch(e){SAF_RUNTIME.lastError=String(e.message);}});
+bot.on('message',async msg=>{try{await safHandleText(msg);}catch(e){SAF_RUNTIME.lastError=String(e.message);}});
+bot.onText(/^\/(portfolio|watchtrade|lasttrade|grtsignals)(?:@\w+)?(?:\s+([A-Za-z]+))?\s*$/i,async(msg,match)=>{
+  if(!isPart9AuthorizedChat(msg?.chat?.id))return;
+  const lock=`command:${msg.chat.id}`;if(SAF_RUNTIME.busy.has(lock))return;
+  SAF_RUNTIME.busy.add(lock);
+  try{
+    const command=match[1].toLowerCase(),coin=match[2]?.toUpperCase();
+    if(coin&&!SCAN_COINS.includes(coin))throw new Error('Unsupported coin');
+    if(command==='portfolio')await safPortfolio(msg.chat.id);
+    if(command==='watchtrade')await safWatchMenu(msg.chat.id);
+    if(command==='lasttrade')await safLastTrade(msg.chat.id,coin);
+    if(command==='grtsignals')await safSignals(msg.chat.id);
+  }catch(e){await replyTelegram(msg.chat.id,`Analytics: ${safPublicError(e)}`);}
+  finally{SAF_RUNTIME.busy.delete(lock);}
+});
+/* END SAF ANALYTICS V1 */
+
+
 /* ============================================================
    PART 10 — BACKGROUND SERVICES + STARTUP + RECOVERY + HEALTH
 
@@ -25745,6 +26459,7 @@ function savePart10SemiAutoSnapshot() {
 
 function saveAllPart10PersistentState() {
   return {
+    analyticalSignals: safSave(),
     activeTrades:
       savePart10ActiveTradeState(),
 
@@ -27994,6 +28709,9 @@ async function runPart10GRTMasterScanner() {
       );
 
 
+    // Additive analysis: never blocks or changes the legacy execution decision.
+    await safScanSafely(ticker, decision, processed);
+
     runtime.runs++;
 
     runtime.lastAt =
@@ -28746,6 +29464,7 @@ function startPart10Scheduler() {
 
 function getPart10BackgroundStatus() {
   return {
+    analyticalSignals: safHealth(),
     started:
       PART10_RUNTIME
         .started,
@@ -28937,6 +29656,8 @@ async function sendPart10StartupMessage() {
     : "NOT READY"
 }
 
+🧭 Upside + Downside: ${safHealthText()}
+📋 MAIN analytics: /portfolio /watchtrade /lasttrade
 🧠 GRT Scanner: 1 MIN
 🚨 Price Alert: 5 MIN
 📊 Market Structure: 15 MIN
@@ -29040,6 +29761,7 @@ async function bootstrapPart10() {
     loadGRTTuning();
 
     loadDailyWatchState();
+    safLoad();
 
     await checkDailyWatchRollover();
 
@@ -29370,6 +30092,8 @@ bot.onText(
       msg.chat.id,
 
 `🩺 HEALTH
+
+🧭 ${safHealthText()}
 
 📡 MAIN API: ${
   api.mainReady
