@@ -84,6 +84,7 @@ const bot =
 
 
 bot.setMyCommands([
+  {command:"ailuno",description:"Pilih coin untuk analisis AI"},
   {command:"grtdiag",description:"Semak sambungan dan data GRT"},
   {command:"grtai",description:"Sembang AI + data GRT"},
   {command:"exitai",description:"Tamat sesi AI"},
@@ -25008,7 +25009,7 @@ bot.on(
       );
 
     // SAF analytics owns its callback namespace; do not acknowledge twice.
-    if (data.startsWith("SAF:") || data.startsWith("SX:")) return;
+    if (data.startsWith("SAF:") || data.startsWith("SX:") || data.startsWith("ALUNO:")) return;
 
     if (
       !chatId ||
@@ -26230,6 +26231,47 @@ async function sxWarmCandles(){
   if(Date.now()<(SX.candleRetryAt||0))return SX.candles;
   SX.candleFetch=(async()=>{try{const rows=await getLunoCandles('GRT',300,1000);if(Array.isArray(rows)&&rows.length){SX.candles=rows;SX.candleAt=Date.now();}else SX.candleRetryAt=Date.now()+60000;return SX.candles;}catch(_){SX.candleRetryAt=Date.now()+60000;return SX.candles;}finally{SX.candleFetch=null;}})();return SX.candleFetch;
 }
+// Wilder RSI on closed candles only. Flat series is neutral, not oversold.
+function sxResearchRSI(closes,period=14){
+  if(closes.length<=period||!closes.every(safPositive))return null;
+  let gain=0,loss=0;for(let i=1;i<=period;i++){const d=closes[i]-closes[i-1];gain+=Math.max(d,0);loss+=Math.max(-d,0);}gain/=period;loss/=period;
+  for(let i=period+1;i<closes.length;i++){const d=closes[i]-closes[i-1];gain=(gain*(period-1)+Math.max(d,0))/period;loss=(loss*(period-1)+Math.max(-d,0))/period;}
+  return !gain&&!loss?50:!loss?100:100-100/(1+gain/loss);
+}
+function sxDepthResearch(book,now){
+  if(!book||!Array.isArray(book.bids)||!Array.isArray(book.asks)||!Number.isFinite(book.timestamp)||now-book.timestamp>30000||book.timestamp>now+5000)return {ready:false};
+  const bids=book.bids.filter(r=>safPositive(r.price)&&safPositive(r.volume)).sort((a,b)=>b.price-a.price),asks=book.asks.filter(r=>safPositive(r.price)&&safPositive(r.volume)).sort((a,b)=>a.price-b.price);
+  if(!bids.length||!asks.length||bids[0].price>=asks[0].price)return {ready:false};
+  const mid=(bids[0].price+asks[0].price)/2;
+  const sum=rows=>{const near=rows.filter(r=>Math.abs(r.price/mid-1)<=.01);return {quantity:near.reduce((s,r)=>s+r.volume,0),value:near.reduce((s,r)=>s+r.price*r.volume,0)};};
+  return {ready:true,at:now,bid:bids[0].price,ask:asks[0].price,buy:sum(bids),sell:sum(asks),bandPct:1};
+}
+function sxMAPerspective(c){
+  const f=c?.frames?.find(f=>f.minutes===5&&f.ready),m=f?.mas;if(!m)return 'MA/RSI: candle sedang disegarkan.';
+  const pair=(a,b)=>{const x=m[a],y=m[b];if(!x||!y)return 'MA'+a+'/'+b+': belum tersedia';const d=x.value-y.value,prev=x.previous-y.previous,cross=Number.isFinite(prev)&&((prev<=0&&d>0)||(prev>=0&&d<0));return 'MA'+a+'/'+b+': '+(cross?'baru cross ':'')+(d>0?'↑':d<0?'↓':'↔')+(cross?'':' (kedudukan semasa)');};
+  let out='• 5m '+pair(9,20)+'\n• 5m '+pair(50,100)+' | '+pair(100,200)+'\n';
+  out+='• Cerun MA9/20: '+(m[9].slopePct>0&&m[20].slopePct>0?'kedua-duanya naik':m[9].slopePct<0&&m[20].slopePct<0?'kedua-duanya turun':'bercampur')+'\n';
+  const frames=c.frames.filter(f=>f.ready),label=v=>v>=70?'tinggi; kenaikan boleh berterusan':v<=30?'rendah; belum bukti lantunan':v>50?'momentum beli':v<50?'momentum jual':'neutral';
+  out+='• RSI14: '+frames.filter(f=>Number.isFinite(f.rsi14)).map(f=>f.minutes+'m '+safFmt(f.rsi14,1)).join(' | ');
+  if(Number.isFinite(f.rsi14))out+='\nRSI 5m '+label(f.rsi14)+(Number.isFinite(f.rsiPrevious)?'; '+(f.rsi14>f.rsiPrevious?'sedang naik':f.rsi14<f.rsiPrevious?'sedang turun':'mendatar'):'')+'.';
+  return out;
+}
+function sxSidePerspectives(p){
+  const a=p.analyst,d=a?.depth,f=a?.flow5,l=sxResearchLevels(p),price=v=>safPositive(v)?'RM'+safFmt(v,4):'belum jelas',w=a?.book?.windows?.find(w=>w.minutes===5&&w.ready);
+  const known=f?.covered&&!f.conflict&&Date.now()-f.at<=30000&&f.count>0;
+  let out='<b>🟢 BUYER / BID</b>\n';
+  out+=d?.ready?'Menunggu ±1% harga: '+safFmt(d.buy.quantity,0)+' GRT / RM'+safFmt(d.buy.value,0)+'. ':'Book perlu disegarkan. ';
+  if(w)out+='Bid '+(w.bidChangePct>0?'naik':w.bidChangePct<0?'turun':'kekal')+' dalam 5 minit. ';
+  out+=known?(f.buy.value>f.sell.value?'Belian sebenar lebih kuat. ':'Belian belum mengatasi jualan. '):'Belian sebenar belum disahkan. ';
+  out+='Buyer perlu pertahan '+price(l.below[0]?.price)+' dan lepas '+price(l.above[0]?.price)+'.\n\n';
+  out+='<b>🔴 SELLER / ASK</b>\n';
+  out+=d?.ready?'Menunggu ±1% harga: '+safFmt(d.sell.quantity,0)+' GRT / RM'+safFmt(d.sell.value,0)+'. ':'';
+  if(w)out+='Ask '+(w.askChangePct>0?'naik—bukan bukti jualan dimakan':w.askChangePct<0?'turun—seller menawarkan lebih rendah':'kekal')+'. ';
+  out+=known?(f.sell.value>f.buy.value?'Jualan sebenar lebih kuat. ':'Jualan belum mengatasi belian. '):'Jualan sebenar belum disahkan. ';
+  out+='Jika '+price(l.below[0]?.price)+' gagal, pantau '+price(l.below[1]?.price)+'.\nPesanan menunggu boleh dibatalkan; bukan volume transaksi.';
+  return out;
+}
+
 function sxAnalystCandles(candles,now){
   const valid=(Array.isArray(candles)?candles:[]).filter(c=>Number.isFinite(c.timestamp)&&c.timestamp%300000===0&&c.timestamp+300000<=now&&[c.open,c.high,c.low,c.close].every(safPositive)&&c.low<=Math.min(c.open,c.close)&&c.high>=Math.max(c.open,c.close)&&Number.isFinite(c.volume)&&c.volume>=0);
   const uniq=new Map();for(const c of valid){if(uniq.has(c.timestamp))return {ready:false,reason:'Candle berulang'};uniq.set(c.timestamp,c);}
@@ -26240,11 +26282,11 @@ function sxAnalystCandles(candles,now){
     const duration=minutes*60000,n=minutes/5,buckets=new Map();
     for(const c of rows){const k=Math.floor(c.timestamp/duration)*duration;if(!buckets.has(k))buckets.set(k,[]);buckets.get(k).push(c);}
     const bars=[];for(const [at,g]of buckets){if(at+duration<=now&&g.length===n&&g.every((c,i)=>c.timestamp===at+i*300000))bars.push({at,close:g.at(-1).close});}
-    const tail=bars.slice(-53),contiguous=tail.length===53&&tail.every((c,i)=>!i||c.at-tail[i-1].at===duration)&&now-(tail.at(-1).at+duration)<duration+300000;
+    const tail=bars.slice(-203),contiguous=tail.length>=53&&tail.every((c,i)=>!i||c.at-tail[i-1].at===duration)&&now-(tail.at(-1).at+duration)<duration+300000;
     if(!contiguous){frames.push({minutes,ready:false});continue;}
     const closes=tail.map(c=>c.close),mas={};
-    for(const length of [9,20,50]){const current=mean(closes.slice(-length)),old=mean(closes.slice(-length-3,-3));mas[length]={value:current,slopePct:(current/old-1)*100};}
-    frames.push({minutes,ready:true,mas,stack:mas[9].value>mas[20].value&&mas[20].value>mas[50].value?'UP':mas[9].value<mas[20].value&&mas[20].value<mas[50].value?'DOWN':'MIXED'});
+    for(const length of [9,20,50,100,200]){if(closes.length<length+3)continue;const current=mean(closes.slice(-length)),old=mean(closes.slice(-length-3,-3));mas[length]={value:current,previous:mean(closes.slice(-length-1,-1)),slopePct:(current/old-1)*100};}
+    frames.push({minutes,ready:true,mas,rsi14:sxResearchRSI(closes),rsiPrevious:sxResearchRSI(closes.slice(0,-1)),stack:mas[9].value>mas[20].value&&mas[20].value>mas[50].value?'UP':mas[9].value<mas[20].value&&mas[20].value<mas[50].value?'DOWN':'MIXED'});
   }
   const end=rows.at(-1).timestamp+300000;
   const range=(start,stop)=>{const a=rows.filter(c=>c.timestamp>=start&&c.timestamp<stop);return a.length===(stop-start)/300000&&a.every((c,i)=>c.timestamp===start+i*300000)?a:null;};
@@ -26254,7 +26296,7 @@ function sxAnalystCandles(candles,now){
   if(day)for(let i=2;i<day.length-2;i++){const c=day[i],others=day.slice(i-2,i+3).filter((_,j)=>j!==2);if(others.every(o=>o.low>c.low))pivots.support.push(c.low);if(others.every(o=>o.high<c.high))pivots.resistance.push(c.high);}
   const path=a=>{const v=a.slice(-3);return {values:v,trend:v.length<3?'UNKNOWN':v[0]<v[1]&&v[1]<v[2]?'RISING':v[0]>v[1]&&v[1]>v[2]?'FALLING':'MIXED'};};
   const hourQuantity=hour?sum(hour):null,hourQuote=hour?hour.reduce((s,c)=>s+c.volume*(c.high+c.low+c.close)/3,0):null;
-  return {ready:frames.some(f=>f.ready),frames,volumeHour:hourQuantity,hourQuoteEstimate:hourQuote,hourPriceEstimate:hourQuantity>0?hourQuote/hourQuantity:null,hourEndedAt:end,volume24:day?sum(day):null,volumeDayRatio:ratio(day,prior),volumeHourRatio:ratio(hour,prevHour),support:path(pivots.support),resistance:path(pivots.resistance)};
+  return {ready:frames.some(f=>f.ready),frames,volumeFive:rows.at(-1).volume,fiveQuoteEstimate:rows.at(-1).volume*(rows.at(-1).high+rows.at(-1).low+rows.at(-1).close)/3,volumeHour:hourQuantity,hourQuoteEstimate:hourQuote,hourPriceEstimate:hourQuantity>0?hourQuote/hourQuantity:null,hourEndedAt:end,volume24:day?sum(day):null,volumeDayRatio:ratio(day,prior),volumeHourRatio:ratio(hour,prevHour),support:path(pivots.support),resistance:path(pivots.resistance)};
 }
 function sxAnalystBook(samples,now){
   const rows=samples.filter(r=>r.researchBook&&r.at<=now&&now-r.at<=86400000).sort((a,b)=>a.at-b.at),last=rows.at(-1);
@@ -26278,44 +26320,48 @@ function sxResearchFlow5(events,now,connectedAt,streamFresh){
 }
 
 function sxAnalystPacket(candles,samples,now){return {at:now,candles:sxAnalystCandles(candles,now),book:sxAnalystBook(samples,now)};}
+function sxRESTResearchFlow(trades,now,minutes){
+  const start=now-minutes*60000,valid=(Array.isArray(trades)?trades:[]).filter(t=>Number.isFinite(t.timestamp)&&t.timestamp<=now&&typeof t.isBuy==='boolean'&&safPositive(t.price)&&safPositive(t.volume));
+  const all=[...new Map(valid.map(t=>[String(t.sequence??[t.timestamp,t.price,t.volume,t.isBuy].join(':')),t])).values()];
+  const rows=all.filter(t=>t.timestamp>start),side=buy=>{const a=rows.filter(t=>t.isBuy===buy),quantity=a.reduce((s,t)=>s+t.volume,0),value=a.reduce((s,t)=>s+t.price*t.volume,0);return {quantity,value,vwap:quantity?value/quantity:null,count:a.length};};
+  return {at:now,minutes,covered:all.some(t=>t.timestamp<=start),count:rows.length,buy:side(true),sell:side(false),source:'LUNO_REST'};
+}
+function sxChooseResearchFlow(stream,rest){
+  if(rest.covered){if(stream?.covered&&((stream.count===0)!==(rest.count===0)))return {...rest,covered:false,conflict:true};return rest;}
+  if(stream?.covered){if(stream.count===0&&rest.count>0)return {...rest,covered:false,conflict:true};return stream;}
+  return rest;
+}
+function sxSimpleMA(c){
+  const f=c?.frames?.find(f=>f.minutes===5&&f.ready),m=f?.mas;if(!m)return 'Trend MA: candle sedang disegarkan.';
+  const pair=(a,b)=>{const x=m[a],y=m[b];if(!x||!y)return 'MA'+a+'/'+b+' belum tersedia';const now=x.value-y.value,old=x.previous-y.previous,cross=Number.isFinite(old)&&((old<=0&&now>0)||(old>=0&&now<0));return 'MA'+a+(cross?' baru cross ':' masih ')+(now>0?'atas ':now<0?'bawah ':'sejajar ')+ 'MA'+b;};
+  return 'Carta 5m: '+pair(9,20)+'.\n'+pair(50,100)+'; '+pair(100,200)+'.\n'+(m[9].slopePct>0&&m[20].slopePct>0?'Momentum pendek sedang menguat.':m[9].slopePct<0&&m[20].slopePct<0?'Momentum pendek sedang melemah.':'Momentum pendek masih bercampur.');
+}
+function sxPivotArrows(values){if(!values?.length)return 'belum terbentuk';return values.map((v,i)=>(i?(v>values[i-1]?' ↑ ':v<values[i-1]?' ↓ ':' ↔ '):'')+'RM'+safFmt(v,4)).join('');}
+function sxSimpleVolume(flow,candle,minutes){
+  const price=n=>safPositive(n)?'RM'+safFmt(n,4):'tiada transaksi';
+  if(flow?.count>0){const qty=flow.buy.quantity+flow.sell.quantity,value=flow.buy.value+flow.sell.value;
+    return minutes+' min: '+safFmt(qty,2)+' GRT · RM'+safFmt(value,2)+' · purata '+price(value/qty)+(flow.covered?'':' (rekod separa)')+'\nBeli '+safFmt(flow.buy.quantity,2)+' GRT @ '+price(flow.buy.vwap)+' | Jual '+safFmt(flow.sell.quantity,2)+' GRT @ '+price(flow.sell.vwap)+(flow.conflict?'\nStream/REST berbeza; arah belum disahkan.':'');
+  }
+  if(flow?.covered&&candle?.quantity===0)return minutes+' min: tiada transaksi direkodkan; harga purata tiada.';
+  if(candle&&Number.isFinite(candle.quantity))return minutes+' min (candle lengkap): '+safFmt(candle.quantity,2)+' GRT · nilai anggaran RM'+safFmt(candle.value,2)+' · purata anggaran '+price(candle.quantity>0?candle.value/candle.quantity:null)+'\nPecahan beli/jual belum disahkan daripada rekod transaksi.';
+  return minutes+' min: rekod transaksi belum tersedia; bukan bermaksud volume sifar.';
+}
+
 function sxAnalystVerdict(p,answer){
   const a=p.analyst,c=a?.candles,b=a?.book,f=sxDisplayFeature(p),fmt=n=>safPositive(n)?'RM'+safFmt(n,5):'—',pct=n=>(n>=0?'+':'')+safFmt(n,2)+'%';
-  let out='<b>🧠 GRT · VERDICT</b>\nHarga: '+fmt(f?.price)+'\n━━━━━━━━━━━━━━\n<b>📊 MA & TREND</b>\n';
-  for(const minutes of [5,15,60]){const frame=c?.frames?.find(v=>v.minutes===minutes);out+=frame?.ready?minutes+'m: MA9 '+fmt(frame.mas[9].value)+' | MA20 '+fmt(frame.mas[20].value)+' | MA50 '+fmt(frame.mas[50].value)+'\n':'MA '+minutes+'m: sejarah sedang disegarkan.\n';}
-  const five=c?.frames?.find(v=>v.minutes===5&&v.ready);if(five)out+='Cerun 15 min: MA9 '+pct(five.mas[9].slopePct)+', MA20 '+pct(five.mas[20].slopePct)+', MA50 '+pct(five.mas[50].slopePct)+'.\n';
+  let out='<b>🧠 GRT · VERDICT</b>\nHarga: '+fmt(f?.price)+'\n━━━━━━━━━━━━━━\n<b>📊 MA TREND & RSI</b>\n';
+  out+=sxMAPerspective(c)+'\n';
   out+='━━━━━━━━━━━━━━\n<b>📚 ORDER BOOK & VOLUME</b>\n';
-  const w=b?.windows?.find(w=>w.minutes===15&&w.ready)||b?.windows?.find(w=>w.ready);
-  if(w)out+='Dalam '+w.minutes+' min: bid '+fmt(w.bidFrom)+' → '+fmt(w.bidTo)+'; ask '+fmt(w.askFrom)+' → '+fmt(w.askTo)+'. Bid naik '+w.bidRaises+' / turun '+w.bidDrops+' kali sampel.\n';
-  else out+='Snapshot tersedia; sejarah perubahan book direkod sejak bot bersambung.\n';
-  out+='Liputan book berterusan: '+safFmt(b?.coverageMinutes||0,0)+' min / 24 jam.\n';
-  if(Number.isFinite(c?.volumeHour))out+='Volume 1 jam: '+safFmt(c.volumeHour,2)+' GRT · nilai anggaran RM'+safFmt(c.hourQuoteEstimate,2)+'\nHarga purata anggaran candle: '+fmt(c.hourPriceEstimate)+(Number.isFinite(c.volumeHourRatio)?' · '+safFmt(c.volumeHourRatio,2)+'× jam sebelumnya':'')+'.\n';
-  const flow5=a?.flow5,flow=!!flow5?.covered&&Date.now()-flow5.at<=30000&&flow5.count>0;
-  if(flow5){
-    out+='Transaksi 5 minit'+(flow5.covered?'':' (liputan separa)')+':\n';
-    for(const [label,side]of [['Beli','buy'],['Jual','sell']]){const v=flow5[side];out+=label+': '+safFmt(v.quantity,2)+' GRT · RM'+safFmt(v.value,2)+' · purata '+(v.vwap===null?'—':fmt(v.vwap))+'\n';}
-  }else out+='Transaksi 5 minit belum tersedia.\n';
-  const trendLabel={RISING:'menaik',FALLING:'menurun',MIXED:'bercampur',UNKNOWN:'belum terbentuk'};
-  out+='Support (lama → baharu): '+(c?.support?.values?.length?c.support.values.map(fmt).join(' → '):'belum terbentuk')+' · '+trendLabel[c?.support?.trend||'UNKNOWN']+'\n';
-  out+='Resistance (lama → baharu): '+(c?.resistance?.values?.length?c.resistance.values.map(fmt).join(' → '):'belum terbentuk')+' · '+trendLabel[c?.resistance?.trend||'UNKNOWN']+'\n';
-  out+='━━━━━━━━━━━━━━\n<b>💬 VERDICT</b>\n\n';
-  const frames=c?.frames?.filter(f=>f.ready)||[],up=frames.filter(f=>f.stack==='UP'&&f.mas[9].slopePct>0&&f.mas[20].slopePct>0).length,down=frames.filter(f=>f.stack==='DOWN'&&f.mas[9].slopePct<0&&f.mas[20].slopePct<0).length;
-  const bidUp=w&&w.bidChangePct>0&&w.bidRaises>w.bidDrops,flowUp=flow&&flow5.buy.value>flow5.sell.value,flowDown=flow&&flow5.sell.value>flow5.buy.value;
-  if(up>=2&&bidUp&&flowUp)out+='Aku lebih cenderung harga cuba naik. MA beberapa tempoh sedang menguat; buyer pula menaikkan bid dan belian sebenar menyokong gerakan itu. ';
-  else if(down>=2&&w?.bidChangePct<0&&flowDown)out+='Aku lebih cenderung harga menguji bawah dahulu. MA beberapa tempoh melemah, bid turun dan transaksi jual lebih kuat—tekanan itu datang daripada dagangan sebenar juga. ';
-  else if(bidUp&&flowDown)out+='Buyer menaikkan bid, tapi transaksi lima minit masih dikuasai seller. Aku belum anggap book yang nampak kuat itu pengesahan kenaikan. ';
-  else if(up>=2)out+='MA beberapa tempoh nampak kuat, tapi aku belum nampak book dan transaksi sama-sama mengesahkan kenaikan. ';
-  else if(down>=2)out+='Trend MA masih lemah. Aku nak tengok sama ada buyer mampu mempertahankan support sebelum menganggap penurunan dah reda. ';
-  else out+='MA beberapa tempoh masih bercampur. Aku pantau sama ada perubahan bid turut disokong transaksi, bukan pilih arah berdasarkan satu indikator. ';
-  if(c?.support?.trend==='RISING')out+='Tiga support semakin tinggi turut membantu bacaan, tetapi support terkini masih boleh gagal. ';
-  else if(c?.support?.trend==='FALLING')out+='Tiga support semakin rendah menambah risiko penurunan. ';
-  if(c?.volumeHourRatio>1)out+=flow?'Volume sejam meningkat; arah transaksi lima minit membantu bezakan tekanan beli daripada jual. ':'Volume sejam meningkat, tetapi arah transaksi belum disahkan. ';
-  out+='\n\n';
-  const levels=sxResearchLevels(p),res=levels.above[0]?.price,next=levels.above[1]?.price,support=levels.below[0]?.price,lower=levels.below[1]?.price;
-  if(res)out+='Aku pantau '+fmt(res)+' dahulu di sebelah atas. Kalau belian memakan halangan itu dan harga bertahan'+(next?', '+fmt(next)+' jadi zon seterusnya. ':', barulah sambungan kenaikan lebih meyakinkan. ');
-  if(support)out+='Kalau '+fmt(support)+' pecah bersama jualan kuat'+(lower?', risiko beralih ke '+fmt(lower)+'. ':', pelan lantunan perlu dinilai semula. ');
-  if(answer.verdict==='TOLAK')out+='Semakan AI masih bercanggah dengan sebahagian bukti; jangan anggap pelan ini disahkan. ';
-  if(answer.recovery)out+='Groq belum tersedia; ulasan ini daripada engine data. ';
-  const d=p.detectors;if(d&&Date.now()-d.at<150000&&Number.isFinite(d.btc15)&&Number.isFinite(d.global5))out+='BTC 15m '+pct(d.btc15)+'; GRT global 5m '+pct(d.global5)+'.';
+  const w=b?.windows?.find(w=>w.minutes===5&&w.ready)||b?.windows?.find(w=>w.ready);
+  if(w)out+='Bid '+(w.bidChangePct>0?'↑':w.bidChangePct<0?'↓':'↔')+' '+fmt(w.bidFrom)+' → '+fmt(w.bidTo)+' dalam '+w.minutes+' min.\n';
+  else out+='Book live dipantau; perubahan bid sedang direkod.\n';
+  const flow5=a?.flow5,flow=!!flow5?.covered&&!flow5.conflict&&Date.now()-flow5.at<=30000&&flow5.count>0;
+  out+=sxSimpleVolume(flow5,{quantity:c?.volumeFive,value:c?.fiveQuoteEstimate},5)+'\n';
+  out+=sxSimpleVolume(a?.flow60,{quantity:c?.volumeHour,value:c?.hourQuoteEstimate},60)+'\n';
+  out+='Pivot support: '+sxPivotArrows(c?.support?.values)+'\n';
+  out+='Pivot resistance: '+sxPivotArrows(c?.resistance?.values)+'\n';
+  out+='━━━━━━━━━━━━━━\n'+sxSidePerspectives(p)+'\n';
+  if(answer.recovery)out+='Groq belum tersedia; ulasan daripada engine.\n';
   return out;
 }
 
@@ -26343,7 +26389,7 @@ async function sxRefresh(){
       f=sxFeatures(rest,restTrades,SX_STATE.samples,now,0);if(f){f.ofi=null;f.acceleration=null;for(const wall of [f.support,f.resistance]){wall.added=null;wall.cancelled=null;}f.buyerAbsorption=false;f.sellerAbsorption=false;}}
     const tech=sxCandles(SX.candles,now),legacy=SAF_STATE.lastSnapshot;
     const forecasts=f?SX_CFG.horizons.map(h=>sxForecast(f,h,now)):[];
-    const packet={at:now,analyst:{...sxAnalystPacket(SX.candles,SX_STATE.samples,now),flow5:sxResearchFlow5(SX.events,now,SX.connectedAt,!!currentStream&&currentStream.status==='ACTIVE')},todayInputs:sxTodayInputs(SX.candles,now),pair:'GRTMYR',source:'LUNO',tickerPrice:sxNum(ticker?.currentPrice),feature:f,technical:tech,day:sxDayResearch(SX.candles,now,f?.price||ticker?.currentPrice),
+    const packet={at:now,analyst:{...sxAnalystPacket(SX.candles,SX_STATE.samples,now),depth:sxDepthResearch(currentStream||book,now),flow5:sxChooseResearchFlow(sxResearchFlow5(SX.events,now,SX.connectedAt,!!currentStream&&currentStream.status==='ACTIVE'),sxRESTResearchFlow(trades,now,5)),flow60:sxRESTResearchFlow(trades,now,60)},todayInputs:sxTodayInputs(SX.candles,now),pair:'GRTMYR',source:'LUNO',tickerPrice:sxNum(ticker?.currentPrice),feature:f,technical:tech,day:sxDayResearch(SX.candles,now,f?.price||ticker?.currentPrice),
       detectors:legacy&&now-legacy.now<150000?{up:SAF_STATE.up.state,down:SAF_STATE.down.state,upScore:legacy.upScore,downScore:legacy.downScore,btc15:legacy.btc15,global5:legacy.global5,at:legacy.now}:null,
       observedFlow:sxRestFlow(trades,now),forecasts,quality:{bookReceivedAt:book?.timestamp||now,streamSynchronized:!!currentStream,receivedAt:SX.lastWire,sourceAt:currentStream?SX.lastSource:(book?.timestamp||now),ready:!!f?.ready,missing:[!currentStream?'continuous orderbook':null,!f?.ready?'flow/history coverage':null,!tech.ready?'completed candles':null].filter(Boolean)}};
     SX.packet=packet;SX.refreshAt=now;return packet;
@@ -26840,6 +26886,8 @@ function sxTodayPrediction(p,now=Date.now()){
   const history=ab?.windows?.find(w=>w.minutes===15&&w.ready);
   if(stream&&history){const bookVote=votes.find(v=>v.name==='book');if(bookVote)bookVote.value=(bookVote.value+clip(history.bidChangePct/100/sigma,-1,1))/2;}
   if(ac?.support?.trend&&ac?.resistance?.trend){const sign=x=>x==='RISING'?1:x==='FALLING'?-1:0;votes.push({name:'structure',value:(sign(ac.support.trend)+sign(ac.resistance.trend))/2,weight:.1});}
+  const rsiFrame=frames.find(f=>f.minutes===5);
+  if(Number.isFinite(rsiFrame?.rsi14)){const momentum=votes.find(v=>v.name==='momentum');momentum.value=.8*momentum.value+.2*clip((rsiFrame.rsi14-50)/25,-1,1);}
   const score=votes.reduce((s,v)=>s+v.value*v.weight,0)/votes.reduce((s,v)=>s+v.weight,0);
   const center=f.price*Math.exp(clip(score,-1,1)*width*.3);
   let lower=Math.min(f.price,center*Math.exp(-width)),upper=Math.max(f.price,center*Math.exp(width));
@@ -26851,25 +26899,101 @@ function sxTodayPrediction(p,now=Date.now()){
   const sl=entry?levels.below.find(l=>l.price<entry&&l.price>=lower)?.price||null:null;
   const direction=score>.2?'UP':score<-.2?'DOWN':'MIXED';
   const disagree=votes.some(v=>v.value>.2)&&votes.some(v=>v.value<-.2);
-  const evidence=stream&&flow&&!disagree&&p.quality?.ready?'SEDERHANA':'RENDAH';
+  const extremeRSI=Number.isFinite(rsiFrame?.rsi14)&&(rsiFrame.rsi14>=70||rsiFrame.rsi14<=30);
+  const evidence=stream&&flow&&!disagree&&!extremeRSI&&p.quality?.ready?'SEDERHANA':'RENDAH';
   const net=entry&&tp?tp*(1-SELL_FEE)-entry*(1+BUY_FEE):null;
   return {ready:true,method:'SCENARIO_V1',calibrated:false,at:now,endAt,minutes,lower,upper,center,entry,tp,sl,direction,evidence,score,votes,flowUsed:flow,bookUsed:stream,volumeRatio:v.volumeRatio,volume24:v.volume24,disagree,netAfterConfiguredFees:net,
     route:direction==='DOWN'?'UJI BAWAH; REBOUND PERLU BUYER':direction==='UP'?'UJI ATAS; BREAKOUT PERLU BELIAN':'DUA HALA; TUNGGU PECAHAN'};
 }
 function sxTodayBlock(p){
   const q=sxTodayPrediction(p),money=n=>safPositive(n)?'RM'+safFmt(n,4):'belum cukup bukti';
-  let out='━━━━━━━━━━━━━━\n<b>🔮 TODAY PRICE PREDICTION</b>\n━━━━━━━━━━━━━━\n';
+  let out='━━━━━━━━━━━━━━\n<b>🔮 PREDICTION ANALYST · HARI INI</b>\n━━━━━━━━━━━━━━\n';
   if(!q.ready)return out+'Anggaran belum tersedia: '+q.reason+'\nTiada sasaran dipaksa.';
-  out+='Gabungan: volume 24j + MA + momentum + support/resistance'+(q.bookUsed?' + order book':'')+(q.flowUsed?' + transaksi sebenar':'')+'.\n\n';
-  out+='<b>📈 ANGGARAN HIGHEST:</b> '+money(q.upper)+'\n<b>📉 ANGGARAN LOWEST:</b> '+money(q.lower)+'\n';
+  out+='Gabungan: volume 24j + MA/RSI + momentum + support/resistance'+(q.bookUsed?' + order book':'')+(q.flowUsed?' + transaksi sebenar':'')+'.\n\n';
+  out+='<b>📈 ANGGARAN HAD ATAS:</b> '+money(q.upper)+'\n<b>📉 ANGGARAN HAD BAWAH:</b> '+money(q.lower)+'\n';
+  out+='Dari harga sekarang: atas '+safFmt((q.upper/p.feature.price-1)*100,2)+'% / bawah '+safFmt((q.lower/p.feature.price-1)*100,2)+'%.\n';
   out+='<b>🎯 TUMPUAN SENARIO:</b> '+money(q.center)+'\n<b>Bias:</b> '+q.route+'\n<b>Kekuatan bukti:</b> '+q.evidence+' (heuristik)\n';
   if(!q.flowUsed)out+='Aliran transaksi belum mengesahkan arah.\n';
   out+='\n<b>👀 ENTRY TO WATCH:</b> '+money(q.entry)+'\n<b>💰 TAKE PROFIT WATCH:</b> '+money(q.tp)+'\n<b>⚠️ PARAS BATAL / SL:</b> '+money(q.sl)+'\n';
   if(!q.entry||!q.tp||!q.sl)out+='Pelan entry belum lengkap; jangan anggap ini signal beli.\n';
   else if(q.netAfterConfiguredFees<=0)out+='Ruang sasaran belum menampung anggaran fee.\n';
-  out+='Baki hari ini hingga 23:59 MYT. Julat senario belum dikalibrasi; harga boleh melepasi kedua-dua paras. Entry perlukan pengesahan buyer.';
+  out+='Tunggu belian kuat sebelum masuk. Sasaran hari ini boleh berubah ikut pasaran, dan order dalam book boleh ditarik balik. Harga boleh melepasi julat anggaran.';
   return out;
 }
+
+/* AI Luno: isolated, on-demand research; no orders, scanner state or GRT training. */
+const ALUNO_COINS=Object.freeze(['GRT','XRP','XLM','CRV','AAVE']);
+const ALUNO={busy:false,until:0,providerUntil:0,states:new Map()};
+const ALUNO_COOLDOWN_MS=60000;
+function alunoRemaining(){return Math.max(0,Math.ceil((Math.max(ALUNO.until,ALUNO.providerUntil,SX.groqBlockedUntil||0)-Date.now())/1000));}
+function alunoCooldownText(){const n=alunoRemaining();return n?'⏳ API COOLDOWN: '+n+' saat lagi.\nBoleh analisis semula: '+sxMYTime(Date.now()+n*1000)+'\nCooldown ini untuk /ailuno; scanner terus berjalan.':'✅ Cooldown tamat. Boleh pilih coin untuk analisis.';}
+function alunoButtons(coin){return {inline_keyboard:[...(coin?[[{text:'🔄 Analisis '+coin,callback_data:'ALUNO:COIN:'+coin}]]:[]),[{text:'⏳ Semak cooldown',callback_data:'ALUNO:WAIT'},{text:'🪙 Pilih coin',callback_data:'ALUNO:MENU'}]]};}
+async function alunoMenu(msg){if(!isPart9AuthorizedChat(msg.chat.id))return;return replyTelegram(msg.chat.id,'🧠 AI LUNO\nPilih coin untuk analisis.\n'+alunoCooldownText(),{reply_markup:{inline_keyboard:ALUNO_COINS.map(coin=>[{text:coin,callback_data:'ALUNO:COIN:'+coin}])}});}
+function alunoRateLimit(e){if(e.response?.status!==429)return;const value=e.response?.headers?.['retry-after'],seconds=Number(value),date=Date.parse(value);const delay=Number.isFinite(seconds)&&seconds>0?seconds*1000:Number.isFinite(date)&&date>Date.now()?date-Date.now():60000;ALUNO.providerUntil=Math.max(ALUNO.providerUntil,Date.now()+delay);}
+async function alunoRead(endpoint,params,authenticated=false){
+  if(Date.now()<ALUNO.providerUntil)throw Error('ALUNO_COOLDOWN');
+  try{return await lunoRequest({method:'GET',endpoint,params,authenticated,accountType:'MAIN',timeoutMs:12000});}
+  catch(e){alunoRateLimit(e);throw Error(e.response?.status===429?'ALUNO_RATE_LIMIT':'ALUNO_DATA_UNAVAILABLE');}
+}
+async function alunoPacket(coin){
+  if(!ALUNO_COINS.includes(coin)||coin==='GRT')throw Error('ALUNO_COIN_INVALID');
+  const state=ALUNO.states.get(coin)||{candles:[],candleAt:0,snapshots:[]};ALUNO.states.set(coin,state);
+  const pair=getPair(coin);
+  if(!state.candles.length||Date.now()-state.candleAt>300000){
+    const r=await alunoRead('/api/exchange/1/candles',{pair,duration:300,since:Date.now()-1000*300000},true);
+    const rows=(r?.candles||[]).map(normalizeCandle).filter(Boolean);if(!rows.length)throw Error('ALUNO_CANDLES_UNAVAILABLE');state.candles=rows;state.candleAt=Date.now();
+  }
+  const rawTrades=await alunoRead('/api/1/trades',{pair});
+  const trades=(rawTrades?.trades||[]).filter(t=>typeof t.is_buy==='boolean'||t.is_buy==='true'||t.is_buy==='false').map(normalizeLunoTrade).filter(Boolean);
+  const rawBook=await alunoRead('/api/1/orderbook',{pair}),now=Date.now();
+  const book={bids:normalizeOrderBookSide(rawBook?.bids).sort((a,b)=>b.price-a.price),asks:normalizeOrderBookSide(rawBook?.asks).sort((a,b)=>a.price-b.price),timestamp:now,source:'REST_SNAPSHOT',status:'UNKNOWN'};
+  if(!book.bids.length||!book.asks.length||book.bids[0].price>=book.asks[0].price)throw Error('ALUNO_BOOK_INVALID');
+  const events=trades.map(t=>({kind:'TRADE',at:t.timestamp,price:t.price,volume:t.volume,value:t.price*t.volume,side:t.isBuy?'BUY':'SELL'}));
+  const f=sxFeatures(book,events,[],now,0);if(!f)throw Error('ALUNO_FEATURE_INVALID');
+  f.ofi=null;f.acceleration=null;f.buyerAbsorption=false;f.sellerAbsorption=false;
+  for(const wall of [f.support,f.resistance]){wall.added=null;wall.cancelled=null;wall.executed=null;}
+  state.snapshots.push({at:now,bid:book.bids[0].price,ask:book.asks[0].price});state.snapshots=state.snapshots.filter(v=>now-v.at<=86400000).slice(-1440);
+  const p={coin,pair,at:now,feature:f,technical:sxCandles(state.candles,now),day:sxDayResearch(state.candles,now,f.price),todayInputs:sxTodayInputs(state.candles,now),analyst:{...sxAnalystPacket(state.candles,[],now),depth:sxDepthResearch(book,now),flow5:sxRESTResearchFlow(trades,now,5),flow60:sxRESTResearchFlow(trades,now,60)},forecasts:[],detectors:null,observedFlow:sxRestFlow(trades,now),quality:{ready:false,streamSynchronized:false,bookReceivedAt:now,sourceAt:now,missing:['continuous orderbook history']}};
+  state.packet=p;return p;
+}
+async function alunoSend(chatId,text){
+  let part='';for(const line of String(text).split('\n')){if(line.length>3000){if(part){await replyTelegram(chatId,part,{parse_mode:'HTML'});part='';}const plain=sxReportPlain(line);for(let i=0;i<plain.length;i+=3000)await replyTelegram(chatId,plain.slice(i,i+3000));continue;}if(part.length+line.length+1>3000){await replyTelegram(chatId,part,{parse_mode:'HTML'});part='';}part+=(part?'\n':'')+line;}if(part)await replyTelegram(chatId,part,{parse_mode:'HTML'});
+}
+async function alunoAnalyze(msg,coin){
+  if(!isPart9AuthorizedChat(msg.chat.id))return;
+  if(!ALUNO_COINS.includes(coin))return replyTelegram(msg.chat.id,'Coin tidak dibenarkan. Guna /ailuno.');
+  if(ALUNO.busy||SX.groqBusy)return replyTelegram(msg.chat.id,'Analisis sedang berjalan. Tunggu jawapan dahulu.');
+  if(alunoRemaining())return replyTelegram(msg.chat.id,alunoCooldownText(),{reply_markup:alunoButtons(coin)});
+  ALUNO.busy=true;
+  try{
+    if(coin==='GRT'){await sxAsk(msg,'Kaji GRT: MA, RSI, buyer/bid, seller/ask, volume dan senario harga.');}
+    else{
+      await replyTelegram(msg.chat.id,'🧠 Sedang semak '+coin+'…');
+      const p=await alunoPacket(coin);let aiText='Ulasan daripada engine data.',groqUsed=false;
+      if(!SX.groqBusy){SX.groqBusy=true;try{
+        const evidence={trend:p.analyst.candles.frames.filter(f=>f.ready).map(f=>({minutes:f.minutes,stack:f.stack,rsi:f.rsi14})),flow5:p.analyst.flow5,book:p.analyst.depth};
+        const r=await sxGroq([{role:'system',content:'Read-only coin evidence review. Choose JSON {"focus":"trend"|"flow"|"conflict"}. Prefer conflict when trend and executed flow disagree or execution coverage is partial. Do not infer continuous orderbook movement from a snapshot.'},{role:'user',content:JSON.stringify({coin,evidence})}],null);
+        const v=JSON.parse(r.content);const texts={trend:'Fokus AI: banding trend MA beberapa tempoh sebelum pilih arah.',flow:'Fokus AI: semak belian/jualan sebenar bersama paras harga.',conflict:'Fokus AI: bukti belum sehaluan atau liputan transaksi terhad; jangan paksa arah.'};
+        if(Object.hasOwn(texts,v.focus)){aiText=texts[v.focus];groqUsed=true;}
+      }catch(_){}finally{SX.groqBusy=false;}}
+      let text=sxResearchReport(p,{verdict:'TUNGGU',direction:'WAIT',evidence:[],recovery:!groqUsed},sxPacketStale(p));
+      // Render verified packet for the selected coin. No GRT packet/model is used.
+      text=text.replace(/\bGRT\b/g,coin).replace('Book live dipantau; perubahan bid sedang direkod.','Order book: snapshot semasa; pergerakan berterusan belum dipantau.');
+      text+='\n'+aiText+'\nData coin ini diambil apabila diminta; model latihan GRT tidak digunakan.';
+      await alunoSend(msg.chat.id,text);
+    }
+  }catch(e){await replyTelegram(msg.chat.id,e.message==='ALUNO_RATE_LIMIT'?'Luno mengenakan had API. Cooldown dipanjangkan; cuba selepas masa di bawah.':'Analisis '+coin+' belum berjaya. Tiada angka direka; cuba selepas cooldown.');}
+  finally{ALUNO.until=Date.now()+ALUNO_COOLDOWN_MS;ALUNO.busy=false;await replyTelegram(msg.chat.id,alunoCooldownText(),{reply_markup:alunoButtons(coin)});}
+}
+bot.onText(/^\/ailuno(?:@\w+)?(?:\s+(\w+))?\s*$/i,async(msg,match)=>{try{if(match[1])await alunoAnalyze(msg,match[1].toUpperCase());else await alunoMenu(msg);}catch(_){if(isPart9AuthorizedChat(msg.chat.id))await replyTelegram(msg.chat.id,'Menu AI belum tersedia. Cuba semula.');}});
+bot.on('callback_query',async q=>{
+  const data=String(q.data||'');if(!data.startsWith('ALUNO:'))return;
+  const msg={chat:{id:q.message?.chat?.id},from:q.from};
+  if(!isPart9AuthorizedChat(msg.chat.id)){try{await bot.answerCallbackQuery(q.id,{text:'Unauthorized'});}catch(_){}return;}
+  try{await bot.answerCallbackQuery(q.id);}catch(_){}
+  if(sxDedup('aluno:'+q.id))return;
+  try{const [,action,coin]=data.split(':');if(action==='MENU')return await alunoMenu(msg);if(action==='WAIT')return await replyTelegram(msg.chat.id,alunoCooldownText(),{reply_markup:alunoButtons()});if(action==='COIN')return await alunoAnalyze(msg,coin);}catch(_){await replyTelegram(msg.chat.id,'Permintaan AI belum berjaya. Cuba semula.');}
+});
 
 function sxResearchReport(p,answer,stale=false,positions=[]){
   if(stale||sxPacketStale(p)||!p.feature)return '<b>🧠 GRT · VERDICT</b>\nSnapshot perlu disegarkan sebelum anggaran baharu.';
