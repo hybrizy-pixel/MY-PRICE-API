@@ -26249,7 +26249,7 @@ function sxBookLevels(book){
 }
 function sxVolumeSummary(a){
   const c=a?.candles,f=a?.flow5;let out='<b>Volume:</b> ';
-  out+=Number.isFinite(c?.volumeHour)?'Sejam '+safFmt(c.volumeHour,0)+' GRT'+(Number.isFinite(c.volumeHourRatio)?', '+safFmt(c.volumeHourRatio,2)+'× jam sebelumnya':'')+'. ':'Volume sejam sedang disemak. ';
+  out+=Number.isFinite(c?.volumeHour)?'Sejam candle lengkap '+safFmt(c.volumeHour,0)+' GRT'+(Number.isFinite(c.volumeHourRatio)?', '+safFmt(c.volumeHourRatio,2)+'× jam sebelumnya':'')+'. ':'Volume sejam sedang disemak. ';
   const qty=(f?.buy?.quantity||0)+(f?.sell?.quantity||0);
   if(f?.covered&&!f.conflict&&Date.now()-f.at<=30000&&qty>0){const pct=f.buy.quantity/qty*100;out+='Belian '+safFmt(pct,0)+'% kuantiti transaksi 5 minit — '+(pct>55?'buyer lebih aktif.':pct<45?'seller lebih aktif.':'aliran seimbang.');}
   else out+='Arah belian/jualan 5 minit belum disahkan.';
@@ -26367,9 +26367,13 @@ function sxSimpleVolume(flow,candle,minutes){
   return minutes+' min: rekod transaksi belum tersedia; bukan bermaksud volume sifar.';
 }
 
+function sxResearchPriceLabel(p){
+  if(safPositive(p.tickerPrice))return 'Harga transaksi terakhir: RM'+safFmt(p.tickerPrice,4);
+  return 'Harga transaksi terakhir belum tersedia.\nHarga tengah bid/ask: RM'+safFmt(p.feature.price,4);
+}
 function sxAnalystVerdict(p,answer){
   const a=p.analyst,d=a?.depth,w=a?.book?.windows?.find(x=>x.minutes===5&&x.ready),money=v=>'RM'+safFmt(v,4),arrow=(a,b)=>b>a?' ↑':b<a?' ↓':' ↔';
-  let out='<b>🧠 GRT · VERDICT</b>\nHarga sekarang: '+money(p.feature.price)+'\n━━━━━━━━━━━━━━\n<b>📊 MA & TREND</b>\n'+sxMAPerspective(a?.candles)+'\n━━━━━━━━━━━━━━\n<b>📚 ORDER BOOK</b>\n';
+  let out='<b>🧠 GRT · VERDICT</b>\n'+sxResearchPriceLabel(p)+'\n━━━━━━━━━━━━━━\n<b>📊 MA & TREND</b>\n'+sxMAPerspective(a?.candles)+'\nMA/RSI guna candle lengkap mengikut tempoh di atas.\n━━━━━━━━━━━━━━\n<b>📚 ORDER BOOK</b>\n';
   if(d?.ready&&Date.now()-d.at<=30000&&d.levels){for(const [side,title]of [['bids','🟢 BID · Buyer menunggu'],['asks','🔴 ASK · Seller menunggu']]){out+='<b>'+title+'</b>\n';for(const r of d.levels[side])out+=money(r.price)+' → <b>'+safFmt(r.volume,0)+' GRT</b>\n';}}
   else out+='Harga dan kuantiti book perlu disegarkan.\n';
   if(w&&d?.ready&&Date.now()-d.at<=30000){out+='<b>Dalam 5 minit</b>\n';for(const [side,label,oldPrice,newPrice]of [['bids','Bid',w.bidFrom,d.bid],['asks','Ask',w.askFrom,d.ask]]){out+=label+' terdekat: '+money(oldPrice)+' → '+money(newPrice)+arrow(oldPrice,newPrice)+'\n';const current=d.levels?.[side]?.[0],old=w.levelsFrom?.[side]?.find(r=>r.price===current?.price);if(old&&current)out+='Kuantiti '+label.toLowerCase()+' '+money(current.price)+': '+safFmt(old.volume,0)+' → '+safFmt(current.volume,0)+' GRT'+arrow(old.volume,current.volume)+'\n';}if(!w.levelsFrom)out+='Perbandingan kuantiti sedang direkod.\n';}
@@ -26930,10 +26934,10 @@ function sxTodayBlock(p){
   if(!q.ready)return out+'Anggaran belum tersedia: '+q.reason+'\nTiada sasaran dipaksa.';
   const floor=safPositive(support)?money(support):null,ceiling=safPositive(resistance)?money(resistance):null;
   out+='<b>🟢 Buyer · Nak beli / sudah pegang</b>\n';
-  out+=q.direction==='UP'?'Gabungan trend, momentum dan volume condong ke atas. ':q.direction==='DOWN'?'Gabungan data masih condong turun; lantunan belum cukup untuk sahkan pemulihan. ':'Bukti masih bercampur; arah belum kukuh. ';
+  out+=q.direction==='UP'?'Skor gabungan condong ke atas; ini belum pengesahan breakout. ':q.direction==='DOWN'?'Gabungan data masih condong turun; lantunan belum cukup untuk sahkan pemulihan. ':'Bukti masih bercampur; arah belum kukuh. ';
   if(!q.flowUsed)out+='Transaksi belum mengesahkan arah. ';
   if(ceiling)out+='Kalau belum beli, pantau '+ceiling+' dilepasi dan bertahan dengan belian kuat. ';
-  if(floor)out+='Kalau sudah pegang, senario hold ke '+money(q.upper)+' bergantung pada buyer menjaga '+floor+' dan melepasi halangan atas.';
+  if(floor)out+='Kalau sudah pegang, pantau buyer mempertahankan '+floor+(ceiling?' dan uji halangan '+ceiling:'')+'. Had atas julat bukan sasaran TP yang disahkan.';
   else out+='Support belum jelas untuk menilai pelan hold.';
   out+='\n\n<b>🔴 Seller · Ambil untung / kawal rugi</b>\n';
   if(ceiling)out+='Jika '+ceiling+' berulang kali menolak harga dan belian melemah, nilai ambil untung dekat halangan, ikut harga masuk dan fee. ';
@@ -26941,7 +26945,7 @@ function sxTodayBlock(p){
   else out+='Paras cut loss belum dapat ditentukan daripada support yang disahkan.';
   out+='\n\n<b>📈 Anggaran atas:</b> '+money(q.upper)+'\n<b>📉 Anggaran bawah:</b> '+money(q.lower)+'\n<b>🧭 Bias:</b> '+q.route+'\n';
   if(q.netAfterConfiguredFees!==null&&q.netAfterConfiguredFees<=0)out+='Ruang sasaran terdekat belum menampung anggaran fee.\n';
-  return out+'Julat senario hari ini, belum diuji sebagai kebarangkalian. Anggaran boleh berubah dan harga boleh melepasi julat.';
+  return out+'Julat senario hingga 23:59 MYT dikira dari harga tengah book RM'+money(p.feature.price).slice(2)+', bukan high/low 24 jam Luno atau sasaran terjamin. Belum dikalibrasi; harga boleh melepasi julat.';
 }
 
 
@@ -26969,6 +26973,7 @@ async function alunoPacket(coin){
   }
   const rawTrades=await alunoRead('/api/1/trades',{pair});
   const trades=(rawTrades?.trades||[]).filter(t=>typeof t.is_buy==='boolean'||t.is_buy==='true'||t.is_buy==='false').map(normalizeLunoTrade).filter(Boolean);
+  const rawTicker=await alunoRead('/api/1/ticker',{pair});
   const rawBook=await alunoRead('/api/1/orderbook',{pair}),now=Date.now();
   const book={bids:normalizeOrderBookSide(rawBook?.bids).sort((a,b)=>b.price-a.price),asks:normalizeOrderBookSide(rawBook?.asks).sort((a,b)=>a.price-b.price),timestamp:now,source:'REST_SNAPSHOT',status:'UNKNOWN'};
   if(!book.bids.length||!book.asks.length||book.bids[0].price>=book.asks[0].price)throw Error('ALUNO_BOOK_INVALID');
@@ -26977,7 +26982,7 @@ async function alunoPacket(coin){
   f.ofi=null;f.acceleration=null;f.buyerAbsorption=false;f.sellerAbsorption=false;
   for(const wall of [f.support,f.resistance]){wall.added=null;wall.cancelled=null;wall.executed=null;}
   state.snapshots.push({at:now,bid:book.bids[0].price,ask:book.asks[0].price});state.snapshots=state.snapshots.filter(v=>now-v.at<=86400000).slice(-1440);
-  const p={coin,pair,at:now,feature:f,technical:sxCandles(state.candles,now),day:sxDayResearch(state.candles,now,f.price),todayInputs:sxTodayInputs(state.candles,now),analyst:{...sxAnalystPacket(state.candles,[],now),depth:sxDepthResearch(book,now),flow5:sxRESTResearchFlow(trades,now,5),flow60:sxRESTResearchFlow(trades,now,60)},forecasts:[],detectors:null,observedFlow:sxRestFlow(trades,now),quality:{ready:false,streamSynchronized:false,bookReceivedAt:now,sourceAt:now,missing:['continuous orderbook history']}};
+  const p={coin,pair,at:now,tickerPrice:Number(rawTicker?.last_trade)||null,feature:f,technical:sxCandles(state.candles,now),day:sxDayResearch(state.candles,now,f.price),todayInputs:sxTodayInputs(state.candles,now),analyst:{...sxAnalystPacket(state.candles,[],now),depth:sxDepthResearch(book,now),flow5:sxRESTResearchFlow(trades,now,5),flow60:sxRESTResearchFlow(trades,now,60)},forecasts:[],detectors:null,observedFlow:sxRestFlow(trades,now),quality:{ready:false,streamSynchronized:false,bookReceivedAt:now,sourceAt:now,missing:['continuous orderbook history']}};
   state.packet=p;return p;
 }
 async function alunoSend(chatId,text){
