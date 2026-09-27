@@ -21404,6 +21404,9 @@ ${grt.section}`;
         message
       );
 
+    // Compare only against the last successfully delivered alert, at displayed precision.
+    if(sent){const price=sxAlertDisplayPrice(grt);if(price!==null)PART8_RUNTIME.lastSentAlertPrice=price;}
+
     PART8_RUNTIME
       .priceAlertRuns++;
 
@@ -26417,7 +26420,8 @@ function sxConditionText(p){return sxPlainCondition(p);}
 
 /* Deterministic presentation; ledger calculations in SAF remain unchanged. */
 function sxNumber(n,max=8){return Number(n).toLocaleString('en-MY',{maximumFractionDigits:max});}
-function sxPriceColor(grt){const st=grt?.movement?.state||'';if(['TELAH_NAIK','NAIK_BERTAHAN'].includes(st))return '🟢';if(['DROP_LAJU','SEDANG_DROP','DROP_BERTAHAN'].includes(st))return '🔴';if(st==='SIDEWAY')return '⚪';return '🟠';}
+function sxAlertDisplayPrice(grt){const n=Number(grt?.ticker?.currentPrice);return Number.isFinite(n)&&n>0?Number(formatPrice(n)):null;}
+function sxPriceColor(grt){const current=sxAlertDisplayPrice(grt),previous=PART8_RUNTIME.lastSentAlertPrice;if(current===null||!Number.isFinite(previous))return '⚪';return current>previous?'🟢':current<previous?'🔴':'⚪';}
 function sxView(type,data,chatId=CHAT_ID){const id=safId();SX.views.set(id,{type,data,chatId:String(chatId),at:Date.now()});for(const [k,v] of SX.views)if(Date.now()-v.at>3600000)SX.views.delete(k);while(SX.views.size>200)SX.views.delete(SX.views.keys().next().value);return id;}
 function sxViewGet(id,chatId,type=null){const v=SX.views.get(id);if(!v||String(chatId)!==v.chatId||Date.now()-v.at>3600000||(type&&v.type!==type))throw Error('Paparan tamat tempoh/restart. Jalankan command semula.');return v;}
 function sxAlertOptions(text,options){
