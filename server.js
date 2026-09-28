@@ -26209,12 +26209,16 @@ function sxObserve(f){
 // Shadow observer only: never used by order, scanner or entry gates.
 const ET={state:'UNKNOWN',candidate:null,count:0,at:0,epoch:null,low:null,ceiling:null,fallAt:0,reasons:[]};
 function etDecide(f,prior,frame,state,now){
-  if(!f?.ready||!prior?.ready||!frame?.ready||!Number.isFinite(frame.rsi14)||!Number.isFinite(frame.rsiPrevious)||!frame.mas?.[9]||!frame.mas?.[20]||!Number.isFinite(f.flow)||!Number.isFinite(prior.flow))return {state:'UNKNOWN',reasons:['Data stream/transaksi/candle belum lengkap.']};
+  if(!f?.flowCovered)return {state:'UNKNOWN',reasons:['Liputan stream transaksi belum lengkap.']};
+  if(!f.ready)return {state:'UNKNOWN',reasons:[f.trades<6?'Transaksi seminit terlalu sedikit untuk detector.':'Tempoh pemerhatian atau perbandingan harga belum mencukupi.']};
+  if(!prior?.ready||!Number.isFinite(prior.flow))return {state:'UNKNOWN',reasons:['Rekod aliran terdahulu belum cukup untuk perbandingan.']};
+  if(!frame?.ready||!Number.isFinite(frame.rsi14)||!Number.isFinite(frame.rsiPrevious)||!frame.mas?.[9]||!frame.mas?.[20])return {state:'UNKNOWN',reasons:['Candle lengkap bagi MA/RSI belum tersedia.']};
+  if(!Number.isFinite(f.flow))return {state:'UNKNOWN',reasons:['Aliran transaksi semasa belum sah.']};
   const m=frame.mas,newLow=safPositive(state.low)&&f.price<state.low*.999,falling=f.return1m<-.1&&f.flow<-.15;
   if(newLow||f.flow<-.4)return {state:'FALLING',reasons:[newLow?'Low pemulihan ditembusi.':'Jualan kembali dominan.']};
   if(!state.fallAt||now-state.fallAt>3600000)return {state:falling?'FALLING':'NORMAL',reasons:[falling?'Harga dan aliran jual sedang melemah.':'Tiada urutan penurunan terdahulu untuk dinilai sebagai recovery.']};
   const easing=prior.sellMYR>0&&f.sellMYR<prior.sellMYR*.85&&f.flow>prior.flow+.08;
-  const rsi=frame.rsi14>frame.rsiPrevious,ma=m[9].value>m[9].previous&&Math.abs(m[9].value-m[20].value)<Math.abs(m[9].previous-m[20].previous);
+  const rsi=frame.rsi14>frame.rsiPrevious,ma=m[9].slopePct>0&&m[9].value>m[9].previous&&Math.abs(m[9].value-m[20].value)<Math.abs(m[9].previous-m[20].previous);
   const bid=f.researchBook?.bid>prior.researchBook?.bid,buys=f.buyMYR>prior.buyMYR&&f.flow>.1,hold=f.price>=state.low&&f.return1m>=0;
   const reasons=[];if(easing)reasons.push('Tekanan jual berkurang.');if(bid)reasons.push('Bid bergerak naik.');if(buys)reasons.push('Belian sebenar bertambah.');if(rsi)reasons.push('RSI mula berpusing naik.');if(ma)reasons.push('MA9 naik dan jurangnya dengan MA20 mengecil.');if(f.buyerAbsorption)reasons.push('Jualan berlaku tetapi harga bertahan; ada petanda penyerapan.');
   const cues=[easing,bid,buys,rsi,ma,!!f.buyerAbsorption].filter(Boolean).length;
@@ -26338,7 +26342,7 @@ function sxAnalystCandles(candles,now){
     if(!contiguous){frames.push({minutes,ready:false});continue;}
     const closes=tail.map(c=>c.close),mas={};
     for(const length of [9,20,50,100,200]){if(closes.length<length+3)continue;const current=mean(closes.slice(-length)),old=mean(closes.slice(-length-3,-3));mas[length]={value:current,previous:mean(closes.slice(-length-1,-1)),slopePct:(current/old-1)*100};}
-    frames.push({minutes,ready:true,mas,rsi14:sxResearchRSI(closes),rsiPrevious:sxResearchRSI(closes.slice(0,-1)),stack:mas[9].value>mas[20].value&&mas[20].value>mas[50].value?'UP':mas[9].value<mas[20].value&&mas[20].value<mas[50].value?'DOWN':'MIXED'});
+    frames.push({minutes,ready:true,completedAt:tail.at(-1).at+duration,lastClose:closes.at(-1),mas,rsi14:sxResearchRSI(closes),rsiPrevious:sxResearchRSI(closes.slice(0,-1)),stack:mas[9].value>mas[20].value&&mas[20].value>mas[50].value?'UP':mas[9].value<mas[20].value&&mas[20].value<mas[50].value?'DOWN':'MIXED'});
   }
   const end=rows.at(-1).timestamp+300000;
   const range=(start,stop)=>{const a=rows.filter(c=>c.timestamp>=start&&c.timestamp<stop);return a.length===(stop-start)/300000&&a.every((c,i)=>c.timestamp===start+i*300000)?a:null;};
@@ -27068,19 +27072,35 @@ function uxBTCText(p){
   const change=(b.price/rows[0].open-1)*100,fmt=n=>(n>0?'+':'')+safFmt(n,2)+'%',sign=n=>Math.abs(n)<.05?0:Math.sign(n);
   const relation=!sign(change)||!sign(g.change)?'Salah satu hampir mendatar; tiada arah bersama yang jelas.':sign(change)===sign(g.change)?'Seiring '+(change>0?'menaik':'menurun')+' sepanjang tempoh ini.':'Berlawanan: '+(change<0?'BTC turun, GRT naik.':'BTC naik, GRT turun.');
   const time=t=>new Date(t).toLocaleTimeString('en-GB',{timeZone:'Asia/Kuala_Lumpur',hour:'2-digit',minute:'2-digit'});
-  return '<b>🌐 BTC & GRT · 12 JAM</b>\n'+time(p.at-43200000)+' → '+time(p.at)+' MYT\n₿ BTC: RM'+safFmt(rows[0].open,2)+' → RM'+safFmt(b.price,2)+' · '+fmt(change)+'\n🪙 GRT: '+uxMoney(g.first)+' → '+uxMoney(g.price)+' · '+fmt(g.change)+'\n'+relation+(g.pullback<-.5?' GRT sudah berundur '+safFmt(-g.pullback,2)+'% daripada puncak 12 jam; kenaikan keseluruhan tidak semestinya momentum terkini.':'')+' BTC bukan penentu automatik arah GRT.';
+  return '<b>🌐 BTC & GRT · 12 JAM</b>\n'+time(p.at-43200000)+' → '+time(p.at)+' MYT\n₿ BTC: RM'+safFmt(rows[0].open,2)+' → RM'+safFmt(b.price,2)+' · '+fmt(change)+'\n🪙 GRT: '+uxMoney(g.first)+' → '+uxMoney(g.price)+' · '+fmt(g.change)+'\n'+relation+(g.pullback<-.5?' GRT sudah berundur '+safFmt(-g.pullback,2)+'% daripada puncak 12 jam; '+(g.change>0?'kenaikan keseluruhan tidak semestinya momentum terkini.':'prestasi keseluruhan tempoh ini juga negatif.'):'')+' BTC bukan penentu automatik arah GRT.';
 }
 function uxMAText(p){
-  const frames=p.analyst?.candles?.frames||[],f=frames.find(x=>x.minutes===5&&x.ready);if(!f)return 'MA/RSI perlu disegarkan.';
-  const m=f.mas,pair=(a,b)=>{const x=m[a],y=m[b];if(!x||!y)return 'MA'+a+'/MA'+b+' belum tersedia.';const d=x.value-y.value,old=x.previous-y.previous,above=d>0,up=x.value>x.previous,converging=Math.abs(d)<Math.abs(old),cross=old*d<0||(old===0&&d!==0);let text='MA'+a+' '+(d===0?'sejajar':above?'atas':'bawah')+' MA'+b+'. ';
-    if(cross)return text+'Baru cross '+(above?'naik':'turun')+'.';
-    if(converging&&((!above&&up)||(above&&!up&&x.value<x.previous)))return text+'MA'+a+' sedang '+(up?'naik menghampiri dari bawah':'turun menghampiri dari atas')+'; jurang mengecil, cross belum berlaku.';
-    if(converging)return text+'Jurang mengecil kerana pergerakan kedua-dua MA; belum cross.';
-    return text+(Math.abs(d)>Math.abs(old)?'Jurang semakin terbuka; ':'Kedudukan kekal; ')+'tiada cross baharu.';};
-  let out='<b>📊 MA & TREND · CARTA 5 MINIT</b>\n'+pair(9,20)+'\n'+pair(20,50)+'\n'+pair(50,100)+' '+pair(100,200);
-  const slopes=[50,100,200].map(n=>m[n]?.slopePct);out+='\nMA50/100/200 '+(slopes.every(x=>x>0)?'semuanya mendaki.':slopes.every(x=>x<0)?'semuanya menurun.':'mempunyai cerun bercampur atau belum lengkap.');
-  if(Number.isFinite(f.rsi14))out+=' RSI '+safFmt(f.rsi14,0)+(f.rsi14>f.rsiPrevious?' ↑':f.rsi14<f.rsiPrevious?' ↓':' ↔')+' — '+(f.rsi14>=70?'momentum tinggi; belum bukti pembalikan.':f.rsi14<=30?'momentum lemah; lantunan belum disahkan.':f.rsi14>50?'momentum memihak buyer.':'momentum belum memihak buyer.');return out;
+  const f=p.analyst?.candles?.frames?.find(x=>x.minutes===5&&x.ready);if(!f)return 'MA/RSI: candle lengkap perlu disegarkan.';
+  const m=f.mas,sign=x=>Math.abs(x)<1e-10?0:Math.sign(x);
+  const pair=(a,b)=>{const x=m[a],y=m[b];if(!x||!y)return 'MA'+a+'/MA'+b+' belum tersedia.';
+    const d=x.value-y.value,old=x.previous-y.previous,dir=sign(x.value-x.previous),other=sign(y.value-y.previous),slope=sign(x.slopePct),shrinking=Math.abs(d)<Math.abs(old)-1e-10,cross=sign(d)!==0&&(sign(old)===0||sign(old)!==sign(d));
+    let out='MA'+a+' '+(sign(d)>0?'atas':sign(d)<0?'bawah':'sejajar')+' MA'+b+'. ';
+    if(cross)out+='Baru cross '+(d>0?'naik':'turun')+' pada candle lengkap terakhir. ';
+    if(shrinking&&d<0&&dir>0)out+='MA'+a+' naik menghampiri MA'+b+' dari bawah. ';
+    else if(shrinking&&d>0&&dir<0)out+='MA'+a+' turun menghampiri MA'+b+' dari atas. ';
+    else if(shrinking&&d<0&&dir<0&&other<0)out+='Kedua-duanya turun; MA'+b+' turun lebih cepat sehingga jurang mengecil. Ini bukan MA'+a+' sedang pulih. ';
+    else if(shrinking&&d>0&&dir>0&&other>0)out+='Kedua-duanya naik; MA'+b+' mengejar MA'+a+' sehingga jurang mengecil. ';
+    else out+='MA'+a+' '+(dir>0?'naik':dir<0?'turun':'mendatar')+'; jurang '+(shrinking?'mengecil':Math.abs(d)>Math.abs(old)+1e-10?'melebar':'hampir kekal')+'. ';
+    if(dir>0&&slope<0)out+='Kenaikan satu candle sahaja; cerun 3 candle masih turun. ';
+    if(dir<0&&slope>0)out+='Candle terakhir melemah walaupun cerun 3 candle masih naik. ';
+    if(!cross)out+='Belum ada cross baharu.';return out;
+  };
+  let out='<b>📊 MA & TREND · CARTA 5 MINIT</b>\nSMA harga penutup · candle terakhir: '+(Number.isFinite(f.completedAt)?sxMYTime(f.completedAt):'masa belum tersedia')+'\n';
+  out+=pair(9,20)+'\n'+pair(20,50)+'\n'+pair(50,100)+'\n'+pair(100,200);
+  const available=[9,20,50,100,200].filter(n=>m[n]),close=f.lastClose,below=safPositive(close)?available.filter(n=>close<m[n].value):[],above=safPositive(close)?available.filter(n=>close>m[n].value):[];
+  if(safPositive(close))out+='\nHarga penutup candle '+(below.length===available.length?'bawah semua MA yang tersedia.':above.length===available.length?'atas semua MA yang tersedia.':'berada antara MA; susunan harga belum sehaluan.');
+  const long=[50,100,200].filter(n=>m[n]);out+='\n'+long.map(n=>'MA'+n+' '+(sign(m[n].slopePct)>0?'mendaki':sign(m[n].slopePct)<0?'menurun':'mendatar')).join('; ')+'.';
+  if(Number.isFinite(f.rsi14))out+=' RSI '+safFmt(f.rsi14,0)+(f.rsi14>f.rsiPrevious?' ↑':f.rsi14<f.rsiPrevious?' ↓':' ↔')+'.';
+  const down=[9,20,50].every(n=>m[n]&&safPositive(close)&&close<m[n].value),up=[9,20,50].every(n=>m[n]&&safPositive(close)&&close>m[n].value);
+  out+='\n<b>Bacaan:</b> '+(down&&f.rsi14<50?'Harga masih bawah MA pendek dan RSI bawah 50. Trend pendek lemah; MA9 membaik sahaja belum mengesahkan recovery.':up&&f.rsi14>50&&m[9].slopePct>0&&m[20].slopePct>0?'Harga, cerun MA pendek dan RSI menyokong kenaikan; transaksi masih perlu mengesahkan.':'Bukti harga, MA dan RSI bercampur. Bezakan perubahan satu candle daripada trend beberapa candle.');
+  return out;
 }
+
 function uxTouches(rows,price,side){
   if(!safPositive(price)||!rows.length)return null;
   const tolerance=price*.0005;let armed=false,active=false,count=0,bounces=0,broken=false;
@@ -27091,6 +27111,11 @@ function uxTouches(rows,price,side){
 }
 function uxScenario(p,hours){
   const w=uxWindow(p,hours),q=sxTodayPrediction(p);if(!q.ready||!w.ready)return {ready:false,reason:!w.ready?'Sejarah '+hours+' jam belum berjaya disahkan.':q.reason};
+  const short=p.analyst?.candles?.frames?.find(x=>x.minutes===5&&x.ready);
+  if(hours!==1&&short&&safPositive(short.lastClose)){
+    const below=[9,20,50].every(n=>short.mas[n]&&short.lastClose<short.mas[n].value),above=[9,20,50].every(n=>short.mas[n]&&short.lastClose>short.mas[n].value);
+    if(q.direction==='UP'&&below&&short.rsi14<50||q.direction==='DOWN'&&above&&short.rsi14>50){q.direction='MIXED';q.disagree=true;}
+  }
   const price=w.price,all=[],rows=w.rows;for(let i=1;i<rows.length-1;i++){if(rows[i].low<rows[i-1].low&&rows[i].low<rows[i+1].low)all.push({price:rows[i].low,side:'bid'});if(rows[i].high>rows[i-1].high&&rows[i].high>rows[i+1].high)all.push({price:rows[i].high,side:'ask'});}
   all.push({price:w.low,side:'bid'},{price:w.high,side:'ask'});
   for(const r of p.analyst?.depth?.levels?.bids||[])all.push({price:r.price,side:'bid'});for(const r of p.analyst?.depth?.levels?.asks||[])all.push({price:r.price,side:'ask'});
@@ -27101,8 +27126,21 @@ function uxScenario(p,hours){
   return {...q,ready:true,window:w,lower,upper,lowerNext:below[1]||null,upperNext:above[1]||null,stop:lower&&lower>buffer?lower-buffer:null,breakoutStop:upper&&upper>buffer?upper-buffer:null,hours};
 }
 function uxTestText(p,price,side){const rows=uxBars(p.researchCandles,1,p.at),t=uxTouches(rows,price,side);return !t?'Ujian belum disahkan.':t.count+' ujian berasingan dalam 1 jam'+(t.bounces?' · '+t.bounces+' reaksi menjauh':'')+(t.broken?' · pernah ditembusi':'')+'.';}
+function uxEarlyText(p,detail=false){
+  const a=p.analyst,flow=a?.flow5,frame=a?.candles?.frames?.find(x=>x.minutes===5&&x.ready),w=a?.book?.windows?.find(x=>x.minutes===5&&x.ready);
+  const qty=(flow?.buy?.quantity||0)+(flow?.sell?.quantity||0),valid=flow?.covered&&!flow.conflict&&Number.isFinite(flow.at)&&Date.now()-flow.at>=0&&Date.now()-flow.at<=30000&&qty>0;
+  const live=(!p.coin||p.coin==='GRT')&&p.quality?.streamSynchronized&&Date.now()-ET.at>=0&&Date.now()-ET.at<=60000&&!['UNKNOWN','NORMAL'].includes(ET.state);
+  let lines=[];
+  if(live){const labels={FALLING:'Tekanan turun masih aktif.',EASING:'Tekanan jual mula reda; buyer belum mengesahkan pemulihan.',WATCH:'Ada petanda awal pulih, belum confirmation.',FORMING:'Pemulihan sedang terbentuk; buyer perlu terus bertahan.',CONFIRMED:'Syarat pemulihan detector dipenuhi; bukan jaminan kenaikan.',WAIT:'Petanda pemulihan belum bertahan.'};lines.push(labels[ET.state]||'Belum ada perubahan tekanan yang jelas.');if(detail)lines.push(...ET.reasons.slice(0,2));}
+  else if(valid){const buy=flow.buy.quantity/qty*100;lines.push(buy<45?'Seller menguasai '+safFmt(100-buy,0)+'% kuantiti transaksi 5 minit; belum ada pengesahan buyer mengambil alih.':buy>55?'Buyer menguasai '+safFmt(buy,0)+'% kuantiti transaksi 5 minit, tetapi dominasi semasa sahaja belum membuktikan recovery.':'Transaksi beli dan jual hampir seimbang; belum ada perubahan tekanan yang jelas.');}
+  else lines.push(flow?.conflict?'Rekod stream dan REST bercanggah; aliran perlu disemak semula.':flow?.covered&&qty===0?'Tiada transaksi dalam rekod lengkap 5 minit; perubahan tekanan belum boleh dinilai.':'Rekod transaksi 5 minit belum lengkap atau belum segar.');
+  if(!live){if(!p.quality?.streamSynchronized)lines.push('Book ialah snapshot; perubahan pesanan berterusan belum disahkan.');else if(!w)lines.push('Perbandingan book 5 minit belum tersedia.');else if(w.bidChangePct>0&&valid&&flow.buy.quantity>flow.sell.quantity)lines.push('Bid turut bergerak naik; ada sokongan kepada buyer, belum bukti seller diserap.');
+    if(detail&&frame){const m=frame.mas;if(m?.[9]&&m?.[20]&&m[9].value<m[20].value&&m[9].value>m[9].previous&&Number.isFinite(frame.rsi14)&&frame.rsi14<50)lines.push(m[9].slopePct<0?'MA9 naik satu candle tetapi cerun 3 candle masih turun; RSI bawah 50, pemulihan belum disahkan.':'MA9 mula naik tetapi masih bawah MA20; RSI bawah 50 menunjukkan pemulihan belum kukuh.');}
+  }
+  return '<b>👀 PETANDA AWAL</b>\n'+lines.filter(Boolean).slice(0,detail?4:2).join(' ');
+}
 function uxSimplePrediction(p){const q=uxScenario(p,1);if(!q.ready)return '<b>🔮 GRT · PRICE PREDICTION</b>\n'+q.reason;
-  return '<b>🔮 GRT · PRICE PREDICTION</b>\nHarga: '+uxMoney(q.price)+'\nData 1 jam lepas · pantauan 1 jam seterusnya\n\n📈 Jika naik: '+uxMoney(q.upper)+(q.upperNext?' → '+uxMoney(q.upperNext)+' selepas pecahan disahkan':'')+'\n📉 Jika turun: '+uxMoney(q.lower)+(q.lowerNext?' → '+uxMoney(q.lowerNext)+' jika support pecah':'')+'\n\n<b>🟢 Belum beli</b>\n'+(q.lower?'Pantau lantunan dengan belian kuat dekat '+uxMoney(q.lower)+'. ':'')+(q.upper?'Jika breakout, tunggu '+uxMoney(q.upper)+' dilepasi dan bertahan.':'Zon entry belum jelas.')+'\n\n<b>🔴 Sudah beli</b>\n'+(q.upper?'Nilai ambil untung dekat '+uxMoney(q.upper)+' jika harga ditolak; untung bersih ikut harga masuk dan fee.':'Sasaran jual belum jelas.')+'\n\n<b>⚠️ RISIKO / CUT LOSS</b>\n'+(q.stop?'Untuk setup lantunan '+uxMoney(q.lower)+', paras batal dipantau '+uxMoney(q.stop)+'. ':'Paras cut loss belum jelas. ')+(q.breakoutStop?'Setup breakout '+uxMoney(q.upper)+' mempunyai paras batal berasingan '+uxMoney(q.breakoutStop)+'.':'')+'\n<b>Bias:</b> '+(q.direction==='UP'?'Condong menguji atas':q.direction==='DOWN'?'Condong menguji bawah':'Belum jelas; tunggu pengesahan')+'.\nParas bersyarat, bukan order stop automatik. Peluang sasaran belum disahkan.';
+  return '<b>🔮 GRT · PRICE PREDICTION</b>\nHarga: '+uxMoney(q.price)+'\nData 1 jam lepas · pantauan 1 jam seterusnya\n\n'+uxEarlyText(p)+'\n\n📈 Jika naik: '+uxMoney(q.upper)+(q.upperNext?' → '+uxMoney(q.upperNext)+' selepas pecahan disahkan':'')+'\n📉 Jika turun: '+uxMoney(q.lower)+(q.lowerNext?' → '+uxMoney(q.lowerNext)+' jika support pecah':'')+'\n\n<b>🟢 Belum beli</b>\n'+(q.lower?'Pantau lantunan dengan belian kuat dekat '+uxMoney(q.lower)+'. ':'')+(q.upper?'Jika breakout, tunggu '+uxMoney(q.upper)+' dilepasi dan bertahan.':'Zon entry belum jelas.')+'\n\n<b>🔴 Sudah beli</b>\n'+(q.upper?'Nilai ambil untung dekat '+uxMoney(q.upper)+' jika harga ditolak; untung bersih ikut harga masuk dan fee.':'Sasaran jual belum jelas.')+'\n\n<b>⚠️ RISIKO / CUT LOSS</b>\n'+(q.stop?'Untuk setup lantunan '+uxMoney(q.lower)+', cut loss dipantau '+uxMoney(q.stop)+'. ':'Paras cut loss belum jelas. ')+(q.breakoutStop?'Setup breakout '+uxMoney(q.upper)+' mempunyai cut loss berasingan '+uxMoney(q.breakoutStop)+'.':'')+'\n<b>Bias:</b> '+(q.direction==='UP'?'Condong menguji atas':q.direction==='DOWN'?'Condong menguji bawah':'Belum jelas; tunggu pengesahan')+'.\nParas bersyarat, bukan order stop automatik. Peluang sasaran belum disahkan.';
 }
 function uxBookReport(p){
   const d=p.analyst?.depth;if(!d?.ready||!d.levels)return '<b>📚 GRT · KAJI ORDER BOOK</b>\nBook perlu disegarkan.';
@@ -27126,14 +27164,14 @@ function uxDirection(p){const q=uxScenario(p,12);if(!q.ready)return '<b>🧭 ARA
 function uxFullReport(p,answer){const q=uxScenario(p,24);if(!q.ready)return '<b>🧠 GRTAI · KAJIAN 24 JAM</b>\n'+q.reason;
   let out='<b>🧠 GRTAI · KAJIAN 24 JAM</b>\n'+sxResearchPriceLabel(p)+'\nPerubahan 24 jam: '+safFmt(q.window.change,2)+'% · Julat '+uxMoney(q.window.low)+'–'+uxMoney(q.window.high)+'\n━━━━━━━━━━━━━━\n'+uxMAText(p)+'\n━━━━━━━━━━━━━━\n';
   const d=p.analyst.depth;for(const [side,label]of [['bids','🟢 BID'],['asks','🔴 ASK']]){out+='<b>'+label+'</b>\n';for(const r of d?.levels?.[side]||[])out+=uxMoney(r.price)+' · '+safFmt(r.volume,0)+' GRT\n';}
-  out+=sxVolumeSummary(p.analyst)+'\n\n'+uxBTCText(p)+'\n━━━━━━━━━━━━━━\n<b>🔮 KEPUTUSAN ANALISIS · 1 JAM</b>\n';
-  out+=(q.direction==='UP'?'Trend dan belian memihak kenaikan.':q.direction==='DOWN'?'Trend dan jualan memihak penurunan.':'Trend, transaksi atau book belum sehaluan; jangan pilih arah daripada satu indikator.')+'\n<b>Belum beli:</b> '+(q.upper?'Pantau '+uxMoney(q.upper)+' dilepasi dengan belian kuat. ':'Tunggu zon yang jelas. ')+uxTestText(p,q.upper,'ask')+'\n<b>Sudah pegang:</b> '+(q.lower?'Perhatikan buyer menjaga '+uxMoney(q.lower)+'. ':'Support belum jelas. ')+uxTestText(p,q.lower,'bid')+'\n<b>Nak keluar:</b> '+(q.upper?'Penolakan dekat '+uxMoney(q.upper)+' bersama belian lemah ialah keadaan untuk nilai ambil untung, ikut kos dan fee. ':'Sasaran jual belum jelas.')+'\n📈 Laluan naik: '+uxMoney(q.upper)+(q.upperNext?' → '+uxMoney(q.upperNext)+' selepas pecahan':'')+'\n📉 Laluan turun: '+uxMoney(q.lower)+(q.lowerNext?' → '+uxMoney(q.lowerNext)+' jika support gagal':'')+'\n⚠️ Paras batal setup lantunan: '+uxMoney(q.stop)+'.\nPeluang sasaran belum disahkan; tiada peratus direka.';
+  out+=sxVolumeSummary(p.analyst)+'\n\n'+uxBTCText(p)+'\n━━━━━━━━━━━━━━\n<b>🔮 KEPUTUSAN ANALISIS · 1 JAM</b>\n'+uxEarlyText(p,true)+'\n\n';
+  out+=(q.direction==='UP'?'Trend dan belian memihak kenaikan.':q.direction==='DOWN'?'Trend dan jualan memihak penurunan.':'Trend, transaksi atau book belum sehaluan; jangan pilih arah daripada satu indikator.')+'\n<b>Belum beli:</b> '+(q.upper?'Pantau '+uxMoney(q.upper)+' dilepasi dengan belian kuat. ':'Tunggu zon yang jelas. ')+uxTestText(p,q.upper,'ask')+'\n<b>Sudah pegang:</b> '+(q.lower?'Perhatikan buyer menjaga '+uxMoney(q.lower)+'. ':'Support belum jelas. ')+uxTestText(p,q.lower,'bid')+'\n<b>Nak keluar:</b> '+(q.upper?'Rejection dekat '+uxMoney(q.upper)+' bersama belian lemah ialah keadaan untuk nilai ambil untung, ikut kos dan fee. ':'Sasaran jual belum jelas.')+'\n📈 Laluan naik: '+uxMoney(q.upper)+(q.upperNext?' → '+uxMoney(q.upperNext)+' selepas pecahan':'')+'\n📉 Laluan turun: '+uxMoney(q.lower)+(q.lowerNext?' → '+uxMoney(q.lowerNext)+' jika support gagal':'')+'\n⚠️ Cut loss setup lantunan: '+uxMoney(q.stop)+'.\nPeluang sasaran belum disahkan; tiada peratus direka.';
   if(answer?.recovery)out+='\nGroq belum tersedia; ulasan berdasarkan engine data.';return out;
 }
 function uxPositionText(p,input){const q=uxScenario(p,24),price=safPositive(p.tickerPrice)?p.tickerPrice:null;if(!q.ready||!price)return 'Semakan pasaran belum lengkap. Input posisi disimpan; cuba semak semula.';
   const {units,entry,fees}=input,cost=units*entry+fees,net=sale=>units*sale*(1-SELL_FEE)-cost,be=cost/(units*(1-SELL_FEE)),cash=n=>'RM'+safFmt(n,2);
   if(!Number.isFinite(cost)||!Number.isFinite(be)||SELL_FEE<0||SELL_FEE>=1)return 'Kos atau tetapan fee tidak sah; semak input.';
-  return '<b>💼 GRT · POSISI SAYA</b>\n'+safFmt(units,4)+' GRT @ '+uxMoney(entry)+'\nFee beli: '+cash(fees)+' · Modal: '+cash(cost)+'\nHarga sekarang: '+uxMoney(price)+'\nNilai sebelum fee jual: '+cash(units*price)+'\n<b>Anggaran untung/rugi bersih: '+cash(net(price))+'</b>\nPulang modal: '+uxMoney(be)+'\n\n<b>🧠 ULASAN POSISI KAU</b>\n'+(net(price)>0?'Pegangan masih untung selepas anggaran fee. ':'Pegangan belum pulang modal selepas anggaran fee. ')+(q.direction==='UP'?'Bukti pasaran menyokong percubaan naik.':q.direction==='DOWN'?'Tekanan semasa memihak turun; jangan anggap harga pasti kembali ke entry.':'Bukti belum sehaluan untuk menyokong hold tanpa syarat.')+'\n\n<b>💰 ZON JUAL</b>\n'+(q.upper?uxMoney(q.upper)+' → anggaran '+(net(q.upper)>=0?'untung ':'rugi ')+cash(Math.abs(net(q.upper)))+'. '+(q.upperNext?'Jika pecah dan bertahan, '+uxMoney(q.upperNext)+' → '+cash(net(q.upperNext))+' bersih.':''):'Zon jual belum jelas.')+'\n\n<b>⚠️ RISIKO / CUT LOSS</b>\n'+(q.stop&&q.stop<price?'Jika support '+uxMoney(q.lower)+' gagal, paras batal dipantau '+uxMoney(q.stop)+' → anggaran '+(net(q.stop)>=0?'untung berbaki ':'rugi ')+cash(Math.abs(net(q.stop)))+'.':'Paras cut loss belum sesuai ditentukan.')+'\nFee jual anggaran '+safFmt(SELL_FEE*100,2)+'%; harga pelaksanaan boleh berbeza. Input ialah pegangan dilaporkan pengguna, bukan pengesahan baki Luno.';
+  return '<b>💼 GRT · POSISI SAYA</b>\n'+safFmt(units,4)+' GRT @ '+uxMoney(entry)+'\nFee beli: '+cash(fees)+' · Modal: '+cash(cost)+'\nHarga sekarang: '+uxMoney(price)+'\nNilai sebelum fee jual: '+cash(units*price)+'\n<b>Anggaran untung/rugi bersih: '+cash(net(price))+'</b>\nPulang modal: '+uxMoney(be)+'\n\n<b>🧠 ULASAN POSISI KAU</b>\n'+(net(price)>0?'Pegangan masih untung selepas anggaran fee. ':'Pegangan belum pulang modal selepas anggaran fee. ')+(q.direction==='UP'?'Bukti pasaran menyokong percubaan naik.':q.direction==='DOWN'?'Tekanan semasa memihak turun; jangan anggap harga pasti kembali ke entry.':'Bukti belum sehaluan untuk menyokong hold tanpa syarat.')+'\n\n<b>💰 ZON JUAL</b>\n'+(q.upper?uxMoney(q.upper)+' → anggaran '+(net(q.upper)>=0?'untung ':'rugi ')+cash(Math.abs(net(q.upper)))+'. '+(q.upperNext?'Jika pecah dan bertahan, '+uxMoney(q.upperNext)+' → '+cash(net(q.upperNext))+' bersih.':''):'Zon jual belum jelas.')+'\n\n<b>⚠️ RISIKO / CUT LOSS</b>\n'+(q.stop&&q.stop<price?'Jika support '+uxMoney(q.lower)+' gagal, cut loss dipantau '+uxMoney(q.stop)+' → anggaran '+(net(q.stop)>=0?'untung berbaki ':'rugi ')+cash(Math.abs(net(q.stop)))+'.':'Paras cut loss belum sesuai ditentukan.')+'\nFee jual anggaran '+safFmt(SELL_FEE*100,2)+'%; harga pelaksanaan boleh berbeza. Input ialah pegangan dilaporkan pengguna, bukan pengesahan baki Luno.';
 }
 function uxOwnsPositionReply(msg){return /\[SX POSITION\]/.test(String(msg?.reply_to_message?.text||''));}
 async function uxPrompt(msg,text){const input=UX.inputs.get(sxSessionKey(msg));const sent=await replyTelegram(msg.chat.id,'[SX POSITION]\n'+text,{reply_markup:{force_reply:true,selective:true}});if(input)input.promptId=sent?.message_id;return sent;}
@@ -27162,7 +27200,7 @@ async function uxRun(msg,mode,input=null){
     const focus=['full','direction'].includes(mode)?await uxFocus(p,mode):null;
     if(sxPacketStale(p))return await replyTelegram(msg.chat.id,'Data berubah ketika semakan disiapkan. Cuba semak semula.');
     const text=mode==='alert'?uxSimplePrediction(p):mode==='direction'?uxDirection(p):mode==='book'?uxBookReport(p):mode==='position'?uxPositionText(p,input):uxFullReport(p,{recovery:!focus});
-    await alunoSend(msg.chat.id,text+(['alert','full','direction'].includes(mode)?etText(mode!=='alert'):'')+(focus?'\n<b>Fokus kajian:</b> '+focus:'')+'\nTiada order dibuat.\n'+sxMYTime(p.at));
+    await alunoSend(msg.chat.id,text+(focus?'\n<b>Fokus kajian:</b> '+focus:'')+'\nTiada order dibuat.\n'+sxMYTime(p.at));
     if(mode==='position')await replyTelegram(msg.chat.id,'Semak semula menggunakan input posisi yang sama:',{reply_markup:{inline_keyboard:[[{text:'🔄 Semak posisi semula',callback_data:'SX:POSITIONREVIEW'}]]}});
   }catch(_){await replyTelegram(msg.chat.id,'Semakan belum berjaya. Data tidak direka; cuba semula.');}finally{SX.busy.delete(key);}
 }
