@@ -21230,34 +21230,16 @@ const rolling15m =
    GRT PRICE ALERT SNAPSHOT
 ============================================================ */
 
-async function getGRTPriceAlertSnapshot(
-  suppliedSnapshot =
-    null
-) {
-  const snapshot =
-    suppliedSnapshot ||
-    await getGRTMomentumSnapshot();
-
-  const ticker =
-    snapshot?.ticker ||
-    (
-      snapshot?.currentPrice
-        ? {
-            currentPrice:
-              snapshot.currentPrice,
-          }
-        : null
-    );
-
-  if (
-    !ticker
-  ) {
-    return {
-      section:
-        `🪙 GRT
-⚠️ DATA UNAVAILABLE`,
-    };
+async function getGRTPriceAlertSnapshot(suppliedSnapshot=undefined) {
+  let snapshot=suppliedSnapshot;
+  if(snapshot===undefined){try{snapshot=await getGRTMomentumSnapshot();}catch(_){snapshot=null;}}
+  let ticker=snapshot?.ticker|| (snapshot?.currentPrice?{currentPrice:snapshot.currentPrice}:null);
+  if(!Number.isFinite(Number(ticker?.currentPrice))||Number(ticker.currentPrice)<=0){
+    const result=await msDisplayTicker();
+    if(result.price){ticker={currentPrice:result.price};snapshot={ticker,decisionText:'Momentum belum dinilai; harga Luno berjaya disegarkan.'};}
+    else{const cached=MS_DISPLAY_PRICE&&Date.now()-MS_DISPLAY_PRICE.at<=300000?MS_DISPLAY_PRICE:null;return {ticker:null,section:'🪙 GRT\n'+(cached?'Harga terakhir disahkan: '+formatMYR(cached.price)+'\n'+sxMYTime(cached.at)+' · bukan harga live':'Harga transaksi terakhir belum dapat disahkan')+'\n⚠️ '+result.error+'\nAnalisis menunggu harga segar.'};}
   }
+  ticker={...ticker,currentPrice:Number(ticker.currentPrice)};
 
   updatePriceMemory(
     "GRT",
@@ -21367,14 +21349,14 @@ async function runPriceAlert() {
 
   try {
     const grtSnapshot =
-      await getGRTMomentumSnapshot();
+      await getGRTMomentumSnapshot().catch(()=>null);
 
     const [
       btc,
       grt,
     ] =
       await Promise.all([
-        getBTCPriceAlertSnapshot(),
+        getBTCPriceAlertSnapshot().catch(()=>({section:'₿ BTC\nHarga belum tersedia; bahagian GRT dinilai berasingan.'})),
 
         getGRTPriceAlertSnapshot(
           grtSnapshot
