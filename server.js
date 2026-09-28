@@ -7113,36 +7113,28 @@ function formatLeadMomentum(
    - Global Lead is GRT only
 ============================================================ */
 
+let MS_BTC_LAST_SENT=null;
+function msBTCLine(btc){const n=Number(btc?.currentPrice);if(!Number.isFinite(n)||n<=0)return '₿ BTC\nHarga transaksi terakhir belum tersedia.';const current=Number(formatPrice(n)),old=MS_BTC_LAST_SENT;
+  if(!old)return '₿ BTC\n💰 Harga: RM'+formatPrice(current)+' · ↔ ⚪\nPerbandingan bermula selepas alert pertama berjaya dihantar.';
+  const delta=current-old.price,pct=delta/old.price*100,mins=Math.max(0,Math.round((Date.now()-old.at)/60000));return '₿ BTC\n💰 Harga: RM'+formatPrice(current)+' · '+(delta>0?'↑ 🟢':delta<0?'↓ 🔴':'↔ ⚪')+'\n'+(delta>0?'+':'')+'RM'+delta.toFixed(2)+' · '+(pct>0?'+':'')+pct.toFixed(2)+'% berbanding alert '+mins+' minit lalu.';
+}
+function msCommitBTC(report){const m=String(report).match(/₿ BTC\n💰 Harga: RM([0-9]+(?:\.[0-9]+)?)/);if(m&&Number(m[1])>0)MS_BTC_LAST_SENT={price:Number(m[1]),at:Date.now()};}
+let MS_DISPLAY_PRICE=null;
+function msDisplayError(e){const status=e?.response?.status;return status===429?'Had API Luno dicapai; cuba sebentar lagi.':status===401||status===403?'Akses API ditolak; semak konfigurasi.':/timeout|ECONNABORTED/i.test(e?.code||e?.message||'')?'Sambungan Luno mengambil masa terlalu lama.':status>=500?'Pelayan Luno sedang bermasalah.':'Bacaan sumber tidak sah atau sambungan gagal.';}
+async function msDisplayTicker(){
+  let error;for(let attempt=0;attempt<2;attempt++){try{const raw=await lunoRequest({method:'GET',endpoint:'/api/1/ticker',params:{pair:'GRTMYR'},authenticated:false,accountType:'MAIN',timeout:8000});const price=Number(raw?.last_trade),at=Number(raw?.timestamp),now=Date.now();if(!Number.isFinite(price)||price<=0||!Number.isFinite(at)||now-at>120000||at>now+5000)throw Error('STALE_OR_INVALID_TICKER');MS_DISPLAY_PRICE={price,at};return {price,at};}catch(e){error=e;const status=e?.response?.status;if(status&&status<500)break;}}
+  return {error:msDisplayError(error)};
+}
 async function buildMarketStructureReport() {
-  const [
-    btc,
-    grt,
-  ] =
-    await Promise.all([
-      getBTC15mContext(),
-
-      getMarketStructureSnapshot(
-        "GRT"
-      ),
-    ]);
-
-
-  if (
-    !grt
-  ) {
-    return (
-      "📊 MARKET STRUCTURE\n\n" +
-      "GRT DATA BELUM READY"
-    );
-  }
-
-
-  const globalLead =
-    await buildGRTGlobalLeadSnapshot(
-      grt
-    );
-
-
+  const results=await Promise.allSettled([getBTC15mContext(),msDisplayTicker()]);
+  const btc=results[0].status==='fulfilled'?results[0].value:null;
+  const btcLine=msBTCLine(btc);
+  const priceResult=results[1].status==='fulfilled'?results[1].value:{error:'Bacaan harga gagal.'};
+  if(!priceResult.price){const old=MS_DISPLAY_PRICE&&Date.now()-MS_DISPLAY_PRICE.at<=300000?MS_DISPLAY_PRICE:null;return '📊 MARKET STRUCTURE\n\n'+btcLine+'\n━━━━━━━━━━━━━━━━━━\n🪙 GRT LUNO\n'+(old?'Harga terakhir disahkan: '+formatMYR(old.price)+'\nMasa harga: '+sxMYTime(old.at)+' (bukan harga live)':'Harga transaksi terakhir: belum dapat disahkan')+'\n⚠️ '+priceResult.error+'\nStruktur semasa tidak dinilai sehingga harga berjaya disegarkan.';}
+  let grt=null,structureError=null;
+  try{grt=await getMarketStructureSnapshot('GRT',priceResult.price);}catch(e){structureError=msDisplayError(e);}
+  if(!grt)return '📊 MARKET STRUCTURE\n\n'+btcLine+'\n━━━━━━━━━━━━━━━━━━\n🪙 GRT LUNO\n💰 Harga transaksi terakhir: '+formatMYR(priceResult.price)+'\n⚠️ Struktur/order book belum tersedia. '+(structureError||'Cuba semak semula.')+'\nMasa harga: '+sxMYTime(priceResult.at);
+  let globalLead=null;try{globalLead=await buildGRTGlobalLeadSnapshot(grt);}catch(_){}
   const btcChange =
     safeNumber(
       btc?.change15mPct,
@@ -7231,16 +7223,12 @@ async function buildMarketStructureReport() {
 
   return `📊 MARKET STRUCTURE
 
-₿ BTC
-15M : ${formatMovementWithEmoji(
-    btcChange
-  )} | ${getDirectionEmoji(
-    btc?.direction
-  )} ${btcDirection}
+${btcLine}
+${btc?.ready&&Number.isFinite(btc.change15mPct)?'15M : '+formatMovementWithEmoji(btc.change15mPct)+' | '+getDirectionEmoji(btc.direction)+' '+btcDirection:'15M: data belum tersedia; arah tidak disimpulkan.'}
 ━━━━━━━━━━━━━━━━━━
 ━━━━━━━━━━━━━━━━━━
 🪙 GRT LUNO
-💰 Price: ${formatMYR(
+💰 Harga transaksi terakhir: ${formatMYR(
     grt.currentPrice
   )}
 
@@ -7266,7 +7254,8 @@ Global Structure : ${globalStructure}
 Gap: ${gap}
 
 ⚡ MOMENTUM
-Global: ${globalMomentum} | Luno: ${lunoMomentum}`;
+Global: ${globalMomentum} | Luno: ${lunoMomentum}
+${!grt.liquidityReady?'⚠️ Order book belum lengkap; support/resistance belum disahkan.\n':''}${!globalLead?'⚠️ Data global belum tersedia; bacaan Luno kekal dipaparkan.\n':''}Masa harga: ${sxMYTime(priceResult.at)}`;
 }
 
 
@@ -21500,6 +21489,8 @@ async function runMarketStructureAlert() {
         report
       );
 
+    if(sent)msCommitBTC(report);
+
     PART8_RUNTIME
       .structureAlertRuns++;
 
@@ -26233,9 +26224,53 @@ function sxObserve(f){
   }
   SX_STATE.samples.push(f);SX_STATE.samples=SX_STATE.samples.slice(-SX_CFG.maxSamples);SX_STATE.training=SX_STATE.training.slice(-SX_CFG.maxTraining);SX_STATE.forecasts=SX_STATE.forecasts.slice(-1500);
 }
+// Shadow observer only: never used by order, scanner or entry gates.
+const ET={state:'UNKNOWN',candidate:null,count:0,at:0,epoch:null,low:null,ceiling:null,fallAt:0,reasons:[]};
+function etDecide(f,prior,frame,state,now){
+  if(!f?.ready||!prior?.ready||!frame?.ready||!Number.isFinite(frame.rsi14)||!Number.isFinite(frame.rsiPrevious)||!frame.mas?.[9]||!frame.mas?.[20]||!Number.isFinite(f.flow)||!Number.isFinite(prior.flow))return {state:'UNKNOWN',reasons:['Data stream/transaksi/candle belum lengkap.']};
+  const m=frame.mas,newLow=safPositive(state.low)&&f.price<state.low*.999,falling=f.return1m<-.1&&f.flow<-.15;
+  if(newLow||f.flow<-.4)return {state:'FALLING',reasons:[newLow?'Low pemulihan ditembusi.':'Jualan kembali dominan.']};
+  if(!state.fallAt||now-state.fallAt>3600000)return {state:falling?'FALLING':'NORMAL',reasons:[falling?'Harga dan aliran jual sedang melemah.':'Tiada urutan penurunan terdahulu untuk dinilai sebagai recovery.']};
+  const easing=prior.sellMYR>0&&f.sellMYR<prior.sellMYR*.85&&f.flow>prior.flow+.08;
+  const rsi=frame.rsi14>frame.rsiPrevious,ma=m[9].value>m[9].previous&&Math.abs(m[9].value-m[20].value)<Math.abs(m[9].previous-m[20].previous);
+  const bid=f.researchBook?.bid>prior.researchBook?.bid,buys=f.buyMYR>prior.buyMYR&&f.flow>.1,hold=f.price>=state.low&&f.return1m>=0;
+  const reasons=[];if(easing)reasons.push('Tekanan jual berkurang.');if(bid)reasons.push('Bid bergerak naik.');if(buys)reasons.push('Belian sebenar bertambah.');if(rsi)reasons.push('RSI mula berpusing naik.');if(ma)reasons.push('MA9 naik dan jurangnya dengan MA20 mengecil.');if(f.buyerAbsorption)reasons.push('Jualan berlaku tetapi harga bertahan; ada petanda penyerapan.');
+  const cues=[easing,bid,buys,rsi,ma,!!f.buyerAbsorption].filter(Boolean).length;
+  if(hold&&buys&&bid&&rsi&&safPositive(state.ceiling)&&f.price>state.ceiling*1.001&&['FORMING','CONFIRMED'].includes(state.state))return {state:'CONFIRMED',reasons};
+  if(hold&&buys&&bid&&(rsi||ma)&&cues>=3)return {state:'FORMING',reasons};
+  if(hold&&(buys||bid||f.buyerAbsorption)&&(rsi||ma)&&cues>=2)return {state:'WATCH',reasons};
+  if(easing&&!newLow)return {state:'EASING',reasons};
+  return {state:falling?'FALLING':'WAIT',reasons:['Bukti pemulihan belum bertahan.']};
+}
+function etObserve(f,now=Date.now()){
+  const audits=SX_STATE.audits;
+  for(const a of audits.filter(x=>x.kind==='EARLY_TURN_SHADOW'&&!x.done)){
+    if(!f?.ready||now-a.lastAt>45000||a.epoch!==f.researchBook?.epoch){a.done=true;a.incomplete=true;continue;}
+    a.lastAt=now;const ret=(f.price/a.price-1)*100;a.maxRise=Math.max(a.maxRise||0,ret);a.maxFall=Math.min(a.maxFall||0,ret);if(f.price<a.low*.999)a.lowBroken=true;
+    for(const h of [5,15,30,60])if(now-a.at>=h*60000&&!Object.hasOwn(a.outcomes,String(h)))a.outcomes[h]={returnPct:ret,lowBroken:!!a.lowBroken};if(now-a.at>=3600000)a.done=true;
+  }
+  if(!f||ET.at&&now-ET.at>45000||ET.epoch!==null&&ET.epoch!==f.researchBook?.epoch){Object.assign(ET,{state:'UNKNOWN',candidate:null,count:0,low:null,ceiling:null,fallAt:0,reasons:['Pemantauan terganggu; urutan dimulakan semula.']});}
+  ET.at=now;if(!f)return;ET.epoch=f.researchBook?.epoch;
+  const prior=[...SX_STATE.samples].reverse().find(x=>x.at<=now-60000&&now-x.at<=90000&&x.researchBook?.epoch===ET.epoch);
+  const candles=sxAnalystCandles(SX.candles,now),frame=candles.frames?.find(x=>x.minutes===5&&x.ready),result=etDecide(f,prior,frame,ET,now);
+  ET.reasons=result.reasons;
+  if(result.state==='FALLING'){ET.low=ET.state==='FALLING'&&safPositive(ET.low)?Math.min(ET.low,f.price):f.price;ET.ceiling=f.resistance?.price||null;ET.fallAt=now;}
+  if(result.state===ET.candidate)ET.count++;else{ET.candidate=result.state;ET.count=1;}
+  const immediate=['UNKNOWN','FALLING','WAIT','NORMAL'].includes(result.state);
+  if(result.state!==ET.state&&(immediate||ET.count>=3)){
+    ET.state=result.state;
+    if(['WATCH','FORMING','CONFIRMED'].includes(ET.state))sxAudit('EARLY_TURN_SHADOW',{stage:ET.state,price:f.price,priceBasis:'BOOK_MID',low:ET.low,ceiling:ET.ceiling,epoch:ET.epoch,lastAt:now,outcomes:{},reasons:ET.reasons});
+  }
+}
+function etText(detail=false){
+  const labels={UNKNOWN:'Pemantauan terganggu / data belum lengkap',NORMAL:'Tiada urutan reversal aktif',FALLING:'Sedang turun',EASING:'Tekanan jual mula reda',WATCH:'Petanda awal pulih',FORMING:'Pemulihan sedang terbentuk',CONFIRMED:'Syarat pemulihan dipenuhi',WAIT:'Pemulihan belum bertahan'};
+  const fresh=Date.now()-ET.at<=60000,state=fresh?ET.state:'UNKNOWN';
+  return '\n<b>👀 EARLY TURN · PEMERHATIAN</b>\n'+labels[state]+(detail&&fresh?'\n'+ET.reasons.slice(0,3).join(' '):'')+'\nMod shadow; belum terbukti tepat dan bukan arahan entry.';
+}
+
 function sxTick(){const now=Date.now();if(now-SX.lastSample<SX_CFG.sampleMs)return;SX.lastSample=now;
-  const book=sxBookView();if(!book){SX.lastFeature=null;return;}
-  const f=sxFeatures(book,SX.events,SX_STATE.samples,now,now-SX.connectedAt);if(!f)return;f.researchBook={bid:book.bids[0].price,ask:book.asks[0].price,epoch:SX.connectedAt,levels:sxBookLevels(book),lastTrade:(()=>{const t=SX.events.filter(e=>e.kind==='TRADE'&&now-e.at>=0&&now-e.at<=30000).at(-1);return t?.price||null;})()};SX.lastFeature=f;sxObserve(f);
+  const book=sxBookView();if(!book){SX.lastFeature=null;etObserve(null,now);return;}
+  const f=sxFeatures(book,SX.events,SX_STATE.samples,now,now-SX.connectedAt);if(!f)return;f.researchBook={bid:book.bids[0].price,ask:book.asks[0].price,epoch:SX.connectedAt,levels:sxBookLevels(book),lastTrade:(()=>{const t=SX.events.filter(e=>e.kind==='TRADE'&&now-e.at>=0&&now-e.at<=30000).at(-1);return t?.price||null;})()};SX.lastFeature=f;sxObserve(f);try{etObserve(f,now);}catch(_){ET.state='UNKNOWN';ET.at=0;}
   if(f.ready){const last=SX_STATE.lastBackground;
     if((!last&&f.direction!=='NEUTRAL')||(last&&last.direction!==f.direction&&now-last.at>3*60000)){
       SX_STATE.lastBackground={direction:f.direction,at:now};sxAudit('DIRECTION_EVENT',{direction:f.direction,featureAt:f.at});
@@ -26818,8 +26853,9 @@ function sxAlt24Pack(rows,listed,source,errors=[],endAt=Date.now()){
   for(const r of alts)r.relative24=btc?((1+r.d/100)/(1+btc.d/100)-1)*100:null;
   const coverage=listed?rows.length/listed:0,ready=!!btc&&alts.length>=3&&coverage>=.7;
   const breadth=btc&&alts.length?alts.filter(r=>r.relative24>0).length/alts.length:null,positive=alts.length?alts.filter(r=>r.d>0).length/alts.length:null;
+  const score=ready?Math.round(100*(.6*breadth+.4*positive)):null;
   const state=!ready?'INSUFFICIENT':breadth>=.75&&positive>=.6?'BROAD':breadth>=.6&&positive>=.5?'EARLY':breadth<=.25?'BTC_LED':'MIXED';
-  return {at:Date.now(),endAt,ready,rows,listed,count:alts.length,missing:Math.max(0,listed-rows.length),coverage,breadth24:breadth,positive24:positive,state,source,errors,validatedProbability:false};
+  return {at:Date.now(),endAt,ready,rows,listed,count:alts.length,missing:Math.max(0,listed-rows.length),coverage,breadth24:breadth,positive24:positive,score,state,source,errors,validatedProbability:false};
 }
 function sxAlt24Failure(e){const status=e?.response?.status;return status===401||status===403?'Akses data ditolak; semak API key MAIN dan kebenaran bacaan.':status===429?'Had API dicapai; tunggu cooldown.':status>=500?'Pelayan sumber sedang bermasalah.':/timeout|ECONNABORTED/i.test(e?.code||e?.message||'')?'Sumber mengambil masa terlalu lama.':'Sumber tidak memberikan data yang sah.';}
 function sxAlt24Candles(raw,coin,id,group,endAt){
@@ -26865,7 +26901,7 @@ async function sxAltCommand(msg,peersOnly=false){
     if(peersOnly)return replyTelegram(msg.chat.id,'GRT & PEMBANDING · 24 JAM\n'+sxAltPeerText(a)+'\nSumber: '+a.source+'\n'+sxMYTime(a.at));
     const title={INSUFFICIENT:'SEMAKAN SUMBER BELUM BERJAYA',BROAD:'ALTCOIN MENGUAT SECARA MELUAS',EARLY:'TANDA AWAL ALTCOIN MENGUAT',BTC_LED:'BTC MENGATASI KEBANYAKAN ALTCOIN',MIXED:'PERGERAKAN MASIH BERCAMPUR'};
     let text='<b>🧠 ALTSEASON · SEMAKAN 24 JAM</b>\n━━━━━━━━━━━━━━\n<b>'+title[a.state]+'</b>\n'+sxAltEvidence(a).slice(0,4).map(x=>'• '+x).join('\n');
-    if(a.ready){const top=a.rows.filter(x=>x.coin!=='BTC').sort((x,y)=>y.relative24-x.relative24).slice(0,3);text+='\n\n<b>Teratas berbanding BTC</b>\n'+top.map(x=>x.coin+': '+safFmt(x.d,2)+'% · berbanding BTC '+safFmt(x.relative24,2)+'%').join('\n');text+='\n\n'+(a.state==='BROAD'?'Pengukuhan meluas dalam bakul ini, tetapi satu hari belum mengesahkan altseason.':a.state==='EARLY'?'Sebahagian besar bakul mula mengatasi BTC; lihat sama ada kekuatan ini berterusan.':a.state==='BTC_LED'?'Bakul masih ketinggalan berbanding BTC. Belum ada sokongan meluas untuk altseason.':'Kekuatan masih terpilih, belum meluas dalam bakul ini.');}
+    if(a.ready){text+='\n<b>Skor kekuatan semasa: '+a.score+'/100</b>\n60% keluasan mengatasi BTC + 40% keluasan kenaikan; bukan peluang altseason.';const top=a.rows.filter(x=>x.coin!=='BTC').sort((x,y)=>y.relative24-x.relative24).slice(0,3);text+='\n\n<b>Teratas berbanding BTC</b>\n'+top.map(x=>x.coin+': '+safFmt(x.d,2)+'% · berbanding BTC '+safFmt(x.relative24,2)+'%').join('\n');text+='\n\n'+(a.state==='BROAD'?'Pengukuhan meluas dalam bakul ini, tetapi satu hari belum mengesahkan altseason.':a.state==='EARLY'?'Sebahagian besar bakul mula mengatasi BTC; lihat sama ada kekuatan ini berterusan.':a.state==='BTC_LED'?'Bakul masih ketinggalan berbanding BTC. Belum ada sokongan meluas untuk altseason.':'Kekuatan masih terpilih, belum meluas dalam bakul ini.');}
     else text+='\nCuba selepas '+Math.max(0,Math.ceil((SX_ALT.retryAt-Date.now())/1000))+' saat.';
     text+='\n\nLiputan: '+a.rows.length+'/'+a.listed+' aset termasuk BTC.\nSumber: '+a.source+'\nBakul Luno terpilih; bukan indeks altseason global atau kebarangkalian.\n'+sxMYTime(a.endAt||a.at);await replyTelegram(msg.chat.id,text,{parse_mode:'HTML'});
   }finally{SX_ALT.busy.delete(key);}
@@ -27144,7 +27180,7 @@ async function uxRun(msg,mode,input=null){
     const focus=['full','direction'].includes(mode)?await uxFocus(p,mode):null;
     if(sxPacketStale(p))return await replyTelegram(msg.chat.id,'Data berubah ketika semakan disiapkan. Cuba semak semula.');
     const text=mode==='alert'?uxSimplePrediction(p):mode==='direction'?uxDirection(p):mode==='book'?uxBookReport(p):mode==='position'?uxPositionText(p,input):uxFullReport(p,{recovery:!focus});
-    await alunoSend(msg.chat.id,text+(focus?'\n<b>Fokus kajian:</b> '+focus:'')+'\nTiada order dibuat.\n'+sxMYTime(p.at));
+    await alunoSend(msg.chat.id,text+(['alert','full','direction'].includes(mode)?etText(mode!=='alert'):'')+(focus?'\n<b>Fokus kajian:</b> '+focus:'')+'\nTiada order dibuat.\n'+sxMYTime(p.at));
     if(mode==='position')await replyTelegram(msg.chat.id,'Semak semula menggunakan input posisi yang sama:',{reply_markup:{inline_keyboard:[[{text:'🔄 Semak posisi semula',callback_data:'SX:POSITIONREVIEW'}]]}});
   }catch(_){await replyTelegram(msg.chat.id,'Semakan belum berjaya. Data tidak direka; cuba semula.');}finally{SX.busy.delete(key);}
 }
