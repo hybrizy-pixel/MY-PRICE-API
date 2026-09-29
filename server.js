@@ -24532,6 +24532,8 @@ Service: ${SERVICE_CODE}
 Mode: ${BUILD_MODE}
 
 Commands:
+/cryptonews — 📰 Berita crypto
+/news — Berita crypto
 /market
 /flow
 /grt24
@@ -24544,7 +24546,8 @@ Commands:
 /autostatus
 /autooff
 /status
-/health`
+/health`,
+        {reply_markup:{inline_keyboard:[[{text:"📰 NEWS",callback_data:"SX:NEWS"}]]}}
       );
     }
   )
@@ -26659,6 +26662,34 @@ function newsParse(xml,feed,now=Date.now()){
     if(out.length>=100)break;
   }return out;
 }
+/* Deterministic relevance filter runs BEFORE translation. Uses the existing AI Luno whitelist. */
+function newsClassify(item){
+  const title=newsText(item.title),body=newsText(item.excerpt),text=title+' '+body;
+  const promo=/\b(?:sponsored|press release|paid content|partner content|presale|pre-sale|promo code|giveaway|100x|1000x|next bitcoin|best (?:crypto|coins?|tokens?) to buy|top \d+ (?:cryptos?|coins?|tokens?)|price prediction|price forecast|will explode|guaranteed returns?)\b/i;
+  if(promo.test(text)||/\/(?:press-release|sponsored|marketplace)\//i.test(item.url||''))return null;
+  const context=/\b(?:crypto|blockchain|token|coin|protocol|network|staking|defi|exchange|mainnet|upgrade|unlock|supply|hack|exploit|listing|delisting|ETF|inflows?|outflows?)\b/i;
+  const aliases={GRT:/\bThe Graph\b/i,XRP:/\bRipple\b/i,XLM:/\bStellar(?: Lumens)?\b/i,CRV:/\bCurve (?:DAO|Finance)\b/i,AAVE:/\bAave\b/i};
+  const coins=ALUNO_COINS.filter(coin=>{
+    const symbol=new RegExp('\\b'+coin+'\\b');
+    return (symbol.test(title)&&(context.test(text)||/\$[A-Z]+\b/.test(title))) ||
+      (aliases[coin]?.test(title)&&context.test(text)) ||
+      (symbol.test(body)&&aliases[coin]?.test(body)&&context.test(title));
+  });
+  const event=/\b(?:upgrade|mainnet|outage|halt|unlock|supply|staking|adoption|partnership|integrat\w*|launch\w*|listing|delist\w*|hack\w*|exploit\w*|breach|lawsuit|regulat\w*|SEC|governance|revenue|fees|inflows?|outflows?|rall\w*|surge\w*|drop\w*|fall\w*|slump\w*|rebound\w*|liquidat\w*|volume|ETF)\b/i;
+  if(coins.length&&event.test(text))return {...item,category:'🪙 '+coins.join(' / '),priority:coins.includes('GRT')?0:1,reason:'Berkaitan '+coins.join(', ')+', coin dalam senarai bot.'};
+  // Global news must explicitly concern crypto, not a generic Fed/business story.
+  const market=/\b(?:Bitcoin|BTC|Ethereum|ETH|crypto(?:currency)?|digital assets?)\b/i;
+  const globalEvent=/\b(?:ETF|inflows?|outflows?|Federal Reserve|Fed|FOMC|interest rates?|rate (?:cut|hike)|regulat\w*|legislation|SEC|stablecoins?|exchange|hack\w*|exploit\w*|liquidat\w*|dominance|market.?wide|sell-off|rall\w*|surge\w*|slump\w*|crash\w*)\b/i;
+  if(market.test(title)&&globalEvent.test(text))return {...item,category:'🌍 PASARAN GLOBAL',priority:2,reason:'Konteks pasaran crypto; kesan kepada coin Luno belum semestinya sama.'};
+  return null;
+}
+function newsSelect(items){
+  const seen=new Set();return items.map(newsClassify).filter(Boolean).sort((a,b)=>a.priority-b.priority||b.at-a.at).filter(x=>{
+    const key=x.title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+    if(seen.has(x.url)||seen.has(key))return false;seen.add(x.url);seen.add(key);return true;
+  }).slice(0,4);
+}
+
 async function newsTranslate(items){
   if(!items.length||SX.groqBusy||!process.env.GROQ_API_KEY||Date.now()<SX.groqBlockedUntil)return items;
   SX.groqBusy=true;
@@ -26678,7 +26709,7 @@ async function newsGet(){
       const r=await axios({method:'GET',url:feed.url,timeout:12000,maxRedirects:0,maxContentLength:1500000,maxBodyLength:1500000,responseType:'text',headers:{Accept:'application/rss+xml, application/xml, text/xml','User-Agent':'CryptoNewsRSS/1.0'}});
       return newsParse(r.data,feed);
     }));
-    const seen=new Set(),titles=new Set(),items=results.flatMap(r=>r.status==='fulfilled'?r.value:[]).sort((a,b)=>b.at-a.at).filter(x=>{const t=x.title.toLowerCase();if(seen.has(x.url)||titles.has(t))return false;seen.add(x.url);titles.add(t);return true;}).slice(0,4);
+    const items=newsSelect(results.flatMap(r=>r.status==='fulfilled'?r.value:[]));
     const failed=results.filter(r=>r.status==='rejected').length;
     NEWS_RSS.nextFetch=Date.now()+(failed===2?60000:NEWS_RSS.ttl);
     if(failed===2){NEWS_RSS.cache={...(NEWS_RSS.cache||{items:[],at:0}),failed:2,stale:true};return NEWS_RSS.cache;}
@@ -26687,11 +26718,11 @@ async function newsGet(){
   try{return await NEWS_RSS.pending;}finally{NEWS_RSS.pending=null;}
 }
 function newsRender(pack){
-  const items=pack.items.filter(x=>Date.now()-x.at<=86400000),lines=['📰 <b>BERITA CRYPTO · 24 JAM</b>','━━━━━━━━━━━━━━'];
+  const items=pack.items.filter(x=>Date.now()-x.at<=86400000),lines=['📰 <b>NEWS · COIN LUNO & PASARAN</b>','━━━━━━━━━━━━━━'];
   if(pack.stale)lines.push('⚠️ Sumber belum dapat dihubungi. Ini berita simpanan daripada semakan lepas.');
   else if(pack.failed)lines.push('⚠️ Satu sumber belum dapat dihubungi.');
-  if(!items.length)lines.push(pack.failed?'Berita terkini belum berjaya diperoleh. Cuba semula sebentar lagi.':'Tiada berita dalam 24 jam lepas daripada feed yang diterima.');
-  items.forEach((x,i)=>{lines.push('',`${i+1}. <b>${newsEscape(x.translated?x.msTitle:x.title)}</b>`);if(x.translated&&x.msSummary)lines.push(newsEscape(x.msSummary));lines.push(`${newsEscape(x.source)} · ${newsEscape(sxMYTime(x.at))}`,`<a href="${newsEscape(x.url)}">Baca berita asal</a>`);});
+  if(!items.length)lines.push(pack.failed?'Berita terkini belum berjaya diperoleh. Cuba semula sebentar lagi.':'Tiada berita relevan untuk coin dalam bot atau pasaran crypto dalam 24 jam lepas daripada sumber yang diterima.');
+  items.forEach((x,i)=>{lines.push('',`${i+1}. <b>${newsEscape(x.category||'BERITA CRYPTO')}</b>`, `<b>${newsEscape(x.translated?x.msTitle:x.title)}</b>`);if(x.translated&&x.msSummary)lines.push(newsEscape(x.msSummary));if(x.reason)lines.push('Kaitan: '+newsEscape(x.reason));lines.push(`${newsEscape(x.source)} · ${newsEscape(sxMYTime(x.at))}`,`<a href="${newsEscape(x.url)}">Baca berita asal</a>`);});
   if(items.some(x=>!x.translated))lines.push('','Terjemahan belum tersedia; tajuk asal dipaparkan.');
   if(items.some(x=>x.translated))lines.push('','Terjemahan AI berdasarkan tajuk/petikan RSS.');
   if(pack.at)lines.push('Semakan: '+sxMYTime(pack.at));
